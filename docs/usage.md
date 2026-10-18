@@ -149,9 +149,11 @@ Invalidation rules:
 
 - a cached entry is reused only when the **main TU source content**, language,
   driver, compile arguments, tool version and schema version are unchanged;
-- **header contents are not part of the key**. After changing a header, run a
-  full index without `--incremental` (or delete the cache directory); otherwise
-  stale results are replayed;
+- **header contents are not part of the key**, but `ca index` records include
+  dependencies (`tu_includes`): after a header change, `ca update --changed-files`
+  invalidates only the TUs that include it (transitively). If the index has no
+  include data (old database/parser), it falls back to clearing the whole cache
+  with a warning; unrelated headers are a no-op;
 - the cache is best effort: corrupt/truncated entries are discarded and the TU
   is parsed normally; `--clear-cache` (or deleting `.ca-cache`) is always safe.
 

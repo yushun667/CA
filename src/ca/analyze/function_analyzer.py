@@ -34,6 +34,7 @@ from ca.analyze.cfg import (
     CfgBuilder,
 )
 from ca.analyze.dataflow import analyze_flows
+from ca.analyze.virtual_dispatch import resolve_virtual_targets
 from ca.analyze.facts import FactExtractor, PendingRecord, resource_target_key
 from ca.analyze.resources import ResourceConfig
 from ca.core import ids as core_ids
@@ -239,6 +240,14 @@ def analyze_function(
         min_confidence=opts.call_target_min_confidence,
         max_targets=opts.max_call_targets,
     )
+    virtual_targets = resolve_virtual_targets(
+        unit,
+        function,
+        min_confidence=opts.call_target_min_confidence,
+        max_targets=opts.max_call_targets,
+    )
+    if virtual_targets:
+        call_targets = _merge_call_targets(call_targets, virtual_targets)
 
     result = AnalysisResult(
         function_id=function.id,
@@ -253,6 +262,32 @@ def analyze_function(
         elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
     )
     return result
+
+
+def _merge_call_targets(
+    primary: list[Any], extra: list[Any]
+) -> list[Any]:
+    """Deterministic merge of indirect and virtual candidate edges."""
+
+    merged = [*primary, *extra]
+    merged.sort(
+        key=lambda record: (
+            record.sloc.line,
+            record.sloc.col,
+            record.call_id,
+            -record.confidence,
+            record.callee_id,
+        )
+    )
+    unique: list[Any] = []
+    seen: set[tuple[str, str]] = set()
+    for record in merged:
+        key = (record.call_id, record.callee_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(record)
+    return unique
 
 
 def _escaped_targets(assignments: list[AssignmentRecord]) -> set[str]:

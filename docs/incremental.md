@@ -70,13 +70,28 @@ always safe (`ca index --clear-cache` does it for you).
 | main source content | yes | that TU re-parsed on next `update` |
 | compile arguments / include flags | yes | affected TU re-parsed (cache key changes) |
 | tool or schema upgrade | yes | whole cache misses once |
-| **header content** | **no** | header dependencies are not tracked: `ca update` sees a non-TU file, clears the cache and re-parses **all** TUs |
-| build files (`Makefile`, `CMakeLists.txt`, …) | no | same as header: full re-parse |
+| **header content** | yes (include facts available) | only TUs whose transitive include set contains the changed header re-parse; unrelated TUs stay cache hits |
+| header/build change without include facts | fallback | old behaviour: clear the whole cache, warn, re-parse all TUs |
+| build files (`Makefile`, `CMakeLists.txt`, …) | build files still force a full re-parse | header-like changes only are dependency-scoped |
 | file added/removed in the compile database | next `update` run resolves a fresh compile database | new TUs parsed, removed TUs disappear only after the database rebuild |
 
-Running `ca update` with a header in `--changed-files` therefore degrades to a
-full (but still cache-cleared) re-index; this is the safe default until header
-dependency discovery is implemented.
+`ca index` records each TU's repo-local direct includes plus include edges
+(including header→header) from the parser; the store persists their transitive
+closure in `tu_includes` (`include_path -> tu_id`). A changed header therefore
+maps directly to the dependent TUs:
+
+```text
+[update] include dependencies: 2/1682 TUs include the changed header(s)
+[update] dependency-aware: invalidated 2 cache entries for 2 dependent TUs
+[update] cache hits=1680/1682 misses=2; database rebuilt from cache
+```
+
+Changed headers that no indexed TU includes are a no-op (`ca update` exits 2
+with "not included by any indexed TU"). Databases built before include facts
+(or with `record_scope`/parser versions that did not collect them) fall back to
+the previous full-cache-clear behaviour with an explicit warning. `ca watch`
+uses the same mapping and reports `dependency_aware`, `fallback_full`,
+`affected_count`, `cache_hits` and `cache_misses` in its per-cycle JSON.
 
 ## Current limitation: database rows are rewritten
 
@@ -125,8 +140,10 @@ Behaviour and limits:
   the same change set is retried next round.
 - **Single instance**: `<db>.watch.lock` (flock). A second watcher exits with
   code 2. Queries are unaffected (SQLite WAL; watcher is the only writer).
-- **Header/build file change**: the incremental cache is cleared and all TUs are
-  re-parsed, exactly like `ca update`; expect a slower cycle.
+- **Header change**: TUs whose transitive includes contain the header are
+  re-parsed (dependency-aware, same as `ca update`); unrelated TUs stay cache
+  hits. Build files and indexes without include facts still fall back to the
+  full cache-clear rebuild.
 - **Added/deleted files not in the compile database**: the compile database
   cannot know them, so the cycle reports `compdb_stale`, skips the update and
   records an error; regenerate the compile database and restart the watcher.
@@ -175,9 +192,11 @@ WantedBy=multi-user.target
 ## Validation
 
 `ca update` is covered by end-to-end tests: dry-run plan, changed-TU re-parse
-with unchanged TUs served from cache, and the header-change cache-clear path.
-`ca watch` adds `tests/test_e2e_watch.py`: baseline snapshot, source edit ->
-incremental update with cache hits, header -> full rebuild, added file missing
-from the compile database -> `compdb_stale` skip, deep status invalidation, lock
-conflict, and failed-update snapshot retention. See
+with unchanged TUs served from cache, and header dependency-aware invalidation.
+`tests/test_e2e_includes.py` covers direct/transitive includes, only-dependent
+re-parsing (unrelated TUs cache hits), unrelated-header no-op, the no-include
+fallback and `ca watch --once` dependency metrics. `tests/test_e2e_watch.py`
+adds baseline snapshot, source edit incremental update, header update, added file
+missing from the compile database -> `compdb_stale` skip, deep status
+invalidation, lock conflict, and failed-update snapshot retention. See
 `tests/test_e2e_graph_mcp.py` and `tests/test_e2e_pipeline.py` as well.

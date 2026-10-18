@@ -70,6 +70,8 @@ class WatchCycleResult:
     baseline: bool = False
     changed: list[str] = field(default_factory=list)
     header_change: bool = False
+    dependency_aware: bool = False
+    fallback_full: bool = False
     affected_count: int = 0
     updated: bool = False
     skipped: bool = False
@@ -89,6 +91,8 @@ class WatchCycleResult:
             "changed": list(self.changed),
             "changed_count": len(self.changed),
             "header_change": self.header_change,
+            "dependency_aware": self.dependency_aware,
+            "fallback_full": self.fallback_full,
             "affected_count": self.affected_count,
             "updated": self.updated,
             "skipped": self.skipped,
@@ -360,6 +364,12 @@ def run_cycle(
     )
     result.affected_count = int(getattr(getattr(update, "plan", None), "affected_count", 0))
     result.header_change = bool(getattr(getattr(update, "plan", None), "header_change", False))
+    result.dependency_aware = bool(
+        getattr(getattr(update, "plan", None), "dependency_aware", False)
+    )
+    result.fallback_full = bool(
+        getattr(getattr(update, "plan", None), "fallback_full", False)
+    )
     cache_stats = dict(getattr(update, "cache_stats", {}) or {})
     result.cache_hits = int(cache_stats.get("hits", 0) or 0)
     result.cache_misses = int(cache_stats.get("misses", 0) or 0)
@@ -367,6 +377,13 @@ def run_cycle(
     result.updated = bool(getattr(update, "ok", False)) and result.affected_count > 0
     result.deep_invalidated = result.updated
     exit_code = int(getattr(update, "exit_code", 1))
+    if result.affected_count == 0 and exit_code in (0, 2):
+        # Dependency-aware update of an unrelated header: nothing to re-parse,
+        # but the change set is handled and the snapshot may advance.
+        result.skipped = True
+        result.skip_reason = "no_affected_tus"
+        result.elapsed_seconds = time.perf_counter() - started
+        return result, latest
     if exit_code != 0:
         result.errors.append(str(getattr(update, "error", "") or "update failed"))
         for message in messages:
@@ -375,11 +392,6 @@ def run_cycle(
         result.elapsed_seconds = time.perf_counter() - started
         # Keep the previous snapshot so the same change set is retried.
         return result, previous
-    if result.affected_count == 0:
-        result.skipped = True
-        result.skip_reason = "no_affected_tus"
-        result.elapsed_seconds = time.perf_counter() - started
-        return result, latest
     result.elapsed_seconds = time.perf_counter() - started
     return result, latest
 
@@ -412,6 +424,12 @@ def _run_manual_batch(
     result = WatchCycleResult(cycle=1)
     result.affected_count = int(getattr(getattr(update, "plan", None), "affected_count", 0))
     result.header_change = bool(getattr(getattr(update, "plan", None), "header_change", False))
+    result.dependency_aware = bool(
+        getattr(getattr(update, "plan", None), "dependency_aware", False)
+    )
+    result.fallback_full = bool(
+        getattr(getattr(update, "plan", None), "fallback_full", False)
+    )
     result.changed = list(config.changed_files)
     cache_stats = dict(getattr(update, "cache_stats", {}) or {})
     result.cache_hits = int(cache_stats.get("hits", 0) or 0)

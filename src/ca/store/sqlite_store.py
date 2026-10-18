@@ -117,7 +117,16 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from ca.core.schema import SCHEMA_VERSION, AnalysisResult, ParseResult
-from ca.store import callbacks, deep, graph, jobs as job_queue, queries, workspace, writer
+from ca.store import (
+    callbacks,
+    deep,
+    graph,
+    jobs as job_queue,
+    queries,
+    virtual_dispatch,
+    workspace,
+    writer,
+)
 
 _SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 _MEMORY_PATHS = {":memory:", "file::memory:", "file::memory:?cache=shared"}
@@ -164,6 +173,10 @@ class SqliteStore:
         # Referential integrity is a pipeline property, not a per-row check.
         connection.execute("PRAGMA foreign_keys=OFF")
         connection.executescript(_SCHEMA_FILE.read_text(encoding="utf-8"))
+        # Additive physical migrations (task-37 virtual dispatch metadata):
+        # virtual_overrides/type_bases tables plus functions/types dispatch
+        # columns on databases created before schema v7.
+        virtual_dispatch.migrate(connection)
         connection.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
             (SCHEMA_VERSION,),
@@ -236,6 +249,65 @@ class SqliteStore:
     def add_analysis_result(self, result: AnalysisResult) -> None:
         self._ensure_transaction()
         writer.add_analysis_result(self._require_connection(), result)
+
+    def add_tu_includes(self, tu_id: str, include_paths: Any) -> int:
+        """Insert direct repo-local includes for one TU (idempotent)."""
+
+        self._ensure_transaction()
+        return writer.add_tu_includes(
+            self._require_connection(), str(tu_id), list(include_paths or [])
+        )
+
+    def tu_includes(self, tu_id: str) -> list[str]:
+        """Direct repo-relative include paths recorded for one TU."""
+
+        rows = self._require_connection().execute(
+            "SELECT include_path FROM tu_includes WHERE tu_id = ? ORDER BY include_path",
+            (str(tu_id),),
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def has_tu_includes(self) -> bool:
+        """True when this index carries any include-dependency rows."""
+
+        try:
+            row = self._require_connection().execute(
+                "SELECT 1 FROM tu_includes LIMIT 1"
+            ).fetchone()
+        except Exception:
+            return False
+        return row is not None
+
+    def dependent_tu_ids(self, changed_files: Any) -> list[str]:
+        """TU ids whose direct includes contain any of ``changed_files``."""
+
+        paths = [str(path) for path in changed_files or [] if str(path)]
+        if not paths:
+            return []
+        placeholders = ",".join("?" for _ in paths)
+        rows = self._require_connection().execute(
+            "SELECT DISTINCT tu_id FROM tu_includes WHERE include_path IN ("
+            + placeholders
+            + ") ORDER BY tu_id",
+            paths,
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def dependent_tus(self, changed_files: Any) -> list[dict[str, Any]]:
+        """Dependent TU rows (``id,file,directory,repo_root``) for changed includes."""
+
+        paths = [str(path) for path in changed_files or [] if str(path)]
+        if not paths:
+            return []
+        placeholders = ",".join("?" for _ in paths)
+        rows = self._require_connection().execute(
+            "SELECT DISTINCT tus.id, tus.file, tus.directory, tus.repo_root"
+            " FROM tus JOIN tu_includes ON tu_includes.tu_id = tus.id"
+            " WHERE tu_includes.include_path IN (" + placeholders + ")"
+            " ORDER BY tus.file",
+            paths,
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def add_call_targets(self, records: Any) -> int:
         """Insert candidate call edges directly (post-processing passes)."""

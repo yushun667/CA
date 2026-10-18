@@ -200,6 +200,50 @@ def bitfield_width(cursor: ci.Cursor) -> int:
     return -1
 
 
+def overridden_cursors(cursor: ci.Cursor) -> list[ci.Cursor]:
+    """Overridden method declarations of a C++ method cursor.
+
+    The Python bindings expose ``is_virtual_method``/``is_pure_virtual_method``
+    but not ``clang_getOverriddenCursors``, so the C API is bound dynamically.
+    Returns ``[]`` for non-methods, non-overriding methods or binding failures.
+    """
+
+    if cursor.kind != ci.CursorKind.CXX_METHOD:
+        return []
+    try:
+        fn = _c_api(
+            "clang_getOverriddenCursors",
+            [
+                ci.Cursor,
+                ctypes.POINTER(ctypes.POINTER(ci.Cursor)),
+                ctypes.POINTER(ctypes.c_uint),
+            ],
+            None,
+        )
+        dispose = _c_api(
+            "clang_disposeOverriddenCursors",
+            [ctypes.POINTER(ci.Cursor)],
+            None,
+        )
+    except Exception:  # pragma: no cover - binding defensive
+        return []
+    pointers = ctypes.POINTER(ci.Cursor)()
+    count = ctypes.c_uint(0)
+    fn(cursor, ctypes.byref(pointers), ctypes.byref(count))
+    total = int(count.value)
+    result: list[ci.Cursor] = []
+    try:
+        for index in range(total):
+            try:
+                result.append(pointers[index])
+            except Exception:  # pragma: no cover - defensive
+                break
+    finally:
+        if total:
+            dispose(pointers)
+    return result
+
+
 def is_macro_expansion(cursor: ci.Cursor) -> bool:
     """Whether a cursor comes from a macro expansion.
 

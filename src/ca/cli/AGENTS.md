@@ -12,7 +12,7 @@
 - `graph.py`：调用图遍历（`query_call_graph` 优先，旧库回退 calls BFS）、稳定排序/环/上限、DOT；CLI/MCP 共用。
 - `mcp.py`：MCP JSON-RPC server（stdio/HTTP）、18 个只读工具、`--serve-url` 代理、稳定信封/错误码。
 - `watcher.py`：离线/增量规划辅助（`plan_changes`/`snapshot`/`diff_snapshots`）。
-- `watch.py`：`ca watch` 轮询增量 daemon（状态/锁/防抖/重试/`compdb_stale` 跳过），见 `docs/incremental.md`。
+- `watch.py`：`ca watch` 轮询增量 daemon（状态/锁/防抖/重试/`compdb_stale` 跳过、header include 依赖感知），见 `docs/incremental.md`。
 - `callbacks.py`：跨 TU 回调后处理（`ca resolve-callbacks`/索引 `--resolve-callbacks`）：提取注册事实/间接调用点、写 callback 表。
 - `deep.py`：L0/L1/L2 `ensure_deep`/`prewarm`、deep_status 适配；详见 `docs/layered-indexing.md`。
 

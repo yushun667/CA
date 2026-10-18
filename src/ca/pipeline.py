@@ -134,14 +134,14 @@ def _unit_cache_key(
 ) -> str:
     """Content hash of the TU source plus its exact compile arguments.
 
-    Header contents are intentionally *not* hashed: a header change does not
-    invalidate cached TUs, so after changing a header run a full index without
-    ``cache_dir`` (documented limitation).
+    Header contents are intentionally *not* hashed: header changes are handled
+    by deleting only the cache entries of dependent TUs (``tu_includes``) and
+    leaving unrelated TUs as cache hits.
     """
 
     digest = hashlib.sha256()
     parts = (
-        b"ca-tu-cache-v1",
+        b"ca-tu-cache-v2",
         TOOL_VERSION.encode("utf-8"),
         SCHEMA_VERSION.encode("utf-8"),
         tu.file.encode("utf-8", "surrogatepass"),
@@ -163,6 +163,45 @@ def _unit_cache_key(
     except OSError:
         digest.update(b"<source-unreadable>")
     return digest.hexdigest()
+
+
+def resolve_record_scope(record_scope: str, unit_count: int) -> str:
+    """Resolve ``auto`` to the concrete scope used for parsing/cache keys."""
+
+    if record_scope == "auto":
+        return "main_file" if unit_count > AUTO_MAIN_FILE_TU_THRESHOLD else "all"
+    return record_scope
+
+
+def invalidate_unit_cache(
+    cache_dir: str | None,
+    units: Sequence[CompilationUnit],
+    analyze_scope: str = "main",
+    record_scope: str = "all",
+) -> int:
+    """Delete cache entries for specific TUs (header-dependency-aware update).
+
+    Header changes no longer require clearing the whole cache: only TUs whose
+    direct includes changed must be re-parsed. Returns the number of cache files
+    removed; callers that lack dependency information should clear the directory
+    themselves (fallback behaviour).
+    """
+
+    if not cache_dir:
+        return 0
+    directory = Path(cache_dir)
+    removed = 0
+    for unit in units:
+        key = _unit_cache_key(unit, analyze_scope, record_scope)
+        path = _cache_path(directory, key)
+        try:
+            path.unlink()
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+    return removed
 
 
 def _cache_load(cache_dir: Path, key: str, tu: CompilationUnit) -> _UnitOutcome | None:
@@ -991,9 +1030,11 @@ def run_index(
     ``ParseResult`` plus its ``AnalysisResult`` list per TU, keyed by a hash of
     the TU source content, language/driver and exact compile arguments. Cache
     hits skip parse+analyze and replay the cached records into the store.
-    Header contents are not part of the key (see :func:`_unit_cache_key`), so a
-    header change requires a full rebuild. ``cache_stats`` (diagnostic, like
-    ``produced``) receives ``hits``/``misses``/``tus``/``cache_dir``.
+    Header contents are not part of the key (see :func:`_unit_cache_key`); a
+    header change is handled by invalidating only the cache entries of TUs that
+    include it (``tu_includes``), see :func:`invalidate_unit_cache`.
+    ``cache_stats`` (diagnostic, like ``produced``) receives
+    ``hits``/``misses``/``tus``/``cache_dir``.
 
     ``analyze_scope`` controls deep analysis only (symbol/call extraction is
     unaffected): ``main`` (default) analyzes definitions whose source file is

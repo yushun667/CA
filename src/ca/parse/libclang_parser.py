@@ -263,6 +263,15 @@ class ParseOptions:
     # keeps header-heavy C++ TUs bounded. Default False keeps prior behavior.
     emit_header_declarations: bool = False
     header_declaration_limit: int = 2000
+    # task-38 dependency contract: collect the TU's repo-relative include facts
+    # (direct includes + repo-local include edges) into ParseResult. Vendored
+    # toolchain trees (OH ``prebuilts/``) are excluded by default: they are
+    # repo-local yet immutable, and their header graph dominates the edge set
+    # (~620 of ~750 edges/TU measured on OH sample). ``include_edges_limit``
+    # bounds pathological header graphs; truncation is recorded as a note.
+    collect_include_files: bool = True
+    include_path_excludes: tuple[str, ...] = ("prebuilts/",)
+    include_edges_limit: int = 5000
     preflight_unknown_options: bool = True
     detect_macro_expansions: bool = False
     extra_args: tuple[str, ...] = ()
@@ -272,6 +281,7 @@ class ParseOptions:
         self.extra_args = tuple(self.extra_args)
         if self.record_scope not in ("all", "main_file"):
             raise ValueError(f"unsupported record_scope: {self.record_scope!r}")
+        self.include_path_excludes = tuple(self.include_path_excludes)
         if self.header_declaration_limit < 0:
             raise ValueError(
                 f"header_declaration_limit must be >= 0: {self.header_declaration_limit!r}"
@@ -299,6 +309,8 @@ class ParsedTranslationUnit:
         parse_ok: bool,
         elapsed_ms: float,
         error: str = "",
+        include_files: Sequence[str] = (),
+        include_edges: Sequence[tuple[str, str]] = (),
     ) -> None:
         self.tu = unit
         self.functions = list(functions)
@@ -309,6 +321,8 @@ class ParsedTranslationUnit:
         self.parse_ok = parse_ok
         self.elapsed_ms = elapsed_ms
         self.error = error
+        self.include_files = tuple(include_files)
+        self.include_edges = tuple(include_edges)
         self._clang_tu = clang_tu
         self._definition_cursors = dict(definition_cursors)
 
@@ -330,6 +344,8 @@ class ParsedTranslationUnit:
             fields=list(self.fields),
             calls=list(self.calls),
             diagnostics=list(self.diagnostics),
+            include_files=tuple(self.include_files),
+            include_edges=tuple(self.include_edges),
             parse_ok=self.parse_ok,
             elapsed_ms=self.elapsed_ms,
             error=self.error,
@@ -415,6 +431,17 @@ def parse_compilation_unit(
         return _failed_unit(tu, started, f"libclang could not load TU: {detail}")
 
     clang_tu, diagnostics, errors, attempt_note, _attempt_arguments = chosen
+    include_edges_truncated = False
+    if opts.collect_include_files:
+        include_files, include_edges, include_edges_truncated = _collect_include_facts(
+            clang_tu,
+            source,
+            mapper,
+            excludes=tuple(opts.include_path_excludes),
+            edge_limit=int(opts.include_edges_limit),
+        )
+    else:
+        include_files, include_edges = (), ()
     if attempt_note:
         diagnostics.append(Diagnostic(tu_id=tu.id, severity="note", message=attempt_note))
     learned_removed = [arg for arg in tu.arguments if arg in _learned_unknown_options]
@@ -449,6 +476,16 @@ def parse_compilation_unit(
     except Exception as exc:  # pragma: no cover - defensive isolation
         parse_ok = False
         error = f"extraction failed: {type(exc).__name__}: {exc}"
+    if include_edges_truncated:
+        diagnostics.append(
+            Diagnostic(
+                tu_id=tu.id,
+                severity="note",
+                message="include edges truncated at "
+                f"{opts.include_edges_limit} per TU "
+                "(ParseOptions.include_edges_limit)",
+            )
+        )
     if extractor.header_declarations_truncated:
         diagnostics.append(
             Diagnostic(
@@ -486,6 +523,8 @@ def parse_compilation_unit(
         parse_ok=parse_ok,
         elapsed_ms=elapsed_ms,
         error=error,
+        include_files=include_files,
+        include_edges=include_edges,
     )
 
 
@@ -1303,6 +1342,76 @@ def _driver_executable(tu: CompilationUnit, source: str) -> str:
     return ""
 
 
+def _inclusion_file_name(file_value: Any) -> str:
+    name = getattr(file_value, "name", "")
+    return name if isinstance(name, str) else ""
+
+
+def _excluded_include_path(path: str, excludes: tuple[str, ...]) -> bool:
+    for prefix in excludes:
+        if not prefix:
+            continue
+        normalized = prefix.rstrip("/")
+        if path == normalized or path.startswith(normalized + "/"):
+            return True
+    return False
+
+
+def _collect_include_facts(
+    clang_tu: ci.TranslationUnit,
+    source: str,
+    mapper: cu.PathMapper,
+    excludes: tuple[str, ...] = (),
+    edge_limit: int = 0,
+) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...], bool]:
+    """Repo-relative include facts for the task-38 dependency contract.
+
+    Returns ``(direct_includes_of_main_file, include_edges)``. Both are filtered
+    to files under ``repo_root`` (system/generated-outside headers cannot be
+    monitored incrementally), sorted and deduplicated. ``include_edges`` keeps
+    header->header edges as ``(parent_file, included_file)``; the TU main file is
+    never a target but may be a source.
+    """
+
+    try:
+        # cindex exposes ``get_includes()`` (FileInclusion with source/include/
+        # depth), not the C API name ``get_inclusions``.
+        inclusions = list(clang_tu.get_includes())
+    except Exception:  # pragma: no cover - binding defensive
+        return (), (), False
+    main_normalized = os.path.normpath(source)
+    main_relative = mapper.relative(source) or ""
+    direct: set[str] = set()
+    edges: set[tuple[str, str]] = set()
+    for inclusion in inclusions:
+        target_file = getattr(inclusion, "include", None) or getattr(inclusion, "target", None)
+        target_name = _inclusion_file_name(target_file)
+        if not target_name:
+            continue
+        target_relative = mapper.relative(target_name)
+        if not target_relative or target_relative == main_relative:
+            continue
+        if _excluded_include_path(target_relative, excludes):
+            continue
+        source_name = _inclusion_file_name(getattr(inclusion, "source", None))
+        source_relative = mapper.relative(source_name) if source_name else None
+        if source_relative and not _excluded_include_path(source_relative, excludes):
+            edges.add((source_relative, target_relative))
+        depth = getattr(inclusion, "depth", 0)
+        try:
+            is_direct = (source_name and os.path.normpath(source_name) == main_normalized) or int(depth) <= 1
+        except (TypeError, ValueError):
+            is_direct = bool(source_name and os.path.normpath(source_name) == main_normalized)
+        if is_direct:
+            direct.add(target_relative)
+    ordered_edges = sorted(edges)
+    truncated = False
+    if edge_limit and len(ordered_edges) > edge_limit:
+        ordered_edges = ordered_edges[:edge_limit]
+        truncated = True
+    return tuple(sorted(direct)), tuple(ordered_edges), truncated
+
+
 def _toolchain_injection_note(tu: CompilationUnit, source: str) -> str:
     """Audit note when the parser supplies a cross toolchain's implicit headers."""
 
@@ -1511,6 +1620,31 @@ class _Extractor:
         existing = self.functions.get(function_id)
         if existing is not None and not (is_definition and not existing.is_definition):
             return function_id
+        is_virtual = False
+        is_pure_virtual = False
+        overrides: tuple[str, ...] = ()
+        if cursor.kind == ci.CursorKind.CXX_METHOD:
+            try:
+                is_virtual = bool(cursor.is_virtual_method())
+                is_pure_virtual = bool(cursor.is_pure_virtual_method())
+            except Exception:  # pragma: no cover - binding defensive
+                pass
+            try:
+                override_ids: list[str] = []
+                for overridden in cu.overridden_cursors(cursor):
+                    try:
+                        override_id = self._function_identity(overridden)
+                    except Exception:  # pragma: no cover - defensive
+                        continue
+                    if override_id and override_id != function_id and override_id not in override_ids:
+                        override_ids.append(override_id)
+                overrides = tuple(override_ids)
+            except Exception:  # pragma: no cover - binding defensive
+                overrides = ()
+        if existing is not None:  # replacing a declaration with its definition
+            is_virtual = is_virtual or existing.is_virtual
+            is_pure_virtual = is_pure_virtual or existing.is_pure_virtual
+            overrides = tuple(dict.fromkeys(existing.overrides + overrides))
         if header_declaration:
             limit = self.options.header_declaration_limit
             if limit and self.header_declaration_count >= limit:
@@ -1541,6 +1675,9 @@ class _Extractor:
             is_static=storage_class == "static" or cu.is_static_method(cursor),
             is_inline=cu.is_function_inlined(cursor),
             is_variadic=variadic,
+            is_virtual=is_virtual,
+            is_pure_virtual=is_pure_virtual,
+            overrides=overrides,
             parent_id=self._parent_function_id(cursor),
             params=params,
         )
@@ -1571,6 +1708,24 @@ class _Extractor:
 
     # -- types and fields --------------------------------------------------- #
 
+    def _base_type_ids(self, cursor: ci.Cursor) -> tuple[str, ...]:
+        """Direct base class type ids of a C++ record cursor (declaration order)."""
+
+        base_ids: list[str] = []
+        for child in cursor.get_children():
+            if child.kind != ci.CursorKind.CXX_BASE_SPECIFIER:
+                continue
+            try:
+                declaration = child.type.get_declaration()
+                if declaration is None or declaration.kind not in _TYPE_KINDS:
+                    continue
+                base_id = self._type_identity(declaration)
+            except Exception:  # pragma: no cover - binding defensive
+                continue
+            if base_id and base_id not in base_ids:
+                base_ids.append(base_id)
+        return tuple(base_ids)
+
     def _add_type(self, cursor: ci.Cursor) -> None:
         if not self.paths.contains(cursor.location):
             return
@@ -1599,6 +1754,7 @@ class _Extractor:
             underlying_type=cu.underlying_type_spelling(cursor),
             parent_id=self._type_identity(parent) if parent is not None else "",
             is_anonymous=is_anonymous,
+            base_types=self._base_type_ids(cursor),
         )
         existing = self.types.get(type_id_value)
         if existing is None or _better_type(existing, record):

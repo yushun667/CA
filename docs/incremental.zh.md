@@ -63,12 +63,25 @@ ca update --repo /src/proj --compdb /src/proj/compile_commands.json \
 | 主源文件内容 | 是 | 下次 `update` 重解析该 TU |
 | 编译参数/include flag | 是 | 受影响 TU 重解析（缓存键变化） |
 | 工具或 schema 升级 | 是 | 整个缓存一次性失效 |
-| **头文件内容** | **否** | 不跟踪头文件依赖：`ca update` 识别为非 TU 变更，清空缓存并重解析**全部** TU |
-| 构建文件（`Makefile`、`CMakeLists.txt` 等） | 否 | 同头文件：全量重解析 |
+| **头文件内容** | 是（有 include 事实时） | 只有传递 include 集合包含该头文件的 TU 重解析；无关 TU 保持缓存命中 |
+| 头文件/构建文件但无 include 事实 | 回退 | 旧行为：清空整个缓存、警告并重解析全部 TU |
+| 构建文件（`Makefile`、`CMakeLists.txt` 等） | 构建文件仍全量重解析 | 仅 header-like 变更才做依赖裁剪 |
 | compile database 增删文件 | 下次 `update` 重新解析 compdb | 新 TU 解析；被删 TU 在数据库重建后消失 |
 
-因此当 `--changed-files` 含头文件时，`ca update` 会退化为一次清缓存的整体重建；在
-实现头文件依赖发现之前这是安全默认。
+`ca index` 会记录每个 TU 的 repo 内直接 include 与 include 边（含 header→header），
+store 把传递闭包持久化到 `tu_includes`（`include_path -> tu_id`），因此变更头文件
+可以直接映射到依赖 TU：
+
+```text
+[update] include dependencies: 2/1682 TUs include the changed header(s)
+[update] dependency-aware: invalidated 2 cache entries for 2 dependent TUs
+[update] cache hits=1680/1682 misses=2; database rebuilt from cache
+```
+
+没有被任何已索引 TU include 的头文件变更是 no-op（`ca update` 退出 2，提示
+"not included by any indexed TU"）。旧库（没有 include 事实）或 parser 未采集时
+回退旧的全缓存清理行为并告警。`ca watch` 使用同一映射，并在每轮 JSON 中报告
+`dependency_aware`、`fallback_full`、`affected_count`、`cache_hits`、`cache_misses`。
 
 ## 当前限制：数据库行仍是全量重写
 
@@ -112,8 +125,9 @@ ca watch --repo <repo> --db ca.db --compdb <compdb> --changed-files kernel/a.c
   轮询保留旧快照，下一轮重试同一变更集。
 - **单实例**：`<db>.watch.lock`（flock）；第二个 watcher 以 code 2 退出。查询不受
   影响（SQLite WAL；watcher 是唯一写者）。
-- **头/构建文件变更**：清空增量缓存并全量重解析所有 TU（与 `ca update` 一致），
-  该轮会明显变慢。
+- **头文件变更**：只有传递 include 包含该头文件的 TU 重解析（依赖感知，与
+  `ca update` 一致）；无关 TU 保持缓存命中。构建文件与无 include 事实的旧库仍
+  回退清全缓存全量重建。
 - **新增/删除文件不在 compile database 中**：compdb 无法知道它们，轮询报告
   `compdb_stale` 并跳过更新、记录错误；重新生成 compile database 后重启 watcher。
 - **数据库整库重写**：store 的 per-TU replace 尚未实现，所以每轮会从缓存记录重写
@@ -158,7 +172,8 @@ WantedBy=multi-user.target
 ## 验证
 
 `ca update` 由端到端测试覆盖：dry-run 计划、变更 TU 重解析而其余走缓存、头文件
-变更清缓存路径。`ca watch` 由 `tests/test_e2e_watch.py` 覆盖：基线快照、改源码后
-增量更新与缓存命中、头文件全量重建、compdb 缺新文件时 `compdb_stale` 跳过、deep
-状态失效、锁冲突、失败不推进快照。另见 `tests/test_e2e_graph_mcp.py` 与
-`tests/test_e2e_pipeline.py`。
+依赖感知失效。`tests/test_e2e_includes.py` 覆盖直接/传递 include、仅依赖 TU
+重解析（无关 TU 缓存命中）、无关 header no-op、无 include 信息回退与
+`ca watch --once` 依赖指标。`tests/test_e2e_watch.py` 覆盖基线快照、改源码后增量
+更新、头文件更新、compdb 缺新文件时 `compdb_stale` 跳过、deep 状态失效、锁冲突、
+失败不推进快照。另见 `tests/test_e2e_graph_mcp.py` 与 `tests/test_e2e_pipeline.py`。

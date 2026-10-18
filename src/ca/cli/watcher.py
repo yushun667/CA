@@ -6,6 +6,12 @@ module holds the pure planning helpers shared by both the CLI and a future
 daemon; the file-system watcher itself is intentionally not implemented in this
 phase (design: docs/incremental.md).
 
+Header dependency awareness (task-38): when the index contains ``tu_includes``
+records, a changed header affects only the TUs that directly include it. The
+caller passes those TU ids into :func:`resolve_dependent_units`; without
+dependency data the plan falls back to the old full-cache-rebuild behaviour
+(``fallback_full=True``, warning emitted by the CLI).
+
 A daemon is expected to:
 
 1. watch the repository for source/header writes (inotify on Linux, FSEvents on
@@ -39,6 +45,9 @@ class WatchPlan:
     header_change: bool
     total_units: int
     errors: tuple[str, ...] = field(default_factory=tuple)
+    header_files: tuple[str, ...] = field(default_factory=tuple)
+    dependency_aware: bool = False
+    fallback_full: bool = False
 
     @property
     def affected_count(self) -> int:
@@ -52,6 +61,9 @@ class WatchPlan:
             "total_units": self.total_units,
             "affected_count": self.affected_count,
             "affected": list(self.affected),
+            "header_files": list(self.header_files),
+            "dependency_aware": self.dependency_aware,
+            "fallback_full": self.fallback_full,
             "errors": list(self.errors),
         }
 
@@ -121,6 +133,11 @@ def plan_changes(
             # A changed source file that is not part of the compile database is
             # still a repository-wide change for safety.
             header_change = True
+    header_files = tuple(
+        label
+        for label in changed_labels
+        if Path(label).suffix.lower() in _HEADER_SUFFIXES
+    )
     if header_change:
         affected = [unit.file for unit in units]
     return WatchPlan(
@@ -130,7 +147,63 @@ def plan_changes(
         header_change=header_change,
         total_units=len(units),
         errors=tuple(errors),
+        header_files=header_files,
     )
+
+
+def resolve_dependent_units(
+    plan: WatchPlan,
+    compilation_units: Sequence[CompilationUnit],
+    dependent_tu_ids: Iterable[str],
+    *,
+    has_dependency_data: bool = False,
+) -> WatchPlan:
+    """Restrict a header-change plan to TUs that include the changed headers.
+
+    ``dependent_tu_ids`` comes from the index (``tu_includes``).  The plan is
+    only rewritten when every changed non-source path is a header-like file;
+    build files or unknown paths still force the old full rebuild.  An empty
+    dependency set (old database / parser without include facts) leaves the plan
+    as the full fallback with ``fallback_full=True``.
+    """
+
+    if not plan.header_change:
+        return plan
+    labels = list(plan.changed_files)
+    if not labels:
+        return plan
+    header_like = {
+        label
+        for label in labels
+        if Path(label).suffix.lower() in _HEADER_SUFFIXES
+    }
+    if any(label not in header_like for label in labels):
+        # A build file or a source file missing from the compile database: keep
+        # the conservative full rebuild.
+        plan.fallback_full = True
+        return plan
+    unit_by_id = {unit.id: unit for unit in compilation_units}
+    affected = [
+        unit_by_id[tu_id].file
+        for tu_id in dependent_tu_ids
+        if tu_id in unit_by_id
+    ]
+    if not affected:
+        if not has_dependency_data:
+            # The index predates include facts (or the parser did not emit
+            # them): fall back conservatively to the old full rebuild.
+            plan.fallback_full = True
+            return plan
+        # Dependency data exists and no TU includes the changed headers: this
+        # update is a no-op (unrelated header), not a full rebuild.
+        plan.affected = ()
+        plan.dependency_aware = True
+        plan.fallback_full = False
+        return plan
+    plan.affected = tuple(sorted(dict.fromkeys(affected)))
+    plan.dependency_aware = True
+    plan.fallback_full = False
+    return plan
 
 
 def update_command(plan: WatchPlan, *, repo: str, db: str, compdb: str | None = None) -> list[str]:

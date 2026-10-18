@@ -131,8 +131,10 @@ PYTHONPATH=src .venv/bin/python -m ca index \
 
 - 仅当 **TU 主源文件内容**、语言、driver、编译参数、工具版本与 schema 版本都
   未变化时才复用缓存；
-- **头文件内容不参与缓存键**。修改头文件后请不加 `--incremental` 做一次全量
-  索引（或删除缓存目录），否则会回放旧结果；
+- **头文件内容不参与缓存键**，但 `ca index` 会记录 include 依赖
+  （`tu_includes`）：改头文件后 `ca update --changed-files` 只失效包含它的 TU
+  （传递闭包）；若旧库/parser 没有 include 数据则回退清全缓存并警告；无关头文件
+  是 no-op；
 - 缓存是尽力而为：损坏/截断的条目会被丢弃并正常重新解析；`--clear-cache`
   （或删除 `.ca-cache`）永远安全。
 
@@ -285,7 +287,7 @@ CA 设计为跑在源码所在机器上，AI agent 不复制仓库而是直接�
 MCP 暴露 `find_symbol`/`functions`、`callers`、`callees`、`graph`、`branches`、
 `assignments`、`returns`、`resources`、`leaks`、`detail`、`stats`，输出稳定 JSON
 信封、limit/分页与稳定错误码。工具 schema、SSH/隧道与服务器验证见
-[mcp.zh.md](mcp.zh.md)；离线/在线模型、缓存失效（头文件需全量重建）与
+[mcp.zh.md](mcp.zh.md)；离线/在线模型、缓存失效（头文件按 include 依赖裁剪）与
 watcher/daemon 设计见 [incremental.zh.md](incremental.zh.md)。
 
 ### 跨 TU 回调（后处理 pass）

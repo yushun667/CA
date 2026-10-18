@@ -18,20 +18,14 @@
 ## 本目录文件
 
 - [usage.md](usage.md)：安装、索引、查询、输出与限制。
-- usage.zh.md：中文对照，逐节对应。
-- usage.i18n.yaml：双语一致性记录；改语言后更新。
 - [mcp.md](mcp.md)：MCP 查询接口（stdio/HTTP、工具）；改行为时同步。
-- mcp.zh.md / mcp.i18n.yaml：中文对照与一致性记录。
 - [incremental.md](incremental.md)：离线全量+增量、缓存失效、watcher。
-- incremental.zh.md / incremental.i18n.yaml：中文对照与一致性记录。
 - [layered-indexing.md](layered-indexing.md)：L0/L1/L2 分层与 deep_ready 语义。
-- layered-indexing.zh.md / layered-indexing.i18n.yaml：中文对照与一致性记录。
 - [cross-tu-callbacks.md](cross-tu-callbacks.md)：跨 TU 回调注册与去重口径。
-- cross-tu-callbacks.zh.md / cross-tu-callbacks.i18n.yaml：中文对照与一致性记录。
+- [cross-tu-virtual-dispatch.md](cross-tu-virtual-dispatch.md)：C++ 虚派发元数据、候选边与限制。
 - [ui.md](ui.md)：只读 Web UI（启动、页面）；改 `ca ui` 时同步。
-- ui.zh.md / ui.i18n.yaml：中文对照与一致性记录。
 - [server.md](server.md)：统一后端 `ca serve`（/api、jobs/SSE、/mcp）；改 serve 时同步。
-- server.zh.md / server.i18n.yaml：中文对照与一致性记录。
+- 每篇 `.md` 均有同名 `.zh.md` 中文对照与 `.i18n.yaml` 一致性记录；改语言后同步三者。
 
 ## 写作规则
 

@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 
+from ca.core.schema import SCHEMA_VERSION
 from ca.store import SqliteStore
 
 OH_PATH = "/home/yu/CA_OH/openharmony"
@@ -170,8 +171,8 @@ def test_federation_attach_detach_seam(store, tmp_path) -> None:
 
 def test_store_schema_version_and_stats(store) -> None:
     meta = dict(store.connection.execute("SELECT key, value FROM meta"))
-    assert meta["store_schema_version"] == "5"
-    assert meta["schema_version"] == "1"  # core contract version stays 1
+    assert meta["store_schema_version"] == "7"
+    assert meta["schema_version"] == SCHEMA_VERSION  # core contract version stays 1
     tables = store.stats()["tables"]
     assert {"call_targets", "deep_status", "workspaces", "projects", "variants"} <= set(tables)
 

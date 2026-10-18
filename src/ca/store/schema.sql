@@ -377,3 +377,34 @@ CREATE TABLE IF NOT EXISTS job_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_job_events_job ON job_events(job_id, id);
+
+-- Direct repo-local includes per translation unit (header dependency aware
+-- incremental update/watch): changed include path -> dependent TU ids.
+CREATE TABLE IF NOT EXISTS tu_includes (
+    tu_id       TEXT NOT NULL,
+    include_path TEXT NOT NULL,
+    PRIMARY KEY (tu_id, include_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tu_includes_path ON tu_includes(include_path, tu_id);
+
+-- C++ virtual dispatch metadata (task-37). Direct override/inheritance edges;
+-- transitive chains and virtual_candidate edges are derived at query time so
+-- cross-TU data from every indexed shard participates. Old databases gain the
+-- functions/types columns via store.virtual_dispatch.migrate (idempotent).
+CREATE TABLE IF NOT EXISTS virtual_overrides (
+    function_id      TEXT NOT NULL,
+    base_function_id TEXT NOT NULL,
+    PRIMARY KEY (function_id, base_function_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_virtual_overrides_base
+    ON virtual_overrides(base_function_id, function_id);
+
+CREATE TABLE IF NOT EXISTS type_bases (
+    type_id      TEXT NOT NULL,
+    base_type_id TEXT NOT NULL,
+    PRIMARY KEY (type_id, base_type_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_type_bases_base ON type_bases(base_type_id, type_id);

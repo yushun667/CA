@@ -892,6 +892,54 @@ class UpdateResult:
         }
 
 
+def _resolve_header_dependencies(
+    plan: Any, units: list[Any], db_path: Path, note: Any
+) -> Any:
+    """Turn a header-change plan into a dependency-aware plan when possible.
+
+    Reads ``tu_includes`` from the existing index: a changed header invalidates
+    only TUs whose transitive include set contains it.  Databases without include
+    facts (old index / parser without include collection) keep the old full
+    rebuild with an explicit warning.
+    """
+
+    from ca.cli.watcher import resolve_dependent_units
+    from ca.store import SqliteStore
+
+    if not getattr(plan, "header_change", False):
+        return plan
+    dependent_ids: list[str] = []
+    has_data = False
+    try:
+        store = SqliteStore(str(db_path))
+        store.open()
+        try:
+            dependent_ids = store.dependent_tu_ids(plan.changed_files)
+            has_data = store.has_tu_includes()
+        finally:
+            store.close()
+    except Exception as exc:  # missing DB or unreadable index: fall back
+        note(f"[update] warning: cannot read include dependencies: {exc}")
+    resolved = resolve_dependent_units(
+        plan, units, dependent_ids, has_dependency_data=has_data
+    )
+    if resolved.dependency_aware:
+        if resolved.affected_count:
+            note(
+                f"[update] include dependencies: {resolved.affected_count}/"
+                f"{resolved.total_units} TUs include the changed header(s)"
+            )
+        else:
+            note("[update] changed header(s) are not included by any indexed TU")
+    else:
+        note(
+            "[update] WARNING: no include dependency information in the index"
+            " (old database or parser without include collection); clearing the"
+            " whole incremental cache and re-parsing all TUs"
+        )
+    return resolved
+
+
 def run_update(
     *,
     repo: str,
@@ -958,6 +1006,8 @@ def run_update(
     result.plan = plan
     for warning in plan.errors:
         note(f"[update] warning: {warning}")
+    plan = _resolve_header_dependencies(plan, units, db_path, note)
+    result.plan = plan
 
     if dry_run:
         fmt.write_json(plan.to_dict())
@@ -978,12 +1028,29 @@ def run_update(
         db_path.expanduser().resolve().parent / ".ca-cache"
     )
     if plan.header_change:
-        note(
-            "[update] WARNING: a header/build file changed; header dependencies"
-            " are not tracked, so the incremental cache is cleared and all TUs"
-            " are re-parsed"
-        )
-        shutil.rmtree(effective_cache_dir, ignore_errors=True)
+        if getattr(plan, "dependency_aware", False):
+            affected = {
+                str(Path(path).resolve()) for path in getattr(plan, "affected", ())
+            }
+            affected_units = [
+                unit for unit in units if str(Path(unit.file).resolve()) in affected
+            ]
+            from ca.pipeline import invalidate_unit_cache
+
+            from ca.pipeline import resolve_record_scope
+
+            removed = invalidate_unit_cache(
+                effective_cache_dir,
+                affected_units,
+                analyze_scope,
+                resolve_record_scope(record_scope, len(units)),
+            )
+            note(
+                f"[update] dependency-aware: invalidated {removed} cache entries"
+                f" for {len(affected_units)} dependent TUs"
+            )
+        else:
+            shutil.rmtree(effective_cache_dir, ignore_errors=True)
     note(
         f"[update] affected {plan.affected_count}/{plan.total_units} TUs"
         f" (header_change={plan.header_change}), cache={effective_cache_dir}"

@@ -393,6 +393,7 @@ EXPECTED_TABLE_COUNTS = {
     "resource_ops": 1,
     "findings": 1,
     "call_targets": 0,
+    "tu_includes": 0,
     "deep_status": 1,
     "callback_registrations": 0,
     "callback_target_links": 0,

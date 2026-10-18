@@ -1,10 +1,10 @@
 # AGENTS.md — parse（Clang AST 提取）
 
-用 libclang 解析 TU 提取函数/类型/字段/调用与位置，产出 `ParseResult`；活动 `ParsedUnit` 留 worker 内供 analyze 复用。
+解析 TU 提取函数/类型/字段/调用与位置，产出 `ParseResult`；活动 `ParsedUnit` 留 worker 内供 analyze 复用。
 
 ## 关键文件
 
-- `libclang_parser.py`：`parse_compilation_unit(tu, options=None)`。参数归一：`-working-directory`、源操作数/产物/链接参数过滤、交叉 target/`-mabi`/Darwin sysroot；跨编译器兼容：preflight 学习未知 vendor 参数并记 note、诊断驱动精确剥离、codegen-only 忽略、driver（含相对路径）→`-resource-dir`/libc++/`-stdlib` 注入、逐 cursor 隔离、real→relaxed→compat→host 逐级且环境错误不重复解析（单 TU 一次 full parse）。后端可用 `CA_LIBCLANG_LIBRARY` 切匹配版本（OH 验收用 OH libclang15，默认 wheel libclang18）。`ParseOptions`：降级/host/宏展开/声明/`record_scope`(all|main_file)/`emit_header_types`/`emit_header_declarations`(默认关)/preflight。
+- `libclang_parser.py`：`parse_compilation_unit(tu, options=None)`。参数归一：`-working-directory`、源操作数/产物/链接参数过滤、交叉 target/`-mabi`/Darwin sysroot；跨编译器兼容：preflight 学习未知 vendor 参数并记 note、诊断驱动精确剥离、codegen-only 忽略、driver（含相对路径）→`-resource-dir`/libc++/`-stdlib` 注入、逐 cursor 隔离、real→relaxed→compat→host 逐级且环境错误不重复解析。后端可经 `CA_LIBCLANG_LIBRARY` 切版本（OH 用 libclang15，默认 libclang18）。`ParseOptions`：降级/host/宏展开/声明/`record_scope`(all|main_file)/`emit_header_types`/`emit_header_declarations`/`collect_include_files`/preflight；另出 virtual 元数据/include 事实。
 - `cursor_utils.py`：libclang 引导与环境后端选择、C API 补充绑定（inline/static method/参数个数/宏展开/bitfield 安全宽度）、`PathMapper`（绝对/相对→仓库相对 POSIX，realpath）、USR/linkage/kind 映射（含模板/`using`）、Sloc。
 - `__init__.py`：导出 `parse_compilation_unit`/`ParseOptions`/`ParsedTranslationUnit`。
 

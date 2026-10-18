@@ -27,6 +27,7 @@ from ca.core.schema import (
     Sloc,
 )
 from ca.store import SqliteStore
+from ca.core.schema import SCHEMA_VERSION
 from ca.store.federated import FederatedStore, discover_databases
 
 REPO = "/repo"
@@ -568,8 +569,8 @@ def test_stats_aggregation(tmp_path) -> None:
         assert [item["shard"] for item in stats["shards"]] == ["s1", "s2"]
         for entry in stats["shards"]:
             assert entry["path"]
-            assert entry["schema_version"] == "1"
-            assert entry["store_schema_version"] == "5"
+            assert entry["schema_version"] == SCHEMA_VERSION
+            assert entry["store_schema_version"] == "7"
             assert entry["tables"]["functions"] >= 1
 
 

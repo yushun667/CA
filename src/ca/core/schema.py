@@ -24,7 +24,7 @@ import dataclasses
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Iterable, Iterator
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 TOOL_VERSION = "0.1.0"
 
 
@@ -121,6 +121,11 @@ class FunctionRecord:
     is_static: bool = False
     is_inline: bool = False
     is_variadic: bool = False
+    is_virtual: bool = False
+    is_pure_virtual: bool = False
+    # Function ids (ca.core.ids.function_id) of the overridden declarations, in
+    # declaration order. Stable across TUs because ids are USR based.
+    overrides: tuple[str, ...] = ()
     parent_id: str = ""
     params: tuple[ParamRecord, ...] = ()
 
@@ -142,6 +147,9 @@ class TypeRecord:
     underlying_type: str = ""
     parent_id: str = ""
     is_anonymous: bool = False
+    # Direct base class/struct type ids (USR based); empty for C types. Multiple
+    # inheritance is preserved in declaration order.
+    base_types: tuple[str, ...] = ()
 
 
 @dataclass
@@ -336,6 +344,15 @@ class ParseResult:
     fields: list[FieldRecord] = field(default_factory=list)
     calls: list[CallRecord] = field(default_factory=list)
     diagnostics: list[Diagnostic] = field(default_factory=list)
+    # task-38 dependency contract (repo-relative POSIX paths, sorted, deduped):
+    # ``include_files`` is the TU main file's direct includes (repo-local only,
+    # main file excluded); ``include_edges`` are all repo-local include edges
+    # observed in this TU, ``(parent_file, included_file)`` including
+    # header->header edges. Both are TU-level facts independent of
+    # ``ParseOptions.record_scope`` and are empty when collection is disabled or
+    # the TU failed to load.
+    include_files: tuple[str, ...] = ()
+    include_edges: tuple[tuple[str, str], ...] = ()
     parse_ok: bool = True
     elapsed_ms: float = 0.0
     error: str = ""

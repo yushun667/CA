@@ -365,7 +365,7 @@ def test_phase4_database_upgrade_in_place(tmp_path) -> None:
         assert reopened.query_function_detail("on_data_received")["function"]
         reopened.finalize()
         meta = dict(reopened.connection.execute("SELECT key, value FROM meta"))
-        assert meta["store_schema_version"] == "5"
+        assert meta["store_schema_version"] == "7"
         indexes = {
             row[0]
             for row in reopened.connection.execute(

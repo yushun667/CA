@@ -51,6 +51,9 @@ FUNCTION_COLUMNS = (
     "is_static",
     "is_inline",
     "is_variadic",
+    "is_virtual",
+    "is_pure_virtual",
+    "overrides_json",
     "parent_id",
     "params_json",
 )
@@ -73,6 +76,7 @@ TYPE_COLUMNS = (
     "underlying_type",
     "parent_id",
     "is_anonymous",
+    "bases_json",
 )
 
 FIELD_COLUMNS = (
@@ -297,6 +301,9 @@ def _function_row(record: Any) -> tuple[Any, ...]:
         int(record.is_static),
         int(record.is_inline),
         int(record.is_variadic),
+        int(getattr(record, "is_virtual", False)),
+        int(getattr(record, "is_pure_virtual", False)),
+        _json_list(getattr(record, "overrides", ()) or ()),
         record.parent_id,
         _params_json(record),
     )
@@ -317,6 +324,7 @@ def _type_row(record: Any) -> tuple[Any, ...]:
         record.underlying_type,
         record.parent_id,
         int(record.is_anonymous),
+        _json_list(getattr(record, "base_types", ()) or ()),
     )
 
 
@@ -471,6 +479,7 @@ def _insert_sql(table: str, columns: Sequence[str]) -> str:
 
 
 TUS_INSERT = _insert_sql("tus", TUS_COLUMNS)
+TU_INCLUDE_INSERT = "INSERT OR IGNORE INTO tu_includes (tu_id, include_path) VALUES (?, ?)"
 FUNCTION_INSERT = (
     _insert_sql("functions", FUNCTION_COLUMNS)
     + " ON CONFLICT(id) DO UPDATE SET "
@@ -488,6 +497,10 @@ RETURN_INSERT = _insert_sql("returns", RETURN_COLUMNS)
 RESOURCE_OP_INSERT = _insert_sql("resource_ops", RESOURCE_OP_COLUMNS)
 FINDING_INSERT = _insert_sql("findings", FINDING_COLUMNS)
 CALL_TARGET_INSERT = _insert_sql("call_targets", CALL_TARGET_COLUMNS)
+VIRTUAL_OVERRIDE_INSERT = _insert_sql(
+    "virtual_overrides", ("function_id", "base_function_id")
+)
+TYPE_BASE_INSERT = _insert_sql("type_bases", ("type_id", "base_type_id"))
 
 
 # --------------------------------------------------------------------------- #
@@ -535,10 +548,12 @@ FTS_MIN_CHARS = 3
 
 # Additive store-side schema changes are tracked separately from the core
 # contract: meta["schema_version"] keeps ca.core.schema.SCHEMA_VERSION, while
-# this key versions the physical layout (2 = phase-3 call_targets/workspace
-# tables). Old databases are upgraded in place by open() (CREATE TABLE IF NOT
-# EXISTS) plus finalize() (secondary indexes); no destructive migration runs.
-STORE_SCHEMA_VERSION = "5"
+# this key versions the physical layout (7 = C++ virtual metadata tables
+# virtual_overrides/type_bases + functions/types dispatch columns). Old
+# databases are upgraded in place by open() (CREATE/ALTER IF NOT EXISTS via
+# store.virtual_dispatch.migrate) plus finalize() (secondary indexes); no
+# destructive migration runs.
+STORE_SCHEMA_VERSION = "7"
 STORE_SCHEMA_META_KEY = "store_schema_version"
 
 # Legacy backfill: phase-3 databases predate deep_status. Any function that
@@ -655,10 +670,34 @@ def add_parse_result(conn: sqlite3.Connection, result: ParseResult) -> None:
     """Insert one parse result's rows (``executemany``, idempotent)."""
 
     conn.execute(TUS_INSERT, _tu_row(result.tu))
+    include_files = tuple(getattr(result, "include_files", None) or ())
+    include_edges = tuple(getattr(result, "include_edges", None) or ())
+    closure = _include_closure(include_files, include_edges)
+    if closure:
+        conn.executemany(
+            TU_INCLUDE_INSERT,
+            [(result.tu.id, path) for path in closure],
+        )
     conn.executemany(FUNCTION_INSERT, [_function_row(record) for record in result.functions])
     conn.executemany(TYPE_INSERT, [_type_row(record) for record in result.types])
     conn.executemany(FIELD_INSERT, [_field_row(record) for record in result.fields])
     conn.executemany(CALL_INSERT, [_call_row(record) for record in result.calls])
+    override_rows = [
+        (record.id, base_id)
+        for record in result.functions
+        for base_id in (getattr(record, "overrides", ()) or ())
+        if base_id
+    ]
+    if override_rows:
+        conn.executemany(VIRTUAL_OVERRIDE_INSERT, override_rows)
+    base_rows = [
+        (record.id, base_id)
+        for record in result.types
+        for base_id in (getattr(record, "base_types", ()) or ())
+        if base_id
+    ]
+    if base_rows:
+        conn.executemany(TYPE_BASE_INSERT, base_rows)
     # Diagnostics are not persisted: they are build/parse diagnostics, not
     # database records in the task's table contract.
 
@@ -676,6 +715,52 @@ def add_analysis_result(conn: sqlite3.Connection, result: AnalysisResult) -> Non
     conn.executemany(
         CALL_TARGET_INSERT, [_call_target_row(record) for record in result.call_targets]
     )
+
+
+def _include_closure(
+    include_files: Sequence[str], include_edges: Sequence[Sequence[str]]
+) -> list[str]:
+    """Transitive repo-local includes for one TU.
+
+    ``include_files`` is the parser's direct main-file include list and
+    ``include_edges`` contains repo-local ``(parent, child)`` edges (including
+    header->header), so a changed deep header still maps back to every TU that
+    reaches it. Sorted/deduplicated for deterministic storage.
+    """
+
+    direct = [str(path) for path in include_files if str(path)]
+    if not direct:
+        return []
+    graph: dict[str, list[str]] = {}
+    for edge in include_edges:
+        if len(edge) != 2:
+            continue
+        parent, child = str(edge[0]), str(edge[1])
+        if not parent or not child:
+            continue
+        graph.setdefault(parent, []).append(child)
+    reachable: set[str] = set(direct)
+    stack = list(direct)
+    while stack:
+        current = stack.pop()
+        for child in graph.get(current, ()):  # header->header edges
+            if child not in reachable:
+                reachable.add(child)
+                stack.append(child)
+    return sorted(reachable)
+
+
+def add_tu_includes(
+    conn: sqlite3.Connection, tu_id: str, include_paths: Sequence[str]
+) -> int:
+    """Insert direct include dependencies for one TU (idempotent)."""
+
+    before = conn.total_changes
+    conn.executemany(
+        TU_INCLUDE_INSERT,
+        [(str(tu_id), str(path)) for path in include_paths if str(path)],
+    )
+    return conn.total_changes - before
 
 
 def add_call_targets(conn: sqlite3.Connection, records: Sequence[Any]) -> int:

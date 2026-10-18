@@ -26,6 +26,7 @@ import sqlite3
 from typing import Any, Iterator, Sequence
 
 from ca.core.schema import SCHEMA_VERSION
+from ca.store import virtual_dispatch
 from ca.store.writer import (
     ASSIGNMENT_COLUMNS,
     CALL_TARGET_COLUMNS,
@@ -64,6 +65,7 @@ TABLES: tuple[str, ...] = (
     "resource_ops",
     "findings",
     "call_targets",
+    "tu_includes",
     "callback_registrations",
     "callback_target_links",
     "deep_status",
@@ -464,7 +466,26 @@ class QueryEngine:
             rows = self._conn.execute(sql, params).fetchall()
         except sqlite3.Error:
             rows = []
-        return [_edge_row(row) for row in rows]
+        merged = [_edge_row(row) for row in rows]
+        # Query-time virtual candidates (task-37): computed from persisted
+        # override metadata so cross-TU overrides from any indexed shard
+        # participate. Degrades to direct/indirect edges on old databases.
+        if self._has_table("virtual_overrides"):
+            if direction == "forward":
+                merged.extend(virtual_dispatch.forward_edges(self._conn, ids, limit))
+            else:
+                merged.extend(virtual_dispatch.reverse_edges(self._conn, ids, limit))
+        source_rank = {"call": 0, "call_target": 1, "virtual_candidate": 2}
+        merged.sort(
+            key=lambda row: (
+                row["call_file"],
+                row["call_line"],
+                row["caller_id"],
+                row["callee_id"],
+                source_rank.get(row["source"], 3),
+            )
+        )
+        return merged[:limit]
 
     def load_forward_edges(self, caller_ids: Sequence[str], limit: int = 500) -> list[dict[str, Any]]:
         """Direct + candidate edges whose caller is in ``caller_ids``."""

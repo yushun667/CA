@@ -12,7 +12,7 @@
     },
     "directory_agents": {
       "max_lines": 80,
-      "max_chars": 1500
+      "max_chars": 1800
     },
     "managed_document": {
       "max_lines": 180,
