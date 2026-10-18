@@ -75,7 +75,60 @@ data: {"type":"job.updated","event":"done","event_id":3,"job":{...}}
   `?since_id=N`，服务从 `job_events` 表重放缺失事件。
 - 事件 id 全局单调；默认保留最近 10000 条。
 
-## Explain 自动完成与 agent worker
+## 同步 AI 解释（MCP sampling，无队列，UI 默认路径）
+
+Web UI 的“AI 解释”不再创建 job/claim：后端收集函数事实后，**同步**向已连接的
+MCP sampling agent 发送标准 JSON-RPC `sampling/createMessage` 请求，等待 agent
+用自己的模型作答，直接把结果返回页面。后端不配置 LLM，也不需要 `CA_AGENT_URL`。
+
+### Agent 会话协议
+
+1. agent 连接 `POST /agent/session`，body `{name, capabilities:{"sampling":{}}}`；
+   返回 `{session_id, events_url, response_url, heartbeat_url}`（201）。
+2. agent 打开 `GET /agent/session/<id>/events`（SSE）保持长连接；服务端推送
+   `event: sampling`，`data` 为标准请求（messages/systemPrompt/includeContext/
+   modelPreferences/temperature/maxTokens/metadata，字段同 MCP 2025-06-18）。
+3. agent 用自己的模型生成回答后，`POST /agent/session/<id>/response`：
+   `{"jsonrpc":"2.0","id":"smp:...","result":{"role":"assistant",
+   "content":{"type":"text","text":"..."},"model":"<agent-side-model>",
+   "stopReason":"endTurn"}}`。
+4. 心跳 `POST /agent/session/<id>/heartbeat`（SSE ping 也续期）；断开
+   `DELETE /agent/session/<id>`；空闲 session 120s 清理。
+5. 服务端把 sampling response 与等待中的页面请求配对，`POST /api/explain/agent`
+   同步返回。
+
+### 页面端点
+
+```sh
+curl -s -X POST http://127.0.0.1:8765/api/explain/agent \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"kfree","lang":"en"}'
+```
+
+返回 data：`symbol,function,provider,model,language,explanation,evidence,
+fallback_reason,elapsed_ms,facts_summary`。
+
+- 有 sampling agent 会话：`provider:"agent"`，`model` 为 agent 返回的模型名；
+- 无会话/超时/agent 错误：HTTP 200 + `provider:"heuristic"`、`fallback:true`、
+  `fallback_reason`（如 `no connected MCP sampling agent session` /
+  `sampling request timed out after 30.0s`），页面不阻塞；
+- 未知 symbol 404、缺 symbol 400；**不创建 job、不产生 queued/claim**；
+- 超时默认 30s（`ca serve --sampling-timeout N` 或 `CA_SAMPLING_TIMEOUT`，
+  上限 120s）；页面 fetch 建议 60s 上限。
+- 隐私：只把该函数的有界源码/事实发给**已连接的 agent**；无 agent 时无外部请求；
+  后端不保存解释内容。
+
+### 启动 sampling agent 会话
+
+```sh
+ca agent-session --serve-url http://127.0.0.1:8765 --model my-agent
+ca agent-session --serve-url http://127.0.0.1:8765 --agent-command ./my-agent
+```
+
+`--once` 处理一次后退出（测试/演示）；SIGINT/SIGTERM 关闭 session。没有 agent
+时 UI 仍可用（heuristic 回退），配置即用。
+
+## Explain jobs（兼容/后台自动化，UI 不使用）
 
 没有常驻 agent 时页面点“AI 解释”不应一直 queued：
 
@@ -136,12 +189,13 @@ ca mcp --serve-url http://127.0.0.1:8765
 
 ## 验证与性能
 
-- `tests/test_server_serve.py`（10 条）：健康/查询/MCP 端点、explain 跨客户端
-  job 闭环与 SSE 重放、自动完成（无 agent）、agent 抢先不被覆盖、grace 关闭、
-  `agent-worker`、重启重排/恢复、`ca mcp --serve-url` 代理、联邦 shard 统计。
-- explain 自动完成（grace 120ms，xv6）：创建→done 实测 135–146ms；
-  agent 抢先/关闭 grace/重启重排/worker 均有测试覆盖。
-- 全仓测试：`431 passed / 3 skipped`（本地 macOS arm64，libclang18）。
+- `tests/test_server_serve.py`（17 条）：健康/查询/MCP 端点、同步 sampling explain
+  （mock agent 成功/超时/无会话回退/无 job）、sampling session 生命周期、
+  `ca agent-session --once`、explain job 兼容闭环、`ca mcp --serve-url` 代理、
+  联邦 shard 统计。
+- 同步 sampling explain：无会话 heuristic 回退 p50 ≈4ms（10 次，xv6）；
+  mock sampling agent 成功、超时回退、无 job 创建均有测试覆盖。
+- 全仓测试：`439 passed / 3 skipped`（本地 macOS arm64，libclang18）。
 - 本地基准（xv6 DB，`benchmarks/results/server_bench.json`）：
   `GET /api/health` p50 2.0ms / p95 6.2ms、`/api/search` 1.7/2.3ms、
   `/api/stats` 1.8/4.8ms、`/api/jobs` 1.7/2.3ms；MCP `/mcp` detail

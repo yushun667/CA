@@ -14,6 +14,7 @@ from ca.cli.dbsource import resolve_paths
 from ca.cli.mcp import McpSession, TOOLS as MCP_TOOLS
 from ca.core.schema import TOOL_VERSION
 from ca.server.jobs import JobService
+from ca.server.sampling import SamplingGateway
 from ca.ui.server import QueryService, resolve_service
 
 JOB_MCP_TOOLS: list[dict[str, Any]] = [
@@ -73,6 +74,7 @@ class ServeConfig:
     repo: str = ""
     compdb: str = ""
     explain_grace_ms: int | None = None
+    sampling_timeout: float | None = None
 
 
 class ServeService:
@@ -110,6 +112,7 @@ class ServeService:
         self.mcp = McpSession(
             self.paths, repo=config.repo, compdb=config.compdb, federated=self.federated
         )
+        self.sampling = SamplingGateway()
         self._auto_lock = threading.Lock()
         self._auto_timers: dict[str, threading.Timer] = {}
         self._reschedule_auto_explain()
@@ -121,7 +124,40 @@ class ServeService:
             self._auto_timers.clear()
         for timer in timers:
             timer.cancel()
+        self.sampling.close_all()
         self.jobs.close()
+
+    # -- synchronous agent explain (MCP sampling, no jobs/queue) --------- #
+    def sampling_timeout(self) -> float:
+        """Seconds to wait for a connected agent's sampling response."""
+
+        if self.config.sampling_timeout is not None:
+            try:
+                value = float(self.config.sampling_timeout)
+            except (TypeError, ValueError):
+                value = 30.0
+        else:
+            raw = os.environ.get("CA_SAMPLING_TIMEOUT", "").strip()
+            try:
+                value = float(raw) if raw else 30.0
+            except ValueError:
+                value = 30.0
+        return max(1.0, min(value, 120.0))
+
+    def explain_agent(self, symbol: str, language: str = "en") -> dict[str, Any]:
+        """Synchronous explain over MCP sampling; heuristic fallback (HTTP 200)."""
+
+        from ca.server.agent_explain import explain_via_sampling
+
+        if not str(symbol or "").strip():
+            raise ServeError("INVALID_ARGUMENT", "symbol is required")
+        return explain_via_sampling(
+            self.query,
+            self.sampling,
+            str(symbol).strip(),
+            language,
+            timeout=self.sampling_timeout(),
+        )
 
     # -- explain auto-complete ------------------------------------------- #
     def explain_grace_ms(self) -> int:
@@ -226,6 +262,12 @@ class ServeService:
             },
             "jobs": self.jobs.job_stats(),
             "explain_grace_ms": self.explain_grace_ms(),
+            "sampling": {
+                **self.sampling.stats(),
+                "endpoint": "/agent/session",
+                "explain_endpoint": "/api/explain/agent",
+                "timeout_seconds": self.sampling_timeout(),
+            },
             "mcp_endpoint": "/mcp",
             "events_endpoint": "/events",
         }

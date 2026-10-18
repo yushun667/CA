@@ -182,8 +182,17 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
                         "jobs": True,
                         "sse": True,
                         "mcp": True,
+                        "agent_explain": True,
+                        "sampling_explain": True,
                         "federated": service.federated,
                     }
+                    health["sampling"] = {
+                        **service.sampling.stats(),
+                        "endpoint": "/agent/session",
+                        "explain_endpoint": "/api/explain/agent",
+                        "timeout_seconds": service.sampling_timeout(),
+                    }
+                    health["jobs"] = service.jobs.job_stats()
                     health["mcp_endpoint"] = "/mcp"
                     health["events_endpoint"] = "/events"
                     self._ok(health)
@@ -205,6 +214,10 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
                         self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", f"job not found: {job_id}")
                         return
                     self._ok({"job": public_job(job)})
+                    return
+                if path.startswith("/agent/session/") and path.endswith("/events"):
+                    session_id = path[len("/agent/session/") : -len("/events")].strip("/")
+                    self._stream_sampling_events(unquote(session_id))
                     return
                 if path == "/events":
                     self._stream_events(params)
@@ -257,8 +270,24 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
             if path == "/api/cfg":
                 self._ok(api_cfg(query, params))
                 return
+            if path == "/api/explain/agent":
+                self._ok(
+                    service.explain_agent(
+                        params.get("symbol") or params.get("q") or "",
+                        params.get("lang") or params.get("language") or "en",
+                    )
+                )
+                return
             if path == "/api/explain":
-                self._ok(api_explain(query, params))
+                if (params.get("mode") or "").strip().lower() == "agent":
+                    self._ok(
+                        service.explain_agent(
+                            params.get("symbol") or params.get("q") or "",
+                            params.get("lang") or params.get("language") or "en",
+                        )
+                    )
+                else:
+                    self._ok(api_explain(query, params))
                 return
             if path in FACT_ENDPOINTS:
                 self._ok(api_facts(query, params, FACT_ENDPOINTS[path]))
@@ -278,6 +307,56 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
             try:
                 if path == "/mcp":
                     self._handle_mcp()
+                    return
+                if path == "/agent/session":
+                    body = self._body()
+                    capabilities = body.get("capabilities")
+                    if not isinstance(capabilities, dict):
+                        capabilities = {"sampling": {}}
+                    session = service.sampling.open_session(
+                        str(body.get("name") or "mcp-agent"), capabilities
+                    )
+                    self._ok(session, HTTPStatus.CREATED)
+                    return
+                if path.startswith("/agent/session/"):
+                    parts = [part for part in path.split("/") if part]
+                    if len(parts) == 4 and parts[:2] == ["agent", "session"]:
+                        session_id = unquote(parts[2])
+                        action = parts[3]
+                        body = self._body()
+                        if action == "heartbeat":
+                            accepted = service.sampling.touch(session_id)
+                            self._ok({"accepted": accepted})
+                            return
+                        if action == "response":
+                            request_id = str(
+                                body.get("id")
+                                or (body.get("request_id") if isinstance(body, dict) else "")
+                                or ""
+                            )
+                            result = body.get("result")
+                            error = body.get("error")
+                            accepted = service.sampling.respond(
+                                session_id,
+                                request_id,
+                                result if isinstance(result, dict) else None,
+                                error if isinstance(error, dict) else None,
+                            )
+                            if not accepted:
+                                raise ServeError(
+                                    "NOT_FOUND",
+                                    "unknown or expired sampling request/session",
+                                )
+                            self._ok({"accepted": True, "id": request_id})
+                            return
+                if path == "/api/explain/agent":
+                    body = self._body()
+                    self._ok(
+                        service.explain_agent(
+                            body.get("symbol") or body.get("q") or "",
+                            body.get("lang") or body.get("language") or "en",
+                        )
+                    )
                     return
                 if path == "/api/jobs":
                     self._ok({"job": public_job(service.create_job(self._body()))}, HTTPStatus.CREATED)
@@ -400,6 +479,44 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
             finally:
                 subscription.close()
 
+        def _stream_sampling_events(self, session_id: str) -> None:
+            session = service.sampling.get_session(session_id)
+            if session is None:
+                self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unknown sampling session")
+                return
+            try:
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "keep-alive")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                hello = json.dumps(
+                    {"type": "hello", "session_id": session_id, "sampling": True},
+                    ensure_ascii=False,
+                )
+                self.wfile.write(f"event: hello\ndata: {hello}\n\n".encode("utf-8"))
+                service.sampling.touch(session_id)
+                self.wfile.flush()
+                while True:
+                    try:
+                        event = session.events.get(timeout=SSE_HEARTBEAT_SECONDS)
+                    except Exception:
+                        self.wfile.write(b": ping\n\n")
+                        service.sampling.touch(session_id)
+                        self.wfile.flush()
+                        continue
+                    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                    self.wfile.write(
+                        f"event: sampling\ndata: {payload}\n\n".encode("utf-8")
+                    )
+                    service.sampling.touch(session_id)
+                    self.wfile.flush()
+            except OSError:  # agent disconnected
+                pass
+            finally:
+                service.sampling.close_session(session_id)
+
         def _write_event(self, event: dict[str, Any]) -> None:
             public = _public_events([event])
             if not public:
@@ -416,7 +533,19 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
 
         do_PUT = _method_not_allowed  # noqa: N815
         do_PATCH = _method_not_allowed  # noqa: N815
-        do_DELETE = _method_not_allowed  # noqa: N815
+
+        def do_DELETE(self) -> None:  # noqa: N802 - http.server API
+            parsed = urlsplit(self.path)
+            path = parsed.path or "/"
+            if path.startswith("/agent/session/"):
+                session_id = unquote(path[len("/agent/session/") :].strip("/"))
+                closed = service.sampling.close_session(session_id)
+                if not closed:
+                    self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unknown sampling session")
+                    return
+                self._ok({"closed": True, "session_id": session_id})
+                return
+            self._method_not_allowed()
 
     return Handler
 

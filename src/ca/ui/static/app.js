@@ -66,6 +66,7 @@
 
   const HISTORY_KEY = "ca.ui.fnHistory";
   const HISTORY_LIMIT = 50;
+  const EXPLAIN_TIMEOUT_MS = 60000;
 
   function readStoredHistory() {
     try {
@@ -165,9 +166,6 @@
     serveUrl: "",
     features: { jobs: false, sse: false },
     connection: "embedded",
-    eventSource: null,
-    explainJob: null,
-    jobPollTimer: null,
   };
 
   const els = {};
@@ -309,13 +307,32 @@
   }
 
   // ------------------------------------------------------------------- api
-  async function api(path) {
+  async function api(path, options = {}) {
+    const timeoutMs = Number(options.timeoutMs) || 0;
+    const controller =
+      timeoutMs && typeof AbortController !== "undefined"
+        ? new AbortController()
+        : null;
+    const timer = controller
+      ? window.setTimeout(() => controller.abort(), timeoutMs)
+      : null;
     let response;
     try {
-      response = await fetch(path, { headers: { Accept: "application/json" } });
+      response = await fetch(path, {
+        headers: { Accept: "application/json" },
+        signal: controller ? controller.signal : undefined,
+      });
     } catch (error) {
-      throw new Error(t("error.unreachable", { message: error.message }));
+      if (timer) window.clearTimeout(timer);
+      markConnection(false, 0);
+      const message =
+        error && error.name === "AbortError"
+          ? t("error.timeout")
+          : error.message;
+      throw new Error(t("error.unreachable", { message }));
     }
+    if (timer) window.clearTimeout(timer);
+    markConnection(true, response.status);
     let payload = null;
     try {
       payload = await response.json();
@@ -334,7 +351,15 @@
     return payload.data;
   }
 
-  async function apiPost(path, payload) {
+  async function apiPost(path, payload, options = {}) {
+    const timeoutMs = Number(options.timeoutMs) || 0;
+    const controller =
+      timeoutMs && typeof AbortController !== "undefined"
+        ? new AbortController()
+        : null;
+    const timer = controller
+      ? window.setTimeout(() => controller.abort(), timeoutMs)
+      : null;
     let response;
     try {
       response = await fetch(path, {
@@ -344,10 +369,19 @@
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload || {}),
+        signal: controller ? controller.signal : undefined,
       });
     } catch (error) {
-      throw new Error(t("error.unreachable", { message: error.message }));
+      if (timer) window.clearTimeout(timer);
+      markConnection(false, 0);
+      const message =
+        error && error.name === "AbortError"
+          ? t("error.timeout")
+          : error.message;
+      throw new Error(t("error.unreachable", { message }));
     }
+    if (timer) window.clearTimeout(timer);
+    markConnection(true, response.status);
     let body = null;
     try {
       body = await response.json();
@@ -381,10 +415,35 @@
     }
     if (state.mode === "embedded") {
       state.connection = "embedded";
+    } else if (state.connection !== "online") {
+      state.connection = "online";
     }
     renderConnectionStatus();
-    if (state.mode === "remote" && state.features.sse) {
-      connectEvents();
+  }
+
+  function markConnection(ok, status) {
+    if (state.mode !== "remote") return;
+    if (ok) {
+      state.connection = "online";
+    } else if (!status || status === 502) {
+      state.connection = "reconnecting";
+    } else {
+      state.connection = "online";
+    }
+    renderConnectionStatus();
+  }
+
+  async function retryConnection() {
+    if (state.mode !== "remote") return;
+    state.connection = "connecting";
+    renderConnectionStatus();
+    try {
+      await api("/api/health");
+      state.connection = "online";
+      await loadHealth();
+    } catch (_error) {
+      state.connection = "offline";
+      renderConnectionStatus();
     }
   }
 
@@ -404,52 +463,9 @@
     };
     element.className = `conn-badge ${state.connection}`;
     element.textContent = t(keys[state.connection] || "conn.connecting");
-    element.title = state.serveUrl || "";
+    element.title = `${state.serveUrl || ""} · ${t("conn.retry")}`;
   }
 
-  function connectEvents() {
-    if (typeof EventSource === "undefined") {
-      state.connection = "offline";
-      renderConnectionStatus();
-      return;
-    }
-    if (state.eventSource) {
-      state.eventSource.close();
-      state.eventSource = null;
-    }
-    state.connection =
-      state.connection === "online" ? "reconnecting" : "connecting";
-    renderConnectionStatus();
-    const source = new EventSource("/events");
-    state.eventSource = source;
-    source.onopen = () => {
-      state.connection = "online";
-      renderConnectionStatus();
-      resyncExplainJob();
-    };
-    source.onerror = () => {
-      state.connection =
-        typeof navigator !== "undefined" && navigator.onLine === false
-          ? "offline"
-          : "reconnecting";
-      renderConnectionStatus();
-    };
-    source.onmessage = (event) => handleSseEvent(event.data);
-  }
-
-  function handleSseEvent(raw) {
-    let message = null;
-    try {
-      message = JSON.parse(raw);
-    } catch (_error) {
-      return;
-    }
-    if (!message || message.type !== "job.updated" || !message.job) return;
-    const job = message.job;
-    if (state.explainJob && job.id === state.explainJob.id) {
-      applyExplainJob(job);
-    }
-  }
 
   function normalizeExplainResult(result, job) {
     const payload = result || {};
@@ -461,6 +477,7 @@
       language: payload.language || currentLanguage(),
       explanation: payload.explanation || payload.summary || "",
       evidence: Array.isArray(payload.evidence) ? payload.evidence : [],
+      fallback: Boolean(payload.fallback),
       facts_summary: payload.facts_summary || null,
       fallback_reason: payload.fallback_reason || "",
       elapsed_ms: Number(payload.elapsed_ms) || 0,
@@ -468,70 +485,6 @@
     };
   }
 
-  function applyExplainJob(job) {
-    if (!job || !job.id) return;
-    state.explainJob = {
-      id: job.id,
-      status: job.status || "queued",
-      error: typeof job.error === "string" ? job.error : "",
-    };
-    if (job.status === "done") {
-      state.explain = normalizeExplainResult(job.result, job);
-      state.explainLoading = false;
-      state.explainError = "";
-      clearJobPoll();
-    } else if (job.status === "failed") {
-      state.explainLoading = false;
-      state.explainError =
-        state.explainJob.error || t("explain.jobFailed");
-      clearJobPoll();
-    } else {
-      state.explainLoading = true;
-      state.explainError = "";
-    }
-    if (state.tab === "explain") renderAccordionContent();
-  }
-
-  function clearJobPoll() {
-    if (state.jobPollTimer) {
-      window.clearTimeout(state.jobPollTimer);
-      state.jobPollTimer = null;
-    }
-  }
-
-  function scheduleJobPoll() {
-    clearJobPoll();
-    const job = state.explainJob;
-    if (!job || job.status === "done" || job.status === "failed") return;
-    state.jobPollTimer = window.setTimeout(async () => {
-      const current = state.explainJob;
-      if (!current || !current.id || current.status !== job.status) return;
-      try {
-        const data = await api(
-          `/api/jobs/${encodeURIComponent(current.id)}`
-        );
-        if (state.explainJob && state.explainJob.id === current.id) {
-          applyExplainJob(data.job);
-        }
-      } catch (_error) {
-        /* keep waiting; SSE may still deliver the result */
-      }
-      scheduleJobPoll();
-    }, 1500);
-  }
-
-  async function resyncExplainJob() {
-    const job = state.explainJob;
-    if (!job || !job.id) return;
-    try {
-      const data = await api(`/api/jobs/${encodeURIComponent(job.id)}`);
-      if (state.explainJob && state.explainJob.id === job.id) {
-        applyExplainJob(data.job);
-      }
-    } catch (_error) {
-      /* keep the current snapshot */
-    }
-  }
 
   // ---------------------------------------------------------------- routing
   function parseHash() {
@@ -718,8 +671,6 @@
       state.explain = null;
       state.explainLoading = false;
       state.explainError = "";
-      state.explainJob = null;
-      clearJobPoll();
       state.tab = tab;
       state.route = "function";
       if (!options.hash) {
@@ -1221,17 +1172,31 @@
     return "en";
   }
 
-  async function fetchExplainSync(symbol, language) {
-    const data = await api(
-      `/api/explain?symbol=${encodeURIComponent(
-        symbol
-      )}&lang=${encodeURIComponent(language)}`
-    );
-    if (state.selectedSymbol !== symbol) return;
-    state.explain = data;
-    state.explainJob = null;
-    state.explainLoading = false;
-    if (state.tab === "explain") renderAccordionContent();
+  async function fetchExplain(symbol, language) {
+    const query = `symbol=${encodeURIComponent(
+      symbol
+    )}&lang=${encodeURIComponent(language)}`;
+    const features = state.features || {};
+    const agentEndpointKnownMissing = features.sampling_explain === false;
+    if (state.mode === "remote" && !agentEndpointKnownMissing) {
+      try {
+        return await apiPost(
+          "/api/explain/agent",
+          { symbol, lang: language },
+          { timeoutMs: EXPLAIN_TIMEOUT_MS }
+        );
+      } catch (error) {
+        const status = error && error.status;
+        // Old serve builds without the endpoint report 404/405/501 and do not
+        // advertise features.sampling_explain; a 404 on a sampling-capable
+        // serve is a real error (e.g. unknown symbol) and must be surfaced.
+        const oldServe =
+          features.sampling_explain === undefined &&
+          (status === 404 || status === 405 || status === 501);
+        if (!oldServe && status !== 405 && status !== 501) throw error;
+      }
+    }
+    return api(`/api/explain?${query}`, { timeoutMs: EXPLAIN_TIMEOUT_MS });
   }
 
   async function loadExplain(force = false) {
@@ -1243,45 +1208,19 @@
     if (force || (state.explain && state.explain.language !== language)) {
       state.explain = null;
     }
-    if (force) state.explainJob = null;
-    clearJobPoll();
     renderAccordionContent();
     try {
-      if (state.mode === "remote" && state.features.jobs) {
-        const data = await apiPost("/api/jobs", {
-          type: "explain",
-          symbol,
-          payload: { lang: language },
-        });
-        if (state.selectedSymbol !== symbol) return;
-        state.explainJob = {
-          id: data.job.id,
-          status: data.job.status || "queued",
-          error: "",
-        };
-        state.explainLoading = true;
-        if (state.features.sse && !state.eventSource) connectEvents();
-        scheduleJobPoll();
-        if (state.tab === "explain") renderAccordionContent();
-        return;
-      }
-    } catch (error) {
-      // Jobs are unavailable: fall back to the synchronous explain endpoint
-      // (the server keeps its own heuristic/LLM fallback).
+      const data = await fetchExplain(symbol, language);
       if (state.selectedSymbol !== symbol) return;
-      if (error && error.status === 401) {
-        state.explainError = friendlyError(error);
-        state.explainLoading = false;
-        return;
-      }
-    }
-    try {
-      await fetchExplainSync(symbol, language);
+      state.explain = normalizeExplainResult(data, { symbol });
     } catch (error) {
       if (state.selectedSymbol !== symbol) return;
       state.explainError = friendlyError(error);
-      state.explainLoading = false;
-      if (state.tab === "explain") renderAccordionContent();
+    } finally {
+      if (state.selectedSymbol === symbol) {
+        state.explainLoading = false;
+        if (state.tab === "explain") renderAccordionContent();
+      }
     }
   }
 
@@ -1299,19 +1238,6 @@
     }
     const data = state.explain;
     const language = currentLanguage();
-    const job = state.explainJob;
-    if (job && (job.status === "queued" || job.status === "running")) {
-      const statusKey =
-        job.status === "queued" ? "jobs.queued" : "jobs.running";
-      panel.innerHTML = `<section class="section"><div class="section-head">${title}<span class="note">${escapeHtml(
-        t(statusKey)
-      )}</span></div><div class="view-loading">${escapeHtml(
-        t(statusKey)
-      )} · ${escapeHtml(t("jobs.waitingAgent"))}</div><div class="source-actions"><button type="button" class="ghost" id="explain-refresh">${escapeHtml(
-        t("explain.refresh")
-      )}</button></div></section>`;
-      return;
-    }
     if (state.explainLoading || !data || data.language !== language) {
       panel.innerHTML = `<section class="section"><div class="section-head">${title}<span class="note">${escapeHtml(
         t("explain.loading")
@@ -1326,7 +1252,7 @@
       providerKind === "llm"
         ? data.model || t("explain.ai")
         : providerKind === "agent"
-        ? t("explain.agent")
+        ? data.model || t("explain.agent")
         : t("explain.heuristic");
     const providerBadge = badge(
       providerLabel,
@@ -2905,6 +2831,9 @@
   async function loadHealth() {
     try {
       const health = await api("/api/health");
+      if (health && health.features && typeof health.features === "object") {
+        state.features = { ...state.features, ...health.features };
+      }
       if (health && health.db_ok === undefined) {
         health.db_ok = (health.status || "ok") === "ok";
       }
@@ -2981,6 +2910,10 @@
     }
     if (event.target.closest("#layout-reset")) {
       resetLayout();
+      return;
+    }
+    if (event.target.closest("#conn-status")) {
+      retryConnection();
       return;
     }
     if (
@@ -3236,7 +3169,13 @@
   // Small read-only hooks so tests can exercise the jump history without a DOM.
   window.CA_UI_TEST = {
     normalizeExplainResult,
-    applyExplainJob,
+    fetchExplain,
+    setTestMode: (mode) => {
+      state.mode = mode === "remote" ? "remote" : "embedded";
+    },
+    setTestFeatures: (features) => {
+      state.features = { ...state.features, ...(features || {}) };
+    },
     pushFunctionHistory,
     popFunctionHistory,
     clearFunctionHistory,
@@ -3245,7 +3184,6 @@
     explainState: () => ({
       mode: state.mode,
       connection: state.connection,
-      explainJob: state.explainJob ? { ...state.explainJob } : null,
       explain: state.explain ? { ...state.explain } : null,
       explainError: state.explainError,
       explainLoading: state.explainLoading,

@@ -19,5 +19,5 @@
 - 所有用户可见文案必须经 `i18n.js` 的 `t()` 或 `data-i18n` 属性提供，禁止在 `app.js`/`index.html` 写死英文；符号名、路径、代码与原始字段值不翻译。
 - 三区布局尺寸/折叠状态存 `localStorage` 的 `ca.ui.layout`；改布局、splitter 或
   快捷键时同步 `docs/ui.*` 与 `tests/test_ui.py` 的静态断言。
-- 远程模式代码（`/api/ui` 模式探测、EventSource `/events`、`/api/jobs` explain 流程、连接徽章）不得引入外部脚本；订阅事件要能重连并补偿（`GET /api/jobs/<id>`）。
+- 远程模式代码（`/api/ui` 模式探测、同步 `POST /api/explain/agent`、连接徽章/手动重试）不得引入外部脚本；explain 不创建 job/queue，也不使用 EventSource；agent 失败由服务端 200 heuristic + fallback_reason 回退，UI 只渲染 provider/model/evidence/fallback。
 - 改样式或交互后手工用 `ca ui --db <db>` 在浏览器验证亮/暗色、窄屏与中英切换。

@@ -61,14 +61,21 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
   `/api/source`、`/api/explain` 等）原样代理；非白名单 POST 返回
   `405 READ_ONLY`；查询代理超时 30s。后端不可达时 UI 返回统一错误信封
   `502 SERVE_UNAVAILABLE`。
-- `GET /events` 经代理**流式透传**（不缓冲）：`job.updated` 事件 + heartbeat 注释行，
-  支持 `Last-Event-ID` 重放。顶栏连接徽章显示 连接中/已连接/重连中/已断开；
-  EventSource 自动重连，UI 在重连后重新拉取当前 job，避免漏掉 `done` 事件。
-- **远程模式下 AI 解释改为任务**：打开解释分区时创建
-  `POST /api/jobs {type:"explain", symbol, payload:{lang}}`，通过 SSE 渲染
-  排队中/运行中/完成/失败。MCP agent 可用 `explain_jobs` 领取、`submit_explanation`
-  提交，结果实时出现并显示 `MCP agent` provider 徽章。若 jobs/SSE 不可用，UI 回退
-  同步 `/api/explain`（服务端仍保留 heuristic/LLM fallback），功能不中断。
+- `GET /events` 仍可经代理**流式透传**（不缓冲、heartbeat、`Last-Event-ID` 重放），
+  供其它 job 类型/未来客户端使用；解释标签不再订阅它。
+- 顶栏连接徽章显示 连接中/已连接/重连中/已断开，由 `/api/ui` 与 API 请求成功/失败
+  推导；点击徽章可手动重试连接。前端不再使用 EventSource。
+- **AI 解释改为同步**：打开解释分区时发送
+  `POST /api/explain/agent {symbol, lang}` 并等待结果（前端 60s 超时，保留
+  loading/error/重试/复制）。后端通过 MCP `sampling/createMessage` 向已连接的
+  MCP agent 反向请求回答；解释**不创建 job/queue/claim**。agent 回答时 provider
+  徽章显示 `agent` 与 sampling agent 的模型名；没有连接 agent 或请求失败时，后端
+  返回 HTTP 200 的 `heuristic` 解释、`fallback:true` 与 `fallback_reason`（例如
+  `no connected MCP sampling agent session` 或超时），UI 显示本地规则徽章与回退
+  说明。UI 通过 `/api/health` 的 `features.sampling_explain` 判断端点能力；旧版
+  serve 无该端点时回退 `GET /api/explain`（服务端 heuristic fallback），功能不中断。
+  已连接的 sampling agent 与待处理请求可在 `/api/health` 的
+  `sampling:{sessions,sampling_capable,pending_requests,timeout_seconds}` 查看。
 - 全程只读，UI 代理不会写索引。远程 `--serve-url` 建议仅用回环或可信隧道；本里程碑
   后端无认证。
 
@@ -207,6 +214,7 @@ facts_summary, cached, fallback_reason, elapsed_ms}`。
 | `GET /api/source` | `symbol`（必填）、`context`（0–10，默认 3） | 只读源码窗口：`{symbol, function{id,name,qualified_name,kind,file,line,end_line,signature}, file, language, start, end, total_lines, function_start, function_end, context, truncated, lines[{line,text}], shard, path, repo_root}` |
 | `GET /api/cfg` | `symbol`（必填） | 只读控制流图：`{symbol, function{id,name,qualified_name,kind,file,line,end_line}, deep_ready, shard, federated, blocks[], edges[], branches[], truncated, stats}`；blocks 含 `index/kind/terminator/line/end_line/statement_count`、分支标注（`condition`、`branch_kind`、`true_block`、`false_block`）与 `is_entry`/`is_exit`；edges 含展示用 `label`（分支边为 `true`/`false`） |
 | `GET /api/explain` | `symbol`（必填）、`lang=en\|zh` | 只读函数解释：`{symbol, function, provider, model, llm_configured, language, explanation, facts_summary, cached, fallback_reason, elapsed_ms}`（默认本地规则，可选配置 LLM） |
+| `POST /api/explain/agent` | JSON body `{symbol, lang}`（也支持 GET query 或 `/api/explain?mode=agent` 别名） | 远程模式同步 agent 解释：`{symbol, function, provider, model, language, explanation, evidence?, fallback, fallback_reason?, elapsed_ms, facts_summary?}`；后端经 MCP `sampling/createMessage` 询问已连接 agent，provider 为 `agent` 并带其模型名；无 agent/失败 → HTTP 200 `provider:"heuristic"`、`fallback:true`、`fallback_reason`；未知符号 404；旧 serve → UI 回退 `GET /api/explain` |
 | `GET /api/branches`、`/api/assignments`、`/api/returns`、`/api/resources` | `symbol`（必填） | 按函数的事实行（附加的便捷端点） |
 
 `/api/cfg` 通过常规详情查询解析函数，返回其 CFG 块/边以及解码后的分支行（联邦模式

@@ -16,7 +16,7 @@
 
 ## 局部规则
 
-- 远程模式（`--serve-url`）下 explain 走 `POST /api/jobs` + `/events` SSE（agent 可 claim/submit），jobs 不可用时回退同步 `/api/explain`；连接状态/重连与 i18n 见 `docs/ui.md` 与 `docs/server.md`。
+- 远程模式（`--serve-url`）下 explain 为**同步** `POST /api/explain/agent`（后端经 MCP sampling 询问已连接 agent；无 agent/失败时 200 heuristic + fallback_reason），不创建 job/queue；旧 serve 无端点时回退 `GET /api/explain`。连接徽章由 `/api/ui`+请求成败驱动，前端不使用 EventSource；详见 `docs/ui.md` 与 `docs/server.md`。
 - 改 API 或页面行为同步 `docs/ui.md`/`.zh.md`/`.i18n.yaml` 与 `docs/usage.*` 入口。
 - 前端不引入构建工具或外部依赖；所有数据文本必须转义后再插入 DOM。
 - 测试：`.venv/bin/python -m pytest tests/test_ui.py -q`；手工验证 `ca ui --db <db>`。

@@ -61,7 +61,7 @@ MAX_LIMIT = 5000
 PROXY_TIMEOUT = 30.0
 PROXY_SSE_IDLE_TIMEOUT = 60.0
 PROXY_MAX_BODY = 1024 * 1024
-PROXY_POST_PATHS = ("/api/jobs",)
+PROXY_POST_PATHS = ("/api/jobs", "/api/explain/agent")
 DEFAULT_SOURCE_CONTEXT = 3
 MAX_SOURCE_CONTEXT = 10
 MAX_SOURCE_LINES = 400
@@ -1700,11 +1700,12 @@ def _make_proxy_handler(server: "UiProxyHTTPServer") -> type[BaseHTTPRequestHand
 
         def do_POST(self) -> None:  # noqa: N802 - http.server API
             path = urlsplit(self.path).path or "/"
-            if path != "/api/jobs" and not path.startswith("/api/jobs/"):
+            allowed = path in PROXY_POST_PATHS or path.startswith("/api/jobs/")
+            if not allowed:
                 self._error(
                     int(HTTPStatus.METHOD_NOT_ALLOWED),
                     "READ_ONLY",
-                    "only /api/jobs endpoints accept POST from the UI",
+                    "only /api/jobs and /api/explain/agent accept POST from the UI",
                 )
                 return
             body = self._read_body()

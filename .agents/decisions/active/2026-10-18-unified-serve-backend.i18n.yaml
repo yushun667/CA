@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: 2026-10-18-unified-serve-backend.md
-  sha256: 876444dc9b066096ae2474d955cda15cefe5c695782ccf7f0a64ae4e0d9c4c40
+  sha256: 699774f2bdeeccb99f45f94d0558bbefb557db4020d1a22491f6a9479e1747bd
 zh:
   file: 2026-10-18-unified-serve-backend.zh.md
-  sha256: 773e1054eef62314f03bd3072f59aea704dcffe887137e9b7cbaeaf1a8bdf249
+  sha256: d8e8e0df70e7e2fbd42fc9bd30ee13cca09513ed168b148e5d32ceb38d3c0773

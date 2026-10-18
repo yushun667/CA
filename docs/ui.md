@@ -67,18 +67,28 @@ forwards queries and events to a long-lived [`ca serve`](server.md) process:
   `/api/source`, `/api/explain`, …) are proxied verbatim; non-whitelisted POSTs
   return `405 READ_ONLY`, and a query timeout is 30 s. If the backend is down,
   the UI answers `502 SERVE_UNAVAILABLE` with the standard error envelope.
-- `GET /events` is streamed through the proxy (no buffering): `job.updated`
-  events with heartbeat comments and `Last-Event-ID` replay support. A connection
-  badge in the top bar shows `connecting / connected / reconnecting /
-  disconnected`; EventSource reconnects automatically and the UI re-fetches the
-  active job after a reconnect so missed `done` events cannot be lost.
-- **AI explanation becomes a job in remote mode**: opening the explain section
-  creates `POST /api/jobs {type:"explain", symbol, payload:{lang}}` and renders
-  `queued / running / done / failed` from SSE. An MCP agent can claim the job
-  with `explain_jobs` and submit it with `submit_explanation`; the result appears
-  live with an `MCP agent` provider badge. If jobs/SSE are unavailable the UI
-  falls back to the synchronous `/api/explain` endpoint (which keeps the server
-  side heuristic/LLM fallback), so the section still works.
+- `GET /events` remains available through the proxy (no buffering, heartbeat,
+  `Last-Event-ID` replay) for other job types/future clients, but the explain tab
+  no longer subscribes to it.
+- A connection badge in the top bar shows `connecting / connected / reconnecting
+  / disconnected`, derived from `/api/ui` and the success/failure of API
+  requests; clicking the badge retries the connection. There is no EventSource in
+  the UI.
+- **AI explanation is synchronous**: opening the explain section sends
+  `POST /api/explain/agent {symbol, lang}` and waits for the answer (60 s client
+  timeout, loading/error/retry/copy). The backend answers by asking a connected
+  MCP agent through MCP `sampling/createMessage`; no job, queue or claim is
+  created for explain. The provider badge shows `agent` with the sampling
+  agent's model name when it answered; if no agent is connected or the request
+  fails, the backend returns HTTP 200 with a `heuristic` explanation,
+  `fallback:true` and a `fallback_reason` (for example
+  `no connected MCP sampling agent session` or a timeout), which the UI renders
+  as the local-heuristic badge plus the fallback note. The UI learns endpoint
+  support from `features.sampling_explain` in `/api/health`; against an older
+  serve build without the sync endpoint it falls back to `GET /api/explain`
+  (server-side heuristic fallback), so the section still works. Connected
+  sampling agents and pending requests are visible in `/api/health`
+  (`sampling: {sessions, sampling_capable, pending_requests, timeout_seconds}`).
 - Everything stays read-only; the UI proxy cannot write to the index. Remote
   `--serve-url` values should be loopback or a trusted tunnel; the backend has no
   authentication in this milestone.
@@ -261,6 +271,7 @@ All endpoints return the same envelope and are `GET`-only:
 | `GET /api/source` | `symbol` (required), `context` (0–10, default 3) | read-only source window: `{symbol, function{id,name,qualified_name,kind,file,line,end_line,signature}, file, language, start, end, total_lines, function_start, function_end, context, truncated, lines[{line,text}], shard, path, repo_root}` |
 | `GET /api/cfg` | `symbol` (required) | read-only control-flow graph: `{symbol, function{id,name,qualified_name,kind,file,line,end_line}, deep_ready, shard, federated, blocks[], edges[], branches[], truncated, stats}`; blocks carry `index/kind/terminator/line/end_line/statement_count`, branch annotations (`condition`, `branch_kind`, `true_block`, `false_block`) and `is_entry`/`is_exit`; edges carry a display `label` (`true`/`false` for branch edges) |
 | `GET /api/explain` | `symbol` (required), `lang=en\|zh` | read-only function explanation: `{symbol, function, provider, model, llm_configured, language, explanation, facts_summary, cached, fallback_reason, elapsed_ms}` (heuristic by default, optional configured LLM) |
+| `POST /api/explain/agent` | JSON body `{symbol, lang}` (GET query or `/api/explain?mode=agent` alias also accepted) | synchronous agent explanation (remote mode): `{symbol, function, provider, model, language, explanation, evidence?, fallback, fallback_reason?, elapsed_ms, facts_summary?}`; the backend asks a connected MCP agent via `sampling/createMessage`, provider `agent` + its model name; no agent/failure → HTTP 200 `provider:"heuristic"`, `fallback:true`, `fallback_reason`; unknown symbol 404; older serve → UI falls back to `GET /api/explain` |
 | `GET /api/branches`, `/api/assignments`, `/api/returns`, `/api/resources` | `symbol` (required) | per-function fact rows (additive convenience endpoints) |
 
 `/api/cfg` resolves the function through the normal detail query and returns its

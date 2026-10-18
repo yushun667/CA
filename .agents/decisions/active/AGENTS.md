@@ -1,6 +1,6 @@
 # AGENTS.md — 生效决策
 
-当前有效决策；按主题加载，勿整目录读取。
+有效决策；按主题加载，勿整目录读取。
 
 - 2026-10-17-analysis-stack.md、2026-10-17-analysis-stack.zh.md、2026-10-17-analysis-stack.i18n.yaml
 - 2026-10-17-compile-command-policy.md、2026-10-17-compile-command-policy.zh.md、2026-10-17-compile-command-policy.i18n.yaml
@@ -16,3 +16,5 @@
 
 - 2026-10-18-unified-serve-backend.md、2026-10-18-unified-serve-backend.zh.md、2026-10-18-unified-serve-backend.i18n.yaml
 新增/修改决策追加一行；完全取代的移至 `../superseded/` 并更新链接。
+
+- 2026-10-18-mcp-sampling-explain.md、2026-10-18-mcp-sampling-explain.zh.md、2026-10-18-mcp-sampling-explain.i18n.yaml
