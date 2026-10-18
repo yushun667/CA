@@ -1125,8 +1125,14 @@
         <span class="legend-item"><span class="legend-line candidate"></span> ${escapeHtml(
           t("graph.legendCandidate")
         )}</span>
+        <span class="legend-item"><span class="legend-line virtual"></span> ${escapeHtml(
+          t("graph.legendVirtual")
+        )}</span>
         <span class="legend-item"><span class="legend-line cycle"></span> ${escapeHtml(
           t("graph.legendCycle")
+        )}</span>
+        <span class="legend-item legend-note">${escapeHtml(
+          t("graph.legendConfidence")
         )}</span>
         <span class="legend-item">${escapeHtml(t("graph.legendClick"))}</span>
       </div>
@@ -2109,6 +2115,7 @@
       const to = positions.get(nodeKey(target));
       if (!from || !to) return;
       const candidate = isCandidate(edge);
+      const virtual = candidate && String(edge.kind || "").includes("virtual");
       const cycle = edge.cycle === true;
       const forward = to.x >= from.x;
       const x1 = forward ? from.x + NODE_W : from.x;
@@ -2119,11 +2126,17 @@
       const c1 = forward ? x1 + bend : x1 - bend;
       const c2 = forward ? x2 - bend : x2 + bend;
       const path = `M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}`;
-      const marker = cycle ? "arrow-cycle" : candidate ? "arrow-candidate" : "arrow";
+      const marker = cycle
+        ? "arrow-cycle"
+        : virtual
+          ? "arrow-virtual"
+          : candidate
+            ? "arrow-candidate"
+            : "arrow";
       edgeSvg.push(
         `<g class="graph-edge${candidate ? " candidate" : ""}${
-          cycle ? " cycle" : ""
-        }"><path d="${path}" marker-end="url(#${marker})"><title>${escapeHtml(
+          virtual ? " virtual" : ""
+        }${cycle ? " cycle" : ""}"><path d="${path}" marker-end="url(#${marker})"><title>${escapeHtml(
           `${edge.caller_name || edge.caller_id} → ${
             edge.callee_name || edge.callee_id
           }${candidate ? ` (${edge.kind || "candidate"} ${confidence(edge.confidence)})` : ""}`
@@ -2131,9 +2144,7 @@
           candidate
             ? `<text x="${(x1 + x2) / 2}" y="${
                 (y1 + y2) / 2 - 5
-              }" text-anchor="middle">${escapeHtml(
-                `${edge.kind || "candidate"} ${confidence(edge.confidence)}`
-              )}</text>`
+              }" text-anchor="middle">${escapeHtml(confidence(edge.confidence))}</text>`
             : ""
         }</g>`
       );
@@ -2173,6 +2184,7 @@
     const defs = `<defs>
       <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>
       <marker id="arrow-candidate" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>
+      <marker id="arrow-virtual" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>
       <marker id="arrow-cycle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>
     </defs>`;
     wrap.innerHTML = `<svg class="graph-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="${escapeHtml(

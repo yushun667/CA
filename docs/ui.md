@@ -122,9 +122,11 @@ What you can inspect:
 - **Overview** — signature, return type, file:line range, linkage, USR/id/TU ids
   and parameters; badge for `deep facts` vs `deep facts pending` (base/L0
   databases only carry symbols and calls until `ca ensure-deep` runs).
-- **Call graph** — SVG traversal (direction `both`/forward/reverse, depth 1–6),
-  direct edges solid, candidate callback edges dashed and labelled with kind and
-  confidence, cycles red. **Single-clicking** a node (or pressing Enter on it)
+- **Call graph** — SVG traversal (direction `both`/forward/reverse, depth 1–6).
+  Edge colours encode type: direct calls solid grey, indirect callback candidates
+  purple dashed, virtual candidates teal dashed, cycles red. Candidate edges show
+  only the confidence number (0–1, heuristic); the legend explains it as the
+  candidate confidence, not a probability. **Single-clicking** a node (or pressing Enter on it)
   opens that function's **complete source in the right panel** without leaving
   the page: line numbers, a `file:line` header, the owning shard badge,
   independent scrolling, plus Close and Open-detail buttons; when the node's
