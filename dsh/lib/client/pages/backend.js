@@ -198,6 +198,8 @@ export function createBackendPage(React, bag) {
     const [healthError, setHealthError] = React.useState(null)
     const [install, setInstall] = React.useState(null)
     const [installInfo, setInstallInfo] = React.useState(null)
+    const [installOptionsOpen, setInstallOptionsOpen] = React.useState(false)
+    const [advancedOpen, setAdvancedOpen] = React.useState(false)
     const [localInstall, setLocalInstall] = React.useState(null)
     const [localInstallBusy, setLocalInstallBusy] = React.useState(false)
     const [localForm, setLocalForm] = React.useState({
@@ -867,7 +869,6 @@ export function createBackendPage(React, bag) {
       ui.Card,
       {
         title: t('backend.title', null, 'CA backend'),
-        subtitle: t('backend.subtitle', null, 'Manage the local or remote CA analysis backend used by this plugin.'),
         actions: [
           h(
             ui.Button,
@@ -1014,12 +1015,7 @@ export function createBackendPage(React, bag) {
     const projectHintCard = h(
       ui.Card,
       {
-        title: t('backend.projectHintTitle', null, 'Manage indexes as projects'),
-        subtitle: t(
-          'backend.projectHint',
-          null,
-          'Recommended: create and switch projects on the Projects page — a project binds a source tree, a database and a backend target. This page keeps the low-level backend status and configuration.',
-        ),
+        title: t('backend.projectPromptTitle', null, 'Projects'),
         actions: navigate
           ? h(
               ui.Button,
@@ -1031,30 +1027,47 @@ export function createBackendPage(React, bag) {
       },
       h(
         'div',
-        { className: 'ca-backend-notice' },
-        h(ui.Icon, { name: 'info', size: 13 }),
-        h(
-          'span',
-          null,
-          t(
-            'backend.projectHintLowLevel',
-            null,
-            'The controls below are low-level: they edit the backend configuration directly and are not tied to a saved project.',
-          ),
-        ),
+        { className: 'ca-projects-short', style: { fontSize: 12 } },
+        t('backend.projectPromptLine', null, 'Databases and source trees are managed as projects.'),
       ),
     )
 
+    const healthDegraded = Boolean(health && health.db_ok === false)
     const healthCard = health || healthError
       ? h(
           ui.Card,
           {
             title: t('backend.health', null, 'Health'),
-            actions: health ? h(ui.Badge, { tone: 'success' }, t('backend.health.ok', null, 'healthy')) : h(ui.Badge, { tone: 'error' }, t('backend.health.failed', null, 'unhealthy')),
+            actions: health
+              ? h(
+                  ui.Badge,
+                  { tone: healthDegraded ? 'warn' : 'success' },
+                  healthDegraded
+                    ? t('backend.health.dbPending', null, 'index empty')
+                    : t('backend.health.ok', null, 'healthy'),
+                )
+              : h(ui.Badge, { tone: 'error' }, t('backend.health.failed', null, 'unhealthy')),
           },
           healthError
             ? h(ui.ErrorBox, { error: healthError })
-            : h(ui.KV, {
+            : h('div', { className: 'ca-col' },
+                healthDegraded
+                  ? h(
+                      'div',
+                      { className: 'ca-backend-notice' },
+                      h(ui.Icon, { name: 'info', size: 13 }),
+                      h(
+                        'span',
+                        null,
+                        t(
+                          'backend.health.degradedHint',
+                          null,
+                          'Backend ready; the index is empty until an index task runs.',
+                        ),
+                      ),
+                    )
+                  : null,
+                h(ui.KV, {
                 rows: [
                   { key: 'db_ok', label: t('backend.health.dbOk', null, 'database ok'), value: String(Boolean(health && health.db_ok)) },
                   { key: 'version', label: t('backend.version', null, 'Version'), value: asText(health && health.version) || '—' },
@@ -1075,6 +1088,7 @@ export function createBackendPage(React, bag) {
                   },
                 ],
               }),
+              ),
         )
       : null
 
@@ -1136,8 +1150,6 @@ export function createBackendPage(React, bag) {
         (localInstallInfo && localInstallInfo.platform) ||
         '',
     )
-    const localRepoPath = asText((localInstallInfo && localInstallInfo.repoPath) || '')
-    const localRepoCandidate = localRepoPath || localInstalledDir || localVenvDir || ''
     const localInstalled = Boolean(
       (localInstallInfo && localInstallInfo.installed) ||
         localVenvPython ||
@@ -1168,128 +1180,17 @@ export function createBackendPage(React, bag) {
     const localInstallCard = h(
       ui.Card,
       {
-        title: t('backend.localInstallTitle', null, 'Local backend installation'),
-        subtitle: t(
-          'backend.localInstallHint',
-          null,
-          'Installs a private CA venv on this machine (Windows, macOS or Linux). Existing installs are reused; repair reinstalls into the same directory.',
-        ),
+        title: t('backend.localCardTitle', null, 'This computer'),
         actions: [
-          h(ui.Badge, { key: 'platform', tone: 'neutral' }, `${t('backend.hostPlatform', null, 'Host platform')}: ${platformLabel}`),
-          bundledWheel
-            ? h(
-                ui.Badge,
-                { key: 'wheel', tone: 'info' },
-                t('backend.wheelBundled', { version: wheelVersion || '—' }, `bundled wheel ${wheelVersion || '—'}`),
-              )
+          localInstalled
+            ? h(ui.Badge, { key: 'installed', tone: 'success' }, t('backend.installCompleted', null, 'installed'))
             : null,
+          localVersion ? h(ui.Badge, { key: 'version', tone: 'neutral' }, `CA ${localVersion}`) : null,
         ],
       },
       h(
         'div',
         { className: 'ca-col' },
-        h(
-          'div',
-          { className: 'ca-backend-form-grid' },
-          h(
-            ui.Field,
-            {
-              key: 'local-install-dir',
-              label: t('backend.installDir', null, 'Install directory'),
-              hint: t(
-                'backend.installDirHint',
-                null,
-                'Leave empty to use the plugin-managed directory.',
-              ),
-            },
-            h(ui.Input, {
-              value: localForm.installDir,
-              placeholder: localInstalledDir || '/…/plugin-data/dsh-ca/backends/local',
-              ariaLabel: t('backend.installDir', null, 'Install directory'),
-              onChange: (event) => setLocalField('installDir', event.target.value),
-            }),
-          ),
-          h(
-            ui.Field,
-            {
-              key: 'local-python',
-              label: t('backend.python', null, 'Python executable'),
-              hint: t('backend.pythonHint', null, 'Leave empty to auto-detect Python 3.11+.'),
-            },
-            h(ui.Input, {
-              value: localForm.python,
-              placeholder: localVenvPython || 'python3',
-              ariaLabel: t('backend.python', null, 'Python executable'),
-              onChange: (event) => setLocalField('python', event.target.value),
-            }),
-          ),
-          h(
-            ui.Field,
-            { key: 'local-mode', label: t('backend.installMode', null, 'Install mode') },
-            h(
-              'div',
-              {
-                className: 'ca-backend-radio',
-                role: 'radiogroup',
-                'aria-label': t('backend.installMode', null, 'Install mode'),
-              },
-              h(
-                ui.Button,
-                {
-                  variant: 'ghost',
-                  size: 'sm',
-                  active: !localForm.offline,
-                  'aria-pressed': localForm.offline ? 'false' : 'true',
-                  onClick: () => setLocalField('offline', false),
-                },
-                t('backend.modeOnline', null, 'Online (PyPI)'),
-              ),
-              h(
-                ui.Button,
-                {
-                  variant: 'ghost',
-                  size: 'sm',
-                  active: Boolean(localForm.offline),
-                  'aria-pressed': localForm.offline ? 'true' : 'false',
-                  onClick: () => setLocalField('offline', true),
-                },
-                t('backend.modeOffline', null, 'Offline (wheelhouse)'),
-              ),
-            ),
-          ),
-          localForm.offline
-            ? h(
-                ui.Field,
-                {
-                  key: 'local-wheelhouse',
-                  label: t('backend.wheelhousePath', null, 'Wheelhouse directory'),
-                  hint: [
-                    t(
-                      'backend.wheelhouseHint',
-                      null,
-                      'Directory containing the CA wheel and its dependency wheels.',
-                    ),
-                    wheelhouseInfo && wheelhouseInfo.defaultPath
-                      ? `${t('backend.wheelhouseDefault', null, 'default')}: ${wheelhouseInfo.defaultPath}${
-                          wheelhouseInfo.defaultExists === true
-                            ? ` (${t('backend.wheelhouseWheelCount', { count: Number(wheelhouseInfo.defaultWheelCount) || 0 }, `${Number(wheelhouseInfo.defaultWheelCount) || 0} wheels`)})`
-                            : ` (${t('backend.wheelhouseMissing', null, 'not generated yet')})`
-                        }`
-                      : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' · '),
-                },
-                h(ui.Input, {
-                  value: localForm.wheelhousePath,
-                  placeholder: wheelhouseDefault || `…/wheelhouse/${platformLabel}`,
-                  ariaLabel: t('backend.wheelhousePath', null, 'Wheelhouse directory'),
-                  onChange: (event) => setLocalField('wheelhousePath', event.target.value),
-                }),
-              )
-            : null,
-        ),
-        localForm.offline ? h('div', { className: 'ca-backend-notice' }, h(ui.Icon, { name: 'info', size: 13 }), h('span', null, wheelhouseBuildHint)) : null,
         h(
           'div',
           { className: 'ca-backend-actions' },
@@ -1305,81 +1206,129 @@ export function createBackendPage(React, bag) {
               : h(ui.Icon, { name: 'external', size: 13 }),
             localInstallBusy || localInstallRunning
               ? t('backend.installingLocal', null, 'Installing local backend…')
-              : t('backend.installLocal', null, 'Install / repair local backend'),
+              : localInstalled
+                ? t('backend.repairLocal', null, 'Repair backend')
+                : t('backend.installLocalShort', null, 'Install backend'),
           ),
-          localInstalled ? h(ui.Badge, { tone: 'success' }, t('backend.installCompleted', null, 'installed')) : null,
-          localInstalledMode
-            ? h(
-                ui.Badge,
-                { tone: 'muted' },
-                localInstalledMode === 'offline'
-                  ? t('backend.modeOffline', null, 'Offline (wheelhouse)')
-                  : localInstalledMode === 'existing'
-                    ? t('backend.modeExisting', null, 'existing install')
-                    : t('backend.modeOnline', null, 'Online (PyPI)'),
-              )
-            : null,
+          h(
+            ui.Button,
+            {
+              variant: 'ghost',
+              size: 'sm',
+              'aria-expanded': installOptionsOpen ? 'true' : 'false',
+              onClick: () => setInstallOptionsOpen((value) => !value),
+            },
+            h(ui.Icon, { name: installOptionsOpen ? 'chevron-down' : 'chevron-right', size: 13 }),
+            t('backend.installOptions', null, 'Install options'),
+          ),
+          h(
+            'span',
+            { className: 'ca-faint', style: { fontSize: 11.5 }, title: wheelhouseDefault || undefined },
+            `${t('backend.offlinePackage', null, 'Offline package')}: ${wheelhouseDefault || t('backend.wheelhouseMissing', null, 'not generated yet')}`,
+          ),
         ),
-        localInstalled
-          ? h(ui.KV, {
-              rows: [
-                { key: 'venv', label: t('backend.venvPython', null, 'venv Python'), value: localVenvPython || '—' },
-                { key: 'version', label: t('backend.caVersion', null, 'CA version'), value: localVersion || '—' },
-                { key: 'dir', label: t('backend.installDir', null, 'Install directory'), value: localInstalledDir || '—' },
-                { key: 'caScript', label: t('backend.caScript', null, 'CA command'), value: localCaScript || '—' },
-                { key: 'platform', label: t('backend.hostPlatform', null, 'Host platform'), value: localPlatform || platformLabel },
-              ],
-            })
-          : null,
-        localInstalled && navigate
+        localVenvPython
           ? h(
               'div',
-              { className: 'ca-backend-notice' },
-              h(ui.Icon, { name: 'info', size: 13 }),
-              h('span', null, t('backend.installProjectsHint', null, 'Create or activate a project on the Projects page to use this installation.')),
-              h('span', { className: 'ca-spacer' }),
-              h(
-                ui.Button,
-                { variant: 'ghost', size: 'sm', onClick: () => navigate({ page: 'projects' }) },
-                h(ui.Icon, { name: 'folder', size: 13 }),
-                t('backend.openProjects', null, 'Open projects'),
-              ),
+              { className: 'ca-backend-db-current-path', style: { fontSize: 11 } },
+              `${t('backend.venvPython', null, 'venv Python')}: ${localVenvPython}${localVersion ? ` · CA ${localVersion}` : ''}`,
             )
           : null,
+        installOptionsOpen
+          ? h(
+              React.Fragment,
+              null,
+              h(
+                'div',
+                { className: 'ca-backend-form-grid' },
+                h(
+                  ui.Field,
+                  { key: 'local-install-dir', label: t('backend.installDir', null, 'Install directory') },
+                  h(ui.Input, {
+                    value: localForm.installDir,
+                    placeholder: localInstalledDir || '/…/plugin-data/dsh-ca/backends/local',
+                    ariaLabel: t('backend.installDir', null, 'Install directory'),
+                    onChange: (event) => setLocalField('installDir', event.target.value),
+                  }),
+                ),
+                h(
+                  ui.Field,
+                  { key: 'local-python', label: t('backend.python', null, 'Python executable') },
+                  h(ui.Input, {
+                    value: localForm.python,
+                    placeholder: localVenvPython || 'python3',
+                    ariaLabel: t('backend.python', null, 'Python executable'),
+                    onChange: (event) => setLocalField('python', event.target.value),
+                  }),
+                ),
+                h(
+                  ui.Field,
+                  { key: 'local-mode', label: t('backend.installMode', null, 'Install mode') },
+                  h(
+                    'div',
+                    { className: 'ca-backend-radio', role: 'radiogroup', 'aria-label': t('backend.installMode', null, 'Install mode') },
+                    h(
+                      ui.Button,
+                      {
+                        variant: 'ghost',
+                        size: 'sm',
+                        active: !localForm.offline,
+                        'aria-pressed': localForm.offline ? 'false' : 'true',
+                        onClick: () => setLocalField('offline', false),
+                      },
+                      t('backend.modeOnlineShort', null, 'Online'),
+                    ),
+                    h(
+                      ui.Button,
+                      {
+                        variant: 'ghost',
+                        size: 'sm',
+                        active: Boolean(localForm.offline),
+                        'aria-pressed': localForm.offline ? 'true' : 'false',
+                        onClick: () => setLocalField('offline', true),
+                      },
+                      t('backend.modeOfflineShort', null, 'Offline'),
+                    ),
+                  ),
+                ),
+                localForm.offline
+                  ? h(
+                      ui.Field,
+                      { key: 'local-wheelhouse', label: t('backend.wheelhousePath', null, 'Wheelhouse directory') },
+                      h(ui.Input, {
+                        value: localForm.wheelhousePath,
+                        placeholder: wheelhouseDefault || `…/wheelhouse/${platformLabel}`,
+                        ariaLabel: t('backend.wheelhousePath', null, 'Wheelhouse directory'),
+                        title: wheelhouseBuildHint,
+                        onChange: (event) => setLocalField('wheelhousePath', event.target.value),
+                      }),
+                    )
+                  : null,
+              ),
+              wheelVersion
+                ? h(
+                    'div',
+                    { className: 'ca-faint', style: { fontSize: 11 } },
+                    `${t('backend.hostPlatform', null, 'Host platform')}: ${platformLabel} · wheel ${wheelVersion}`,
+                  )
+                : null,
+            )
+          : null,
+        renderInstallProgress(localInstall, ''),
         localVenvPython && navigate
           ? h(
-              'div',
-              { className: 'ca-col', style: { gap: 4 } },
-              h(
-                ui.Button,
-                {
-                  variant: 'secondary',
-                  size: 'sm',
-                  style: { alignSelf: 'flex-start' },
-                  onClick: () =>
-                    navigate({
-                      page: 'projects',
-                      params: {
-                        python: localVenvPython,
-                        ...(localRepoCandidate ? { caRepoPath: localRepoCandidate } : {}),
-                      },
-                    }),
-                },
-                h(ui.Icon, { name: 'folder', size: 13 }),
-                t('backend.usePythonForProject', null, 'Create a local project with this Python'),
-              ),
-              h(
-                'span',
-                { className: 'ca-faint', style: { fontSize: 11.5 } },
-                t(
-                  'backend.usePythonForProjectHint',
-                  null,
-                  'Opens the projects page with the Python field prefilled; nothing is created automatically.',
-                ),
-              ),
+              ui.Button,
+              {
+                variant: 'secondary',
+                size: 'sm',
+                style: { alignSelf: 'flex-start' },
+                title: t('backend.usePythonForProjectHint', null, 'Prefills the project form; nothing is created automatically.'),
+                onClick: () => navigate({ page: 'projects' }),
+              },
+              h(ui.Icon, { name: 'folder', size: 13 }),
+              t('backend.usePythonForProjectShort', null, 'Use in a project'),
             )
           : null,
-        renderInstallProgress(localInstall, t('backend.installNoLogs', null, 'No log output yet.')),
       ),
     )
 
@@ -1387,12 +1336,7 @@ export function createBackendPage(React, bag) {
       ? h(
           ui.Card,
           {
-            title: t('backend.installTitle', null, 'Remote installation'),
-            subtitle: t(
-              'backend.remoteInstallHint',
-              null,
-              'Installs CA on the remote Linux host by uploading the bundled wheel (and the wheelhouse for offline installs).',
-            ),
+            title: t('backend.remoteCardTitle', null, 'Remote server (Linux)'),
             actions: install
               ? h(
                   ui.Badge,
@@ -1404,87 +1348,6 @@ export function createBackendPage(React, bag) {
           h(
             'div',
             { className: 'ca-col' },
-            h(
-              'div',
-              { className: 'ca-backend-form-grid' },
-              h(
-                ui.Field,
-                { key: 'remote-install-mode', label: t('backend.installMethod', null, 'Install method') },
-                h(ui.Select, {
-                  value: remoteInstallForm.mode,
-                  options: [
-                    { value: 'wheel', label: t('backend.modeWheel', null, 'wheel (recommended)') },
-                    { value: 'source', label: t('backend.modeSource', null, 'source tree (legacy)') },
-                  ],
-                  ariaLabel: t('backend.installMethod', null, 'Install method'),
-                  onChange: (value) => setRemoteInstallField('mode', value),
-                }),
-              ),
-              h(
-                ui.Field,
-                { key: 'remote-install-network', label: t('backend.installMode', null, 'Install mode') },
-                h(
-                  'div',
-                  {
-                    className: 'ca-backend-radio',
-                    role: 'radiogroup',
-                    'aria-label': t('backend.installMode', null, 'Install mode'),
-                  },
-                  h(
-                    ui.Button,
-                    {
-                      variant: 'ghost',
-                      size: 'sm',
-                      active: !remoteInstallForm.offline,
-                      'aria-pressed': remoteInstallForm.offline ? 'false' : 'true',
-                      onClick: () => setRemoteInstallField('offline', false),
-                    },
-                    t('backend.modeOnline', null, 'Online (PyPI)'),
-                  ),
-                  h(
-                    ui.Button,
-                    {
-                      variant: 'ghost',
-                      size: 'sm',
-                      active: Boolean(remoteInstallForm.offline),
-                      'aria-pressed': remoteInstallForm.offline ? 'true' : 'false',
-                      onClick: () => setRemoteInstallField('offline', true),
-                    },
-                    t('backend.modeOffline', null, 'Offline (wheelhouse)'),
-                  ),
-                ),
-              ),
-              remoteInstallForm.offline
-                ? h(
-                    ui.Field,
-                    {
-                      key: 'remote-wheelhouse',
-                      label: t('backend.remoteWheelhouse', null, 'Local wheelhouse to upload'),
-                      hint: t(
-                        'backend.remoteWheelhouseHint',
-                        null,
-                        'Directory on this machine; it is uploaded to the remote host for the offline install.',
-                      ),
-                    },
-                    h(ui.Input, {
-                      value: remoteInstallForm.wheelhousePath,
-                      placeholder: wheelhouseDefault || `…/wheelhouse/${platformLabel}`,
-                      ariaLabel: t('backend.remoteWheelhouse', null, 'Local wheelhouse to upload'),
-                      onChange: (event) => setRemoteInstallField('wheelhousePath', event.target.value),
-                    }),
-                  )
-                : null,
-            ),
-            remoteInstallForm.offline
-              ? h('div', { className: 'ca-backend-notice' }, h(ui.Icon, { name: 'info', size: 13 }), h('span', null, wheelhouseBuildHint))
-              : null,
-            wheelhousePlatforms.length > 0 && remoteInstallForm.offline
-              ? h(
-                  'div',
-                  { className: 'ca-faint', style: { fontSize: 11.5 } },
-                  `${t('backend.wheelhousePlatforms', null, 'Available wheelhouses')}: ${wheelhousePlatforms.join(', ')}`,
-                )
-              : null,
             h(
               'div',
               { className: 'ca-backend-actions' },
@@ -1500,34 +1363,92 @@ export function createBackendPage(React, bag) {
                   : h(ui.Icon, { name: 'external', size: 13 }),
                 installRunning
                   ? t('backend.installing', null, 'Installing…')
-                  : t('backend.install', null, 'Install on remote host'),
+                  : t('backend.installRemoteShort', null, 'Install backend'),
+              ),
+              h(
+                ui.Button,
+                {
+                  variant: 'ghost',
+                  size: 'sm',
+                  'aria-expanded': installOptionsOpen ? 'true' : 'false',
+                  onClick: () => setInstallOptionsOpen((value) => !value),
+                },
+                h(ui.Icon, { name: installOptionsOpen ? 'chevron-down' : 'chevron-right', size: 13 }),
+                t('backend.installOptions', null, 'Install options'),
               ),
               h(
                 'span',
                 { className: 'ca-faint', style: { fontSize: 11.5 } },
-                t(
-                  'backend.remoteInstallSSH',
-                  { host: asText(form.remote_sshHost) || '—' },
-                  `SSH: ${asText(form.remote_sshHost) || '—'}`,
-                ),
+                asText(form.remote_sshHost) || '—',
               ),
             ),
-            install && (install.status === 'succeeded' || (install.result && install.result.ok)) && navigate
+            installOptionsOpen
               ? h(
-                  'div',
-                  { className: 'ca-backend-notice' },
-                  h(ui.Icon, { name: 'info', size: 13 }),
-                  h('span', null, t('backend.installProjectsHint', null, 'Create or activate a project on the Projects page to use this installation.')),
-                  h('span', { className: 'ca-spacer' }),
+                  React.Fragment,
+                  null,
                   h(
-                    ui.Button,
-                    { variant: 'ghost', size: 'sm', onClick: () => navigate({ page: 'projects' }) },
-                    h(ui.Icon, { name: 'folder', size: 13 }),
-                    t('backend.openProjects', null, 'Open projects'),
+                    'div',
+                    { className: 'ca-backend-form-grid' },
+                    h(
+                      ui.Field,
+                      { key: 'remote-install-mode', label: t('backend.installMethod', null, 'Install method') },
+                      h(ui.Select, {
+                        value: remoteInstallForm.mode,
+                        options: [
+                          { value: 'wheel', label: t('backend.modeWheelShort', null, 'wheel') },
+                          { value: 'source', label: t('backend.modeSourceShort', null, 'source') },
+                        ],
+                        ariaLabel: t('backend.installMethod', null, 'Install method'),
+                        onChange: (value) => setRemoteInstallField('mode', value),
+                      }),
+                    ),
+                    h(
+                      ui.Field,
+                      { key: 'remote-install-network', label: t('backend.installMode', null, 'Install mode') },
+                      h(
+                        'div',
+                        { className: 'ca-backend-radio', role: 'radiogroup', 'aria-label': t('backend.installMode', null, 'Install mode') },
+                        h(
+                          ui.Button,
+                          {
+                            variant: 'ghost',
+                            size: 'sm',
+                            active: !remoteInstallForm.offline,
+                            'aria-pressed': remoteInstallForm.offline ? 'false' : 'true',
+                            onClick: () => setRemoteInstallField('offline', false),
+                          },
+                          t('backend.modeOnlineShort', null, 'Online'),
+                        ),
+                        h(
+                          ui.Button,
+                          {
+                            variant: 'ghost',
+                            size: 'sm',
+                            active: Boolean(remoteInstallForm.offline),
+                            'aria-pressed': remoteInstallForm.offline ? 'true' : 'false',
+                            onClick: () => setRemoteInstallField('offline', true),
+                          },
+                          t('backend.modeOfflineShort', null, 'Offline'),
+                        ),
+                      ),
+                    ),
+                    remoteInstallForm.offline
+                      ? h(
+                          ui.Field,
+                          { key: 'remote-wheelhouse', label: t('backend.remoteWheelhouse', null, 'Local wheelhouse to upload') },
+                          h(ui.Input, {
+                            value: remoteInstallForm.wheelhousePath,
+                            placeholder: wheelhouseDefault || `…/wheelhouse/${platformLabel}`,
+                            ariaLabel: t('backend.remoteWheelhouse', null, 'Local wheelhouse to upload'),
+                            title: wheelhouseBuildHint,
+                            onChange: (event) => setRemoteInstallField('wheelhousePath', event.target.value),
+                          }),
+                        )
+                      : null,
                   ),
                 )
               : null,
-            renderInstallProgress(install, t('backend.installNoLogs', null, 'No log output yet.')),
+            renderInstallProgress(install, ''),
           ),
         )
       : null
@@ -1669,15 +1590,7 @@ export function createBackendPage(React, bag) {
       ),
     )
 
-    const unconfiguredHint =
-      effectiveMode === 'unconfigured'
-        ? h(
-            'div',
-            { className: 'ca-backend-notice' },
-            h(ui.Icon, { name: 'info', size: 13 }),
-            h('span', null, t('backend.unconfiguredHint', null, 'Fill in the local database path or the remote SSH host, save, and start the backend.')),
-          )
-        : null
+    const unconfiguredHint = null
 
     return h(
       'div',
@@ -1692,14 +1605,25 @@ export function createBackendPage(React, bag) {
           h('span', { className: 'ca-spacer' }),
           h('span', { className: 'ca-faint', style: { fontSize: 11.5 } }, t('shell.readonly', null, 'Read-only')),
         ),
-        unconfiguredHint,
         statusCard,
         localInstallCard,
         remoteInstallCard,
         projectHintCard,
-        healthCard,
-        probeCard,
-        configCard,
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'ca-projects-advanced-head',
+            style: { alignSelf: 'flex-start', fontSize: 12 },
+            'aria-expanded': advancedOpen ? 'true' : 'false',
+            onClick: () => setAdvancedOpen((value) => !value),
+          },
+          h(ui.Icon, { name: advancedOpen ? 'chevron-down' : 'chevron-right', size: 13 }),
+          t('backend.advanced', null, 'Advanced configuration'),
+        ),
+        advancedOpen ? healthCard : null,
+        advancedOpen ? probeCard : null,
+        advancedOpen ? configCard : null,
         h(
           'div',
           { className: 'ca-search-hint' },

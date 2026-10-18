@@ -21,7 +21,9 @@ Status: 已交付。在 CA 只读 API/CLI 之上的增量 DSH bundle；CA 核心
 持久化在 `$DSH_HOME/plugin-data/dsh-ca/settings.json` 的 `projects[]` +
 `activeProjectId`（0600）。激活会把项目映射为后端配置、重启 `ca serve`，失败则回滚；
 旧版 settings 会迁移为一个默认项目。保存/激活时校验路径（本地必须存在，远程只做格式
-校验）。目录扫描（`backend.databases`/`useDatabase`）仅作为低层辅助保留。
+校验）。一键建项目：`remote.connect` → `remote.browse` → `projects.createSimple`（自动数据库路径）
+→ `projects.prepare`（按需装后端 → 建库目录 → 激活）；密码认证用临时 askpass helper，
+永不持久化。目录扫描（`backend.databases`/`useDatabase`）仅作为低层辅助保留。
 
 ## Host 服务
 

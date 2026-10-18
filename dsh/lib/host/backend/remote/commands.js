@@ -30,10 +30,9 @@ export const DEFAULT_RSYNC_EXCLUDES = [
   '.DS_Store',
 ];
 
-/** ssh connection hardening common to every invocation. */
+/** ssh connection hardening common to every invocation (BatchMode is added
+ * conditionally by {@link buildSshOptionArgs}: password auth needs it off). */
 export const SSH_CONNECT_OPTIONS = [
-  '-o',
-  'BatchMode=yes',
   '-o',
   'ConnectTimeout=10',
   '-o',
@@ -154,12 +153,18 @@ export function normalizeSshConfig(sshInput, fallback = null) {
 
 /**
  * ssh option args shared by interactive exec, rsync -e and tunnels.
+ *
+ * `batchMode` is on by default (no prompts, fail fast). Password auth callers
+ * pass `{batchMode:false}` so ssh can use SSH_ASKPASS.
+ *
  * @param {ReturnType<typeof normalizeSshConfig>} ssh
+ * @param {{batchMode?: boolean}} [options]
  */
-export function buildSshOptionArgs(ssh) {
+export function buildSshOptionArgs(ssh, options = {}) {
   const args = [];
   if (ssh.port) args.push('-p', String(ssh.port));
   if (ssh.keyPath) args.push('-i', ssh.keyPath);
+  if (options.batchMode !== false) args.push('-o', 'BatchMode=yes');
   args.push(...SSH_CONNECT_OPTIONS);
   return args;
 }
@@ -173,7 +178,7 @@ export function buildSshOptionArgs(ssh) {
  */
 export function buildSshArgv(sshInput, remoteCommand, options = {}) {
   const ssh = normalizeSshConfig(sshInput, options.fallback || null);
-  const args = buildSshOptionArgs(ssh);
+  const args = buildSshOptionArgs(ssh, { batchMode: options.batchMode });
   if (Array.isArray(options.extraOptions)) args.push(...options.extraOptions);
   if (options.tty !== true) args.push('-T');
   args.push(ssh.target);
@@ -198,7 +203,8 @@ export function buildSshTunnelArgv(sshInput, options) {
   }
   const remoteHost = options.remoteHost || '127.0.0.1';
   const args = [
-    ...buildSshOptionArgs(ssh),
+    ...buildSshOptionArgs(ssh, { batchMode: options.batchMode }),
+    ...(Array.isArray(options.extraOptions) ? options.extraOptions : []),
     ...SSH_TUNNEL_OPTIONS,
     '-N',
     '-L',

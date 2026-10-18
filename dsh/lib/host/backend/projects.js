@@ -16,10 +16,13 @@
  */
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { validateLocalDatabaseTarget } from './databases.js';
+import { publicSshConfig, runSshWithAuth, sshTargetKey } from './remote/auth.js';
+import { remotePathExpression } from './remote/commands.js';
 import { BackendError } from './errors.js';
 import { isDirectory, isExecutableFile, isFile, isPlainObject, nonEmptyString } from './util.js';
 
@@ -519,3 +522,200 @@ function normalizeProjectSshStored(raw) {
     keyPath: nonEmptyString(raw.keyPath) || null,
   };
 }
+
+// ------------------------------------------------------------------------ //
+// simple projects ("pick one directory")
+// ------------------------------------------------------------------------ //
+
+/** Slug used for the auto-generated DB directory of a simple project. */
+export function projectSlug(value) {
+  const text = String(value ?? '')
+    .normalize('NFKD')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+    .toLowerCase()
+    .slice(0, 48);
+  return text.length > 0 ? text : 'project';
+}
+
+/** Default plugin state dir (`$DSH_HOME/plugin-data/dsh-ca`). */
+export function defaultStateDir() {
+  const dshHome = nonEmptyString(process.env.DSH_HOME) || path.join(os.homedir(), '.dsh');
+  return path.join(dshHome, 'plugin-data', 'dsh-ca');
+}
+
+function simpleProjectName(directory, name) {
+  const fromInput = nonEmptyString(name);
+  if (fromInput) return sanitizeProjectName(fromInput);
+  const trimmed = String(directory ?? '').replace(/[/\\]+$/, '');
+  const base = path.posix.basename(trimmed);
+  return sanitizeProjectName(base || 'root');
+}
+
+/**
+ * Build the minimal project a user gets by picking one directory.
+ *
+ * The database path is generated (single DB per project, created empty before
+ * the backend starts; `ca index` fills it later):
+ *   local:  `$DSH_HOME/plugin-data/dsh-ca/data/<slug>/index.db`
+ *   remote: `<remote home>/.dsh-ca/data/<slug>/index.db`
+ *
+ * `python`/`caRepoPath` stay null: the installer fills them after installing CA.
+ *
+ * @param {object} options
+ * @param {'local'|'remote'} options.kind
+ * @param {string} options.directory source tree the user picked
+ * @param {string} [options.name] display name (default: directory basename)
+ * @param {string|object|null} [options.ssh] remote SSH auth (password stripped)
+ * @param {string} [options.home] remote home directory (from remote.connect)
+ * @param {string} [options.stateDir] plugin state dir override (tests)
+ * @param {string|number} [options.slugSuffix] uniqueness suffix for the DB slug
+ * @param {() => number} [options.now]
+ * @param {() => string} [options.generateId]
+ * @returns {Record<string, any>} project (not persisted)
+ */
+export function buildSimpleProject(options = {}) {
+  const kind = options.kind;
+  if (kind !== 'local' && kind !== 'remote') {
+    throw new BackendError('INVALID_ARGUMENT', `kind 必须是 'local' 或 'remote'（当前 ${JSON.stringify(kind)}）`, {
+      field: 'kind',
+    });
+  }
+  const directoryRaw = nonEmptyString(options.directory);
+  if (!directoryRaw) {
+    throw new BackendError('INVALID_ARGUMENT', 'directory（项目目录）不能为空', { field: 'directory' });
+  }
+  const directory =
+    kind === 'local' ? expandLocalPath(directoryRaw, 'directory') : normalizeRemotePath(directoryRaw, 'directory', { required: true });
+  let localStat = null;
+  if (kind === 'local') {
+    localStat = (() => {
+      try {
+        return fs.statSync(directory);
+      } catch {
+        return null;
+      }
+    })();
+    if (!localStat || !localStat.isDirectory()) {
+      throw new BackendError('INVALID_ARGUMENT', `本机项目目录不存在或不是目录: ${directory}`, {
+        field: 'directory',
+        path: directory,
+      });
+    }
+  }
+  const name = simpleProjectName(directory, options.name);
+  const now = typeof options.now === 'function' ? options.now : Date.now;
+  const generateId = typeof options.generateId === 'function' ? options.generateId : () => createProjectId();
+  const slugBase = projectSlug(name);
+  const suffix = options.slugSuffix === undefined || options.slugSuffix === null ? '' : String(options.slugSuffix);
+  const slug = suffix ? `${slugBase}-${suffix}` : slugBase;
+
+  let db;
+  let ssh = null;
+  if (kind === 'local') {
+    const stateDir = nonEmptyString(options.stateDir) || defaultStateDir();
+    db = path.join(stateDir, 'data', slug, 'index.db');
+  } else {
+    const home = nonEmptyString(options.home);
+    if (!home) {
+      throw new BackendError(
+        'INVALID_ARGUMENT',
+        '远程项目需要 remote home（先连接服务器获取 home），或调用 remote.connect 后重试',
+        { field: 'home' },
+      );
+    }
+    const normalizedHome = home === '~' || home.startsWith('~/') ? normalizeRemotePath(home, 'home', { required: true }) : home.replace(/\/+$/, '');
+    db = path.posix.join(normalizedHome, '.dsh-ca', 'data', slug, 'index.db');
+    ssh = publicSshConfig(options.ssh);
+    if (!ssh.host) {
+      throw new BackendError('INVALID_ARGUMENT', '远程项目必须提供 ssh.host', { field: 'ssh.host' });
+    }
+  }
+
+  let compdb = null;
+  if (kind === 'local') {
+    const candidate = path.join(directory, 'compile_commands.json');
+    try {
+      if (fs.statSync(candidate).isFile()) compdb = candidate;
+    } catch {
+      compdb = null;
+    }
+  }
+
+  const timestamp = now();
+  return {
+    id: generateId(),
+    name,
+    backend: kind,
+    sourceRoot: directory,
+    db,
+    dbDir: null,
+    compdb,
+    ssh,
+    python: null,
+    caRepoPath: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+/**
+ * Create the project's DB parent directory (and an empty SQLite file) before
+ * starting the backend.
+ *
+ * @param {Record<string, any>} project
+ * @param {{deps?: object, logger?: any, ssh?: string|object|null}} [options]
+ * @returns {Promise<{kind: 'local'|'remote', dir: string, db: string, created: boolean}>}
+ */
+export async function ensureDefaultDirs(project, options = {}) {
+  if (!isPlainObject(project)) {
+    throw new BackendError('INVALID_ARGUMENT', 'ensureDefaultDirs 需要项目对象');
+  }
+  const db = nonEmptyString(project.db);
+  if (!db) {
+    if (nonEmptyString(project.dbDir)) {
+      return { kind: project.backend, dir: project.dbDir, db: null, created: false };
+    }
+    throw new BackendError('INVALID_ARGUMENT', '项目未配置数据库路径（db）');
+  }
+  if (project.backend === 'local') {
+    const dir = path.dirname(db);
+    fs.mkdirSync(dir, { recursive: true });
+    let created = false;
+    if (!fs.existsSync(db)) {
+      fs.writeFileSync(db, '', { mode: 0o600 });
+      created = true;
+    }
+    return { kind: 'local', dir, db, created };
+  }
+  const dir = path.posix.dirname(db);
+  const ssh = options.ssh || project.ssh;
+  const script = [
+    'set -e',
+    `DIR=${remotePathExpression(dir)}`,
+    `DB=${remotePathExpression(db)}`,
+    'mkdir -p "$DIR"',
+    'if [ ! -f "$DB" ]; then : > "$DB"; fi',
+    'echo "CA_DIRS_OK=1"',
+  ].join('\n');
+  const result = await runSshWithAuth({
+    ssh,
+    script,
+    deps: options.deps,
+    logger: options.logger,
+    timeoutMs: 30000,
+    label: 'prepare remote project directories',
+  });
+  if (result?.code !== 0 || result?.spawnError) {
+    throw new BackendError(
+      result?.cancelled ? 'CANCELLED' : 'REMOTE_DIRS_FAILED',
+      `无法创建远程项目目录 ${dir}：${String(result?.stderr || result?.stdout || '').trim().slice(-1000) || 'ssh 失败'}`,
+      { dir, db },
+    );
+  }
+  return { kind: 'remote', dir, db, created: true };
+}
+
+/** Exposed for RPC/UI: stable ssh key used for in-memory password lookup. */
+export { sshTargetKey };

@@ -42,6 +42,10 @@ export function createFakeBackend(options = {}) {
     listDatabases: [],
     useDatabase: [],
     listProjects: 0,
+    remoteConnect: [],
+    listRemoteDirs: [],
+    createSimpleProject: [],
+    prepareProject: [],
     saveProject: [],
     deleteProject: [],
     activateProject: [],
@@ -189,6 +193,60 @@ export function createFakeBackend(options = {}) {
         logs: ['copying…'],
         error: null,
       }
+    },
+    async testRemoteConnection(ssh) {
+      calls.remoteConnect.push(ssh)
+      return {
+        ok: true,
+        authMethod: 'password',
+        target: 'yu@192.168.0.100',
+        home: '/home/yu',
+        platform: { os: 'linux', arch: 'x64', platformId: 'linux-x64', label: 'Linux x64' },
+        python: { path: '/usr/bin/python3', version: '3.11.8', supported: true },
+        ca: { installed: false, version: null },
+      }
+    },
+    async listRemoteDirs(ssh, listOptions = {}) {
+      calls.listRemoteDirs.push({ ssh, options: listOptions })
+      const base = typeof listOptions.path === 'string' && listOptions.path.length > 0 ? listOptions.path : '/home/yu'
+      return {
+        path: base,
+        parent: base === '/' ? null : base.replace(/\/[^/]+$/, '') || '/',
+        home: '/home/yu',
+        isHome: base === '/home/yu',
+        authMethod: 'password',
+        entries: [
+          { name: 'CA_OH', path: `${base === '/' ? '' : base}/CA_OH` },
+          { name: 'src', path: `${base === '/' ? '' : base}/src` },
+        ],
+      }
+    },
+    async createSimpleProject(input) {
+      calls.createSimpleProject.push(input)
+      const name = input.name ?? 'index'
+      const home = input.kind === 'remote' ? '/home/yu' : '/tmp/ca-local'
+      return {
+        project: {
+          id: 'proj-simple',
+          name,
+          backend: input.kind,
+          sourceRoot: input.directory,
+          db: `${home}/.dsh-ca/data/${name}/index.db`,
+          dbDir: null,
+          compdb: null,
+          ssh: input.ssh ?? null,
+          python: null,
+          caRepoPath: null,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        projects: [],
+        activeProjectId: null,
+      }
+    },
+    async prepareProject(id, prepareOptions = {}) {
+      calls.prepareProject.push({ id, options: prepareOptions })
+      return { started: true, running: true, scope: 'prepare' }
     },
     async listProjects() {
       calls.listProjects += 1

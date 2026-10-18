@@ -9,7 +9,7 @@
 
 import { spawn as nodeSpawn } from 'node:child_process';
 
-import { runProcess } from '../process.js';
+import { buildChildEnv, runProcess } from '../process.js';
 import { buildSshArgv } from './commands.js';
 
 /**
@@ -55,21 +55,42 @@ export function createRemoteExecutor(options = {}) {
    *          onStderrLine?: Function, fallbackSsh?: object|null, label?: string, maxOutputBytes?: number}} [runOptions]
    */
   async function runSsh(sshInput, script, runOptions = {}) {
-    const built = buildSshArgv(sshInput, script, {
-      sshBinary,
-      fallback: runOptions.fallbackSsh || null,
-    });
-    calls.push({
-      kind: 'ssh',
-      target: built.ssh.target,
-      command: built.command,
-      args: built.args,
-      script: String(script),
-    });
-    return run(built.command, built.args, {
-      ...runOptions,
-      label: runOptions.label || `ssh ${built.ssh.target}`,
-    });
+    // Optional password auth: the manager injects a resolver that creates a
+    // short-lived SSH_ASKPASS session (password never logged here).
+    let session = null;
+    if (typeof deps.resolveSshAuth === 'function') {
+      try {
+        session = await deps.resolveSshAuth(sshInput);
+      } catch (authError) {
+        throw authError;
+      }
+    }
+    try {
+      const built = buildSshArgv(session ? session.ssh : sshInput, script, {
+        sshBinary,
+        fallback: runOptions.fallbackSsh || null,
+        batchMode: session ? session.batchMode : true,
+        extraOptions: session?.extraOptions || [],
+      });
+      calls.push({
+        kind: 'ssh',
+        target: built.ssh.target,
+        command: built.command,
+        args: built.args,
+        script: String(script),
+      });
+      return await run(built.command, built.args, {
+        ...runOptions,
+        env: buildChildEnv(session?.env || {}, deps.env || process.env),
+        label: runOptions.label || `ssh ${built.ssh.target}`,
+      });
+    } finally {
+      try {
+        session?.cleanup?.();
+      } catch {
+        // helper cleanup is best effort
+      }
+    }
   }
 
   /**

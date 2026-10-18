@@ -1441,6 +1441,422 @@ test('status includes the active project summary', async () => {
 })
 
 // --------------------------------------------------------------------------- //
+// remote.connect / remote.browse / projects.createSimple / projects.prepare
+// --------------------------------------------------------------------------- //
+
+const REMOTE_SSH = {
+  host: '192.168.0.100',
+  user: 'yu',
+  port: 22,
+  password: 'topsecret',
+}
+
+test('the endpoint list exposes the simple-project remote endpoints', () => {
+  for (const endpoint of [
+    'remote.connect',
+    'remote.browse',
+    'projects.createSimple',
+    'projects.prepare',
+  ]) {
+    assert.ok(RPC_ENDPOINTS.includes(endpoint), `missing ${endpoint}`)
+  }
+})
+
+test('remote.connect returns connection facts and never echoes the password', async () => {
+  const context = setup()
+  const response = await context.call('remote.connect', { ssh: REMOTE_SSH })
+  assert.equal(response.status, 200)
+  const value = valueOf(response)
+  assert.equal(value.ok, true)
+  assert.equal(value.home, '/home/yu')
+  assert.equal(value.platform.platformId, 'linux-x64')
+  assert.equal(value.auth, 'password')
+  assert.equal(value.authMethod, 'password')
+  assert.equal(value.target, 'yu@192.168.0.100')
+  assert.deepEqual(value.python, {
+    path: '/usr/bin/python3',
+    version: '3.11.8',
+    versionText: null,
+    supported: true,
+    system: null,
+    candidates: [],
+  })
+  assert.deepEqual(value.ca, { installed: false, version: null })
+  assert.equal(context.backend.calls.remoteConnect.length, 1)
+  assert.equal(context.backend.calls.remoteConnect[0].password, 'topsecret', 'credential forwarded')
+  assert.ok(!response.body.includes('topsecret'), 'password never echoed')
+
+  // Without a manager-reported authMethod the SSH shape decides the display
+  // mode (a password is never inferred from the response).
+  const shapeBackend = createFakeBackend()
+  shapeBackend.testRemoteConnection = async () => ({
+    ok: true,
+    home: '/home/yu',
+    platform: 'linux',
+    python: null,
+    ca: { installed: false },
+  })
+  const shape = setup({ backend: shapeBackend })
+  assert.equal(
+    valueOf(await shape.call('remote.connect', { ssh: { host: 'host', user: 'yu', keyPath: '/k' } }))
+      .auth,
+    'key',
+  )
+  assert.equal(
+    valueOf(await shape.call('remote.connect', { ssh: { host: 'host', user: 'yu' } })).auth,
+    'agent',
+  )
+})
+
+test('remote.connect validates ssh fields and never leaks credentials in errors', async () => {
+  const context = setup()
+  for (const payload of [
+    {},
+    { ssh: { user: 'yu' } },
+    { ssh: { host: 'h', password: 42 } },
+    { ssh: { host: 'h', port: 70000 } },
+    { ssh: { host: 'h', user: 'yu', password: 'x'.repeat(1025) } },
+  ]) {
+    const response = await context.call('remote.connect', payload)
+    assert.equal(response.status, 400, JSON.stringify(payload).slice(0, 80))
+    assert.equal(errorOf(response).code, 'INVALID_ARGUMENT')
+    assert.ok(!response.body.includes('topsecret'))
+  }
+  assert.equal(context.backend.calls.remoteConnect.length, 0)
+
+  // Manager errors keep the remote auth code but redact secret details.
+  context.backend.testRemoteConnection = async () => {
+    throw new BackendError('AUTH_FAILED', 'authentication failed for yu@host', {
+      password: 'topsecret',
+      host: 'host',
+      attempts: 1,
+    })
+  }
+  const failed = await context.call('remote.connect', { ssh: REMOTE_SSH })
+  assert.equal(failed.status, 200)
+  const error = errorOf(failed)
+  assert.equal(error.code, 'AUTH_FAILED')
+  assert.equal(error.details.password, '***')
+  assert.equal(error.details.host, 'host')
+  assert.ok(!failed.body.includes('topsecret'))
+
+  // Structured {ok:false,error} reports are normalized too.
+  context.backend.testRemoteConnection = async () => ({
+    ok: false,
+    error: { code: 'SSH_UNREACHABLE', message: 'network unreachable' },
+  })
+  assert.equal(
+    errorOf(await context.call('remote.connect', { ssh: REMOTE_SSH })).code,
+    'SSH_UNREACHABLE',
+  )
+
+  const backend = createFakeBackend()
+  delete backend.testRemoteConnection
+  const unsupported = setup({ backend })
+  assert.equal(
+    errorOf(await unsupported.call('remote.connect', { ssh: REMOTE_SSH })).code,
+    'BACKEND_UNSUPPORTED',
+  )
+})
+
+test('remote.browse lists directories from the remote home', async () => {
+  const context = setup()
+  const value = valueOf(
+    await context.call('remote.browse', { ssh: REMOTE_SSH, path: '/home/yu' }),
+  )
+  assert.equal(value.path, '/home/yu')
+  assert.equal(value.home, '/home/yu')
+  assert.equal(value.parent, '/home')
+  assert.equal(value.isHome, true)
+  assert.equal(value.authMethod, 'password')
+  assert.deepEqual(value.entries, [
+    { name: 'CA_OH', path: '/home/yu/CA_OH' },
+    { name: 'src', path: '/home/yu/src' },
+  ])
+  assert.deepEqual(context.backend.calls.listRemoteDirs[0], {
+    ssh: REMOTE_SSH,
+    options: { path: '/home/yu' },
+  })
+  assert.ok(!JSON.stringify(value).includes('topsecret'))
+
+  valueOf(await context.call('remote.browse', { ssh: REMOTE_SSH }))
+  assert.deepEqual(context.backend.calls.listRemoteDirs[1].options, {})
+
+  for (const payload of [
+    {},
+    { ssh: REMOTE_SSH, path: 'relative/path' },
+    { ssh: REMOTE_SSH, path: '/home/../etc' },
+    { ssh: REMOTE_SSH, path: '/home/yu\nwith-newline' },
+  ]) {
+    const response = await context.call('remote.browse', payload)
+    assert.equal(response.status, 400, JSON.stringify(payload))
+    assert.equal(errorOf(response).code, 'INVALID_ARGUMENT')
+  }
+
+  context.backend.listRemoteDirs = async () => ({
+    ok: false,
+    error: { code: 'DIR_NOT_READABLE', message: 'permission denied' },
+  })
+  const denied = await context.call('remote.browse', { ssh: REMOTE_SSH, path: '/root' })
+  assert.equal(errorOf(denied).code, 'DIR_NOT_READABLE', 'remote path errors keep their code')
+
+  const unsupportedBackend = createFakeBackend()
+  delete unsupportedBackend.listRemoteDirs
+  const unsupported = setup({ backend: unsupportedBackend })
+  assert.equal(
+    errorOf(await unsupported.call('remote.browse', { ssh: REMOTE_SSH })).code,
+    'BACKEND_UNSUPPORTED',
+  )
+})
+
+test('remote errors keep specific codes and rich python facts', async () => {
+  const context = setup()
+  context.backend.testRemoteConnection = async () => {
+    throw new BackendError('PROBE_FAILED', 'ssh connected but no shell markers')
+  }
+  assert.equal(
+    errorOf(await context.call('remote.connect', { ssh: REMOTE_SSH })).code,
+    'PROBE_FAILED',
+    'PROBE_FAILED is a remote-specific failure',
+  )
+
+  context.backend.listRemoteDirs = async () => ({
+    ok: false,
+    error: { code: 'DIR_NOT_A_DIRECTORY', message: 'not a directory' },
+  })
+  assert.equal(
+    errorOf(await context.call('remote.browse', { ssh: REMOTE_SSH, path: '/home/yu/file' })).code,
+    'DIR_NOT_A_DIRECTORY',
+  )
+
+  const rich = createFakeBackend()
+  rich.testRemoteConnection = async () => ({
+    ok: true,
+    authMethod: 'agent',
+    target: 'yu@host',
+    home: '/home/yu',
+    platform: { os: 'Linux', arch: 'x86_64', label: 'Linux x86_64' },
+    python: {
+      path: '/home/yu/venv/bin/python',
+      version: '3.11.17',
+      versionText: 'Python 3.11.17',
+      supported: true,
+      system: '/usr/bin/python3',
+      candidates: [{ path: '/home/yu/venv/bin/python', version: '3.11.17', supported: true }],
+    },
+    ca: { installed: true, version: '0.1.0' },
+  })
+  const richContext = setup({ backend: rich })
+  const value = valueOf(await richContext.call('remote.connect', { ssh: { host: 'host', user: 'yu' } }))
+  assert.equal(value.authMethod, 'agent')
+  assert.equal(value.platform.label, 'Linux x86_64')
+  assert.equal(value.python.versionText, 'Python 3.11.17')
+  assert.equal(value.python.system, '/usr/bin/python3')
+  assert.deepEqual(value.python.candidates, [
+    { path: '/home/yu/venv/bin/python', version: '3.11.17', supported: true },
+  ])
+  assert.deepEqual(value.ca, { installed: true, version: '0.1.0' })
+})
+
+test('installStatus exposes the additive prepare snapshot', async () => {
+  const backend = createFakeBackend()
+  backend.getInstallStatus = () => ({
+    local: { state: 'running', steps: [], logs: [], error: null, result: null },
+    remote: { state: 'idle', steps: [], logs: [], error: null, result: null },
+    state: 'running',
+    scope: 'local',
+    steps: [],
+    logs: [],
+    error: null,
+    result: null,
+    prepare: {
+      state: 'running',
+      projectId: 'proj-1',
+      installScope: 'local',
+      startedAt: 1700000000000,
+      finishedAt: null,
+      error: null,
+      result: null,
+    },
+  })
+  const context = setup({ backend })
+  const value = valueOf(await context.call('backend.installStatus', { scope: 'local' }))
+  assert.equal(value.prepare.state, 'running')
+  assert.equal(value.prepare.projectId, 'proj-1')
+  assert.equal(value.prepare.installScope, 'local')
+
+  const fallback = createFakeBackend()
+  fallback.getPrepareStatus = () => ({
+    state: 'succeeded',
+    projectId: 'proj-2',
+    installScope: 'remote',
+    startedAt: 1,
+    finishedAt: 2,
+  })
+  const fallbackContext = setup({ backend: fallback })
+  const fallbackValue = valueOf(await fallbackContext.call('backend.installStatus'))
+  assert.equal(fallbackValue.prepare.state, 'succeeded')
+  assert.equal(fallbackValue.prepare.projectId, 'proj-2')
+  assert.equal(fallbackValue.prepare.installScope, 'remote')
+})
+
+test('projects.createSimple creates local and remote projects with auto db paths', async () => {
+  const context = setup()
+  const local = valueOf(
+    await context.call('projects.createSimple', {
+      kind: 'local',
+      directory: '/Users/yu/src/oh',
+      name: 'oh',
+    }),
+  )
+  assert.equal(local.project.id, 'proj-simple')
+  assert.equal(local.project.backend, 'local')
+  assert.equal(local.project.sourceRoot, '/Users/yu/src/oh')
+  assert.equal(local.project.db, '/tmp/ca-local/.dsh-ca/data/oh/index.db')
+  assert.deepEqual(context.backend.calls.createSimpleProject[0], {
+    kind: 'local',
+    directory: '/Users/yu/src/oh',
+    name: 'oh',
+  })
+
+  const remote = await context.call('projects.createSimple', {
+    kind: 'remote',
+    directory: '/home/yu/CA_OH',
+    ssh: REMOTE_SSH,
+  })
+  assert.equal(remote.status, 200)
+  const remoteValue = valueOf(remote)
+  assert.equal(remoteValue.project.backend, 'remote')
+  assert.equal(remoteValue.project.db, '/home/yu/.dsh-ca/data/index/index.db')
+  assert.equal(remoteValue.project.ssh.password, '***', 'stored password is masked in responses')
+  assert.ok(!remote.body.includes('topsecret'))
+  assert.equal(context.backend.calls.createSimpleProject[1].ssh.password, 'topsecret')
+})
+
+test('projects.createSimple validates kind, directory and remote ssh', async () => {
+  const context = setup()
+  const cases = [
+    [{ directory: '/srv/src' }],
+    [{ kind: 'cloud', directory: '/srv/src' }],
+    [{ kind: 'local' }],
+    [{ kind: 'local', directory: 'relative/dir' }],
+    [{ kind: 'local', directory: '/srv/../etc' }],
+    [{ kind: 'local', directory: '/srv/src', name: 42 }],
+    [{ kind: 'remote', directory: '/home/yu/src' }],
+    [{ kind: 'remote', directory: '/home/yu/src', ssh: { user: 'yu' } }],
+    [{ kind: 'remote', directory: '/home/yu/src', ssh: { host: 'h', password: 42 } }],
+  ]
+  for (const [payload] of cases) {
+    const response = await context.call('projects.createSimple', payload)
+    assert.equal(response.status, 400, JSON.stringify(payload))
+    assert.equal(errorOf(response).code, 'INVALID_ARGUMENT')
+  }
+  assert.equal(context.backend.calls.createSimpleProject.length, 0)
+
+  const backend = createFakeBackend()
+  backend.createSimpleProject = async () => {
+    throw new BackendError('INVALID_ARGUMENT', 'directory does not exist')
+  }
+  const invalid = setup({ backend })
+  assert.equal(
+    errorOf(await invalid.call('projects.createSimple', { kind: 'local', directory: '/nope' })).code,
+    'INVALID_ARGUMENT',
+  )
+
+  const missingBackend = createFakeBackend()
+  delete missingBackend.createSimpleProject
+  const unsupported = setup({ backend: missingBackend })
+  assert.equal(
+    errorOf(
+      await unsupported.call('projects.createSimple', { kind: 'local', directory: '/srv/src' }),
+    ).code,
+    'BACKEND_UNSUPPORTED',
+  )
+})
+
+test('projects.prepare starts background preparation and validates options', async () => {
+  const context = setup()
+  const value = valueOf(
+    await context.call('projects.prepare', {
+      id: 'proj-1',
+      offline: true,
+      wheelhousePath: '/wh/macos-arm64',
+    }),
+  )
+  assert.equal(value.started, true)
+  assert.equal(value.scope, 'prepare')
+  assert.equal(value.projectId, 'proj-1')
+  assert.equal(value.offline, true)
+  assert.match(value.hint, /backend\.installStatus/)
+  assert.deepEqual(context.backend.calls.prepareProject[0], {
+    id: 'proj-1',
+    options: { offline: true, wheelhousePath: '/wh/macos-arm64' },
+  })
+
+  for (const payload of [
+    {},
+    { id: 'proj-1', offline: 'yes' },
+    { id: 'proj-1', wheelhousePath: 'relative/wh' },
+  ]) {
+    const response = await context.call('projects.prepare', payload)
+    assert.equal(response.status, 400, JSON.stringify(payload))
+    assert.equal(errorOf(response).code, 'INVALID_ARGUMENT')
+  }
+
+  const failing = createFakeBackend()
+  // A background starter validates the project id synchronously (same as
+  // manager.startLocalInstall does for installer options).
+  failing.startPrepareProject = () => {
+    throw new BackendError('PROJECT_NOT_FOUND', 'project not found: proj-x')
+  }
+  const missing = setup({ backend: failing })
+  assert.equal(
+    errorOf(await missing.call('projects.prepare', { id: 'proj-x' })).code,
+    'DB_NOT_FOUND',
+  )
+
+  const sync = createFakeBackend()
+  sync.startPrepareProject = (id) => ({ started: true, projectId: id, scope: 'prepare' })
+  sync.prepareProject = async () => {
+    throw new Error('startPrepareProject should be preferred')
+  }
+  const preferred = setup({ backend: sync })
+  const prepared = valueOf(await preferred.call('projects.prepare', { id: 'proj-2' }))
+  assert.equal(prepared.started, true)
+  assert.equal(prepared.projectId, 'proj-2')
+
+  const unsupportedBackend = createFakeBackend()
+  delete unsupportedBackend.prepareProject
+  const unsupported = setup({ backend: unsupportedBackend })
+  assert.equal(
+    errorOf(await unsupported.call('projects.prepare', { id: 'proj-1' })).code,
+    'BACKEND_UNSUPPORTED',
+  )
+})
+
+test('project endpoints mask stored ssh passwords in responses', async () => {
+  const backend = createFakeBackend({
+    projects: [
+      {
+        id: 'proj-secret',
+        name: 'secret-project',
+        backend: 'remote',
+        sourceRoot: '/home/yu/src',
+        db: '/home/yu/index.db',
+        dbDir: null,
+        ssh: { host: 'h', user: 'yu', password: 'topsecret' },
+      },
+    ],
+    activeProjectId: 'proj-secret',
+  })
+  const context = setup({ backend })
+  const list = await context.call('projects.list')
+  assert.equal(list.status, 200)
+  assert.ok(!list.body.includes('topsecret'), 'projects.list never echoes passwords')
+  assert.equal(valueOf(list).projects[0].ssh.password, '***')
+})
+
+// --------------------------------------------------------------------------- //
 // ui.selftest.*
 // --------------------------------------------------------------------------- //
 
@@ -1540,6 +1956,10 @@ test('the route handler never throws, for any endpoint or body shape', async () 
     'projects.save',
     'projects.remove',
     'projects.activate',
+    'projects.createSimple',
+    'projects.prepare',
+    'remote.connect',
+    'remote.browse',
     'ui.selftest.pending',
     'ui.selftest.report',
     'tasks.list',

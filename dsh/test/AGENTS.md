@@ -10,6 +10,7 @@
 - `ui-selftest.test.mjs`：页面内 DOM 自测的 adapter/fake 编排测试。
 - `host-modules.test.mjs`：Host 模块可加载与纯函数行为。
 - `installer-*.test.mjs`（`installer-platform/local/remote/manager`）：平台探测、venv 布局、命令/上传策略与安装状态机；`installer.real.test.mjs` 为环境变量门控的真机用例。
+- `projects-simple.test.mjs` / `simple-project-manager.test.mjs`：一键项目的自动 db 路径、去重与 prepare（装/建库/激活）状态机；`backend/remote/auth*.test.mjs`：SSH 密码 askpass（0600/清理/脱敏）与免密连接、目录浏览；`auth.real.test.mjs` 为真实主机门控。
 
 ## 子目录
 

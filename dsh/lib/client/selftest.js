@@ -42,9 +42,9 @@ export const ROUTE_CHECKS = Object.freeze([
 
 /** Visible button texts by language (the active locale decides one of them). */
 const BUTTON_TEXT = Object.freeze({
-  newProject: ['New project', '新建项目'],
-  save: ['Save project', '保存项目'],
-  cancel: ['Cancel', '取消'],
+  pickDirectory: ['Choose directory', '选择目录'],
+  remoteTab: ['Remote server', '远程服务器'],
+  localTab: ['This computer', '本机'],
 })
 
 const WAIT_PANEL_MS = 5000
@@ -439,7 +439,7 @@ export async function runSelfTest(options) {
       if (adapters.query('.ca-projects-page')) {
         const projectName = activeProjectName(shell)
         await step('projects.list', async () => {
-          const rows = adapters.queryAll('.ca-projects-page .ca-table tbody tr')
+          const rows = adapters.queryAll('.ca-projects-page .ca-projects-list-row')
           const emptyState = adapters.query('.ca-projects-page .ca-empty')
           if (rows.length === 0 && emptyState) return 'no projects yet (empty state)'
           if (rows.length === 0) throw new Error('no project rows rendered and no empty state')
@@ -449,34 +449,29 @@ export async function runSelfTest(options) {
           return `rows=${rows.length}${projectName ? ` active=${projectName}` : ''}`
         })
 
-        const newProjectButton = findButton(adapters, BUTTON_TEXT.newProject)
-        let formOpen = false
-        formOpen = await step('projects.form.open', async () => {
-          if (!newProjectButton) throw new Error('New project button not found')
-          if (!adapters.click(newProjectButton)) throw new Error('could not click New project')
-          const visible = await adapters.waitFor('.ca-projects-page .ca-projects-grid', WAIT_DETAIL_MS)
-          if (!visible) throw new Error('project form did not open')
-          const inputs = adapters.queryAll('.ca-projects-page .ca-projects-grid input')
-          if (inputs.length < 4) throw new Error(`expected at least 4 form inputs, found ${inputs.length}`)
-          return `inputs=${inputs.length}`
+        await step('projects.add', async () => {
+          const visible = await adapters.waitFor('.ca-projects-dir', WAIT_DETAIL_MS)
+          if (!visible) throw new Error('directory input did not render')
+          const picker = findButton(adapters, BUTTON_TEXT.pickDirectory)
+          if (!picker) throw new Error('Choose directory button not found')
+          return 'directory input + picker'
         })
 
-        if (formOpen) {
-          await step('projects.form.validation', async () => {
-            const saveButton = findButton(adapters, BUTTON_TEXT.save)
-            if (!saveButton) throw new Error('Save project button not found')
-            if (!adapters.click(saveButton)) throw new Error('could not click Save project')
-            const visible = await adapters.waitFor('.ca-projects-page .ca-field-error', WAIT_DETAIL_MS)
-            if (!visible) throw new Error('empty name did not show a field validation error')
-            const errors = adapters.queryAll('.ca-projects-page .ca-field-error')
-            return `validationErrors=${errors.length}`
-          })
-          await step('projects.form.close', async () => {
-            const cancelButton = findButton(adapters, BUTTON_TEXT.cancel)
-            if (cancelButton) adapters.click(cancelButton)
-            return 'form closed'
-          })
-        }
+        await step('projects.remote', async () => {
+          const remoteTab = findButton(adapters, BUTTON_TEXT.remoteTab)
+          if (!remoteTab) throw new Error('Remote server tab not found')
+          if (!adapters.click(remoteTab)) throw new Error('could not switch to the remote tab')
+          const deadline = adapters.now() + WAIT_DETAIL_MS
+          for (;;) {
+            const text = adapters.text()
+            if (text.includes('Host / IP') || text.includes('主机 / IP')) break
+            if (adapters.now() > deadline) throw new Error('remote connection fields did not render')
+            await adapters.delay(POLL_MS)
+          }
+          const localTab = findButton(adapters, BUTTON_TEXT.localTab)
+          if (localTab) adapters.click(localTab)
+          return 'remote connect form'
+        })
       } else {
         steps.push({ name: 'projects.list', ok: false, ms: 0, detail: '.ca-projects-page missing' })
       }

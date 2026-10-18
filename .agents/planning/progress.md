@@ -48,12 +48,13 @@ repositories, not a phase-3 acceptance gate.
   (1,762 TU): baseline stats/search/detail/graph, MCP 18 tools, virtual/indirect
   candidates and header-incremental update/watch all pass; write-up in
   docs/functional-verification.md.
-- DSH plugin bundle `dsh/` (`@local/dsh-ca`): CA page + project model + 12 native
-  `ca_*` tools inside DeepSeek Harness, local/remote Linux `ca serve` lifecycle, long
+- DSH plugin bundle `dsh/` (`@local/dsh-ca`): CA page + project model + 12 `ca_*`
+  tools in Harness, local/remote Linux `ca serve` lifecycle, long
   tasks, DSH-model AI explanations, and a cross-platform/offline backend installer
   (wheel-complete package, bundled CA wheel, per-platform wheelhouse; local Windows/
-  macOS/Linux code paths, verified Linux offline install); CA core is unchanged and the
-  CA test baseline is unaffected (the plugin has its own `dsh/test/` node suite).
+  macOS/Linux code paths, verified Linux offline install), and one-step project creation
+  (local directory or SSH-browsed directory; install/DB/start automatic); CA core is
+  unchanged (own `dsh/test/` node suite; CA baseline unaffected).
 
 ## Deferred / optional
 

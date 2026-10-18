@@ -47,6 +47,10 @@ export const Endpoints = Object.freeze({
   projectsSave: 'projects.save',
   projectsRemove: 'projects.remove',
   projectsActivate: 'projects.activate',
+  projectsCreateSimple: 'projects.createSimple',
+  projectsPrepare: 'projects.prepare',
+  remoteConnect: 'remote.connect',
+  remoteBrowse: 'remote.browse',
 })
 
 const CA_METHODS = new Set(['GET', 'HEAD', 'POST'])
@@ -393,6 +397,43 @@ export function createApi(ctx) {
     save: (project, signal) => rpc(Endpoints.projectsSave, { project: project || {} }, signal),
     remove: (id, signal) => rpc(Endpoints.projectsRemove, { id }, signal),
     activate: (id, signal) => rpc(Endpoints.projectsActivate, { id }, signal),
+    createSimple: (input, signal) => rpc(Endpoints.projectsCreateSimple, input || {}, signal),
+    prepare: (id, options, signal) => {
+      const settings = options && typeof options === 'object' ? options : {}
+      return rpc(
+        Endpoints.projectsPrepare,
+        {
+          id,
+          offline: settings.offline === true,
+          wheelhousePath: settings.wheelhousePath || undefined,
+        },
+        signal || settings.signal,
+      )
+    },
+  }
+
+  // Remote SSH helpers for the simplified "connect → browse → pick a folder"
+  // project flow. Passwords are only kept in memory for the duration of a call.
+  const remote = {
+    connect: (ssh, signal) => rpc(Endpoints.remoteConnect, { ssh: ssh || {} }, signal),
+    browse: (ssh, path, signal) =>
+      rpc(
+        Endpoints.remoteBrowse,
+        Object.assign({ ssh: ssh || {} }, path === undefined ? {} : { path }),
+        signal,
+      ),
+  }
+
+  /** Host-side workspace directory picker (`ctx.get('uiWorkspace')`). */
+  async function pickDirectory() {
+    let workspace = null
+    try {
+      workspace = ctx && typeof ctx.get === 'function' ? ctx.get('uiWorkspace') : null
+    } catch (_error) {
+      workspace = null
+    }
+    if (!workspace || typeof workspace.pickDirectory !== 'function') return null
+    return workspace.pickDirectory()
   }
 
   const explain = (params, signal) => rpc(Endpoints.explain, params || {}, signal)
@@ -468,7 +509,9 @@ export function createApi(ctx) {
     backend,
     tasks,
     projects,
+    remote,
     explain,
+    pickDirectory,
     variant: {
       get: () => variantState,
       subscribe: (fn) => {

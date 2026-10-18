@@ -14,7 +14,7 @@
 ## 子目录
 
 - [installer/AGENTS.md](installer/AGENTS.md)：本地/远程 Linux 的 CA wheel 安装器与离线 wheelhouse。
-- [remote/AGENTS.md](remote/AGENTS.md)：远程 Linux 后端（probe/legacy source install/serve+SSH 隧道/远程执行）。
+- [remote/AGENTS.md](remote/AGENTS.md)：远程 Linux 后端（SSH 认证/密码 askpass/目录浏览/probe/serve+隧 道/安装执行）；一键项目所需的 `remote.connect`/`remote.browse` 由 manager 暴露。
 
 ## 局部规则
 

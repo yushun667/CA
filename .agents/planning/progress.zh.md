@@ -44,6 +44,7 @@ Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上�
   项目模型 + 12 个原生 `ca_*` 工具、本地/远程 Linux `ca serve` 生命周期、长任务、
   DSH 模型驱动的 AI 解释，以及跨平台/离线后端安装器（wheel-complete 包、内置 CA
   wheel、按平台 wheelhouse；本地 Win/mac/Linux 代码路径，Linux 离线安装已真机验证）；
+  一键建项目（本机选目录 / 远程登录浏览目录，自动装后端、建库并启动）；
   CA 核心不变、测试基线不受影响（插件有独立 `dsh/test/` node 套件）。
 
 ## 延后 / 可选

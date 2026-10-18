@@ -91,14 +91,13 @@ export function remoteInstallLayout(installDir) {
 // ------------------------------------------------------------------------ //
 
 /** scp option args (`-P` uppercase, unlike ssh `-p`). */
-export function buildScpOptionArgs(ssh) {
+export function buildScpOptionArgs(ssh, options = {}) {
   const cfg = normalizeSshConfig(ssh);
   const args = [];
   if (cfg.port) args.push('-P', String(cfg.port));
   if (cfg.keyPath) args.push('-i', cfg.keyPath);
+  if (options.batchMode !== false) args.push('-o', 'BatchMode=yes');
   args.push(
-    '-o',
-    'BatchMode=yes',
     '-o',
     'ConnectTimeout=10',
     '-o',
@@ -122,7 +121,8 @@ export function buildScpArgv(sshInput, options) {
   if (sources.length === 0) throw new BackendError('INVALID_ARGUMENT', 'scp 源文件不能为空');
   const remoteTarget = nonEmptyString(options.remoteTarget);
   if (!remoteTarget) throw new BackendError('INVALID_ARGUMENT', 'scp 目标路径不能为空');
-  const args = buildScpOptionArgs(sshInput);
+  const args = buildScpOptionArgs(sshInput, { batchMode: options.batchMode });
+  if (Array.isArray(options.extraOptions)) args.push(...options.extraOptions);
   if (options.recursive === true) args.push('-r');
   args.push(...sources, `${cfg.target}:${remoteTarget}`);
   return { command: options.scpBinary || 'scp', args, ssh: cfg };
@@ -266,6 +266,26 @@ export function createTransfer(options = {}) {
     typeof deps.runProcess === 'function'
       ? deps.runProcess
       : (runOptions) => runProcessOneShot({ spawn: spawnFn, ...runOptions });
+
+  async function withAuthSession(sshInput, fn) {
+    let session = null;
+    if (typeof deps.resolveSshAuth === 'function') {
+      session = await deps.resolveSshAuth(sshInput);
+    }
+    try {
+      return await fn(session);
+    } finally {
+      try {
+        session?.cleanup?.();
+      } catch {
+        // helper cleanup is best effort
+      }
+    }
+  }
+
+  function spawnEnv(session) {
+    return buildChildEnv(session?.env || {}, env);
+  }
   const sshBinary = deps.sshBinary || 'ssh';
   const scpBinary = deps.scpBinary || 'scp';
   const scpAvailable =
@@ -274,45 +294,69 @@ export function createTransfer(options = {}) {
     deps.tarAvailable !== undefined ? Boolean(resolveExecutableOnPath('tar', { env })) : Boolean(resolveExecutableOnPath('tar', { env }));
 
   async function runSsh(ssh, script, label) {
-    const built = buildSshArgv(ssh, script, { sshBinary });
-    logger?.info?.(`[installer:remote] ${label}: ssh ${built.ssh.target}`);
-    return runProcessFn({
-      command: built.command,
-      args: built.args,
-      timeoutMs: UPLOAD_TIMEOUT_MS,
-      logger,
-      maxOutputBytes: 256 * 1024,
+    return withAuthSession(ssh, async (session) => {
+      const built = buildSshArgv(session ? session.ssh : ssh, script, {
+        sshBinary,
+        batchMode: session ? session.batchMode : true,
+        extraOptions: session?.extraOptions || [],
+      });
+      logger?.info?.(`[installer:remote] ${label}: ssh ${built.ssh.target}`);
+      return runProcessFn({
+        command: built.command,
+        args: built.args,
+        env: spawnEnv(session),
+        timeoutMs: UPLOAD_TIMEOUT_MS,
+        logger,
+        maxOutputBytes: 256 * 1024,
+      });
     });
   }
 
   async function uploadFile({ ssh, localFile, remotePath, signal }) {
     const selection = planUploadStrategy({ kind: 'file', scpAvailable, tarAvailable });
     if (selection.strategy === 'scp') {
-      const built = buildScpArgv(ssh, {
-        sources: [localFile],
-        remoteTarget: remotePath,
-        scpBinary,
+      return withAuthSession(ssh, async (session) => {
+        const built = buildScpArgv(session ? session.ssh : ssh, {
+          sources: [localFile],
+          remoteTarget: remotePath,
+          scpBinary,
+          batchMode: session ? session.batchMode : true,
+          extraOptions: session?.extraOptions || [],
+        });
+        const result = await runProcessFn({
+          command: built.command,
+          args: built.args,
+          env: spawnEnv(session),
+          timeoutMs: UPLOAD_TIMEOUT_MS,
+          signal,
+          logger,
+          maxOutputBytes: 64 * 1024,
+        });
+        if (result?.code !== 0 || result?.spawnError) {
+          throw new BackendError(
+            'INSTALL_STEP_FAILED',
+            `scp 上传失败：${String(result?.stderr || result?.spawnError?.message || '').trim().slice(-1000)}`,
+            { localFile, remotePath },
+          );
+        }
+        return { strategy: 'scp' };
       });
-      const result = await runProcessFn({
-        command: built.command,
-        args: built.args,
-        timeoutMs: UPLOAD_TIMEOUT_MS,
-        signal,
-        logger,
-        maxOutputBytes: 64 * 1024,
-      });
-      if (result?.code !== 0 || result?.spawnError) {
-        throw new BackendError(
-          'INSTALL_STEP_FAILED',
-          `scp 上传失败：${String(result?.stderr || result?.spawnError?.message || '').trim().slice(-1000)}`,
-          { localFile, remotePath },
-        );
-      }
-      return { strategy: 'scp' };
     }
     if (selection.strategy === 'ssh-cat') {
-      await uploadFileViaStdin({ spawnFn, ssh, sshBinary, localFile, remotePath, env, logger });
-      return { strategy: 'ssh-cat' };
+      return withAuthSession(ssh, async (session) => {
+        await uploadFileViaStdin({
+          spawnFn,
+          ssh: session ? session.ssh : ssh,
+          sshBinary,
+          localFile,
+          remotePath,
+          env: spawnEnv(session),
+          logger,
+          batchMode: session ? session.batchMode : true,
+          extraOptions: session?.extraOptions || [],
+        });
+        return { strategy: 'ssh-cat' };
+      });
     }
     throw new BackendError('INSTALL_STEP_FAILED', selection.reason);
   }
@@ -320,45 +364,62 @@ export function createTransfer(options = {}) {
   async function uploadDirectory({ ssh, localDir, remoteDir, signal }) {
     const selection = planUploadStrategy({ kind: 'dir', scpAvailable, tarAvailable });
     if (selection.strategy === 'scp-recursive') {
-      const parent = path.posix.dirname(remoteDir);
-      const base = path.basename(localDir);
-      const staged = path.posix.join(parent, base);
-      const built = buildScpArgv(ssh, {
-        sources: [localDir],
-        remoteTarget: parent,
-        recursive: true,
-        scpBinary,
+      return withAuthSession(ssh, async (session) => {
+        const parent = path.posix.dirname(remoteDir);
+        const base = path.basename(localDir);
+        const staged = path.posix.join(parent, base);
+        const built = buildScpArgv(session ? session.ssh : ssh, {
+          sources: [localDir],
+          remoteTarget: parent,
+          recursive: true,
+          scpBinary,
+          batchMode: session ? session.batchMode : true,
+          extraOptions: session?.extraOptions || [],
+        });
+        const result = await runProcessFn({
+          command: built.command,
+          args: built.args,
+          env: spawnEnv(session),
+          timeoutMs: UPLOAD_TIMEOUT_MS,
+          signal,
+          logger,
+          maxOutputBytes: 128 * 1024,
+        });
+        if (result?.code !== 0 || result?.spawnError) {
+          throw new BackendError(
+            'INSTALL_STEP_FAILED',
+            `scp -r 上传失败：${String(result?.stderr || result?.spawnError?.message || '').trim().slice(-1000)}`,
+            { localDir, remoteDir },
+          );
+        }
+        if (path.posix.normalize(staged) !== path.posix.normalize(remoteDir)) {
+          const script = [
+            'set -e',
+            `rm -rf ${remotePathExpression(remoteDir)}`,
+            `mv ${remotePathExpression(staged)} ${remotePathExpression(remoteDir)}`,
+            'echo "CA_UPLOAD_DONE=1"',
+          ].join('\n');
+          const moved = await runSsh(session ? session.ssh : ssh, script, 'move uploaded wheelhouse');
+          if (moved?.code !== 0) throw new BackendError('INSTALL_STEP_FAILED', '重置远端 wheelhouse 目录失败');
+        }
+        return { strategy: 'scp-recursive' };
       });
-      const result = await runProcessFn({
-        command: built.command,
-        args: built.args,
-        timeoutMs: UPLOAD_TIMEOUT_MS,
-        signal,
-        logger,
-        maxOutputBytes: 128 * 1024,
-      });
-      if (result?.code !== 0 || result?.spawnError) {
-        throw new BackendError(
-          'INSTALL_STEP_FAILED',
-          `scp -r 上传失败：${String(result?.stderr || result?.spawnError?.message || '').trim().slice(-1000)}`,
-          { localDir, remoteDir },
-        );
-      }
-      if (path.posix.normalize(staged) !== path.posix.normalize(remoteDir)) {
-        const script = [
-          'set -e',
-          `rm -rf ${remotePathExpression(remoteDir)}`,
-          `mv ${remotePathExpression(staged)} ${remotePathExpression(remoteDir)}`,
-          'echo "CA_UPLOAD_DONE=1"',
-        ].join('\n');
-        const moved = await runSsh(ssh, script, 'move uploaded wheelhouse');
-        if (moved?.code !== 0) throw new BackendError('INSTALL_STEP_FAILED', '重置远端 wheelhouse 目录失败');
-      }
-      return { strategy: 'scp-recursive' };
     }
     if (selection.strategy === 'tar-stream') {
-      await uploadDirectoryViaTarStream({ spawnFn, ssh, sshBinary, localDir, remoteDir, env, logger });
-      return { strategy: 'tar-stream' };
+      return withAuthSession(ssh, async (session) => {
+        await uploadDirectoryViaTarStream({
+          spawnFn,
+          ssh: session ? session.ssh : ssh,
+          sshBinary,
+          localDir,
+          remoteDir,
+          env: spawnEnv(session),
+          logger,
+          batchMode: session ? session.batchMode : true,
+          extraOptions: session?.extraOptions || [],
+        });
+        return { strategy: 'tar-stream' };
+      });
     }
     throw new BackendError('INSTALL_STEP_FAILED', selection.reason);
   }
@@ -392,11 +453,15 @@ function waitForExit(child) {
 async function uploadFileViaStdin(options) {
   const { spawnFn, ssh, sshBinary, localFile, remotePath, env, logger } = options;
   const script = buildStdinWriteScript(remotePath);
-  const built = buildSshArgv(ssh, script, { sshBinary });
+  const built = buildSshArgv(ssh, script, {
+    sshBinary,
+    batchMode: options.batchMode,
+    extraOptions: options.extraOptions || [],
+  });
   logger?.info?.(`[installer:remote] ssh 上传 ${localFile} → ${ssh.target}:${remotePath}`);
   const child = spawnFn(built.command, built.args, {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: buildChildEnv({}, env),
+    env,
   });
   const output = collectOutput(child);
   const exitPromise = waitForExit(child);
@@ -425,7 +490,11 @@ async function uploadDirectoryViaTarStream(options) {
   const { spawnFn, ssh, sshBinary, localDir, remoteDir, env, logger } = options;
   const tarArgv = buildTarCreateArgv(localDir);
   const script = buildTarExtractScript(remoteDir);
-  const built = buildSshArgv(ssh, script, { sshBinary });
+  const built = buildSshArgv(ssh, script, {
+    sshBinary,
+    batchMode: options.batchMode,
+    extraOptions: options.extraOptions || [],
+  });
   logger?.info?.(`[installer:remote] tar 流上传 ${localDir} → ${ssh.target}:${remoteDir}`);
   const tar = spawnFn(tarArgv.command, tarArgv.args, {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -433,7 +502,7 @@ async function uploadDirectoryViaTarStream(options) {
   });
   const sshChild = spawnFn(built.command, built.args, {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: buildChildEnv({}, env),
+    env,
   });
   const tarOutput = collectOutput(tar);
   const sshOutput = collectOutput(sshChild);

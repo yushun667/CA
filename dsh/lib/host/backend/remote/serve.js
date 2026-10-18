@@ -215,15 +215,26 @@ export function createRemoteServeController(options) {
     if (typeof stableTimer.unref === 'function') stableTimer.unref();
   }
 
-  function spawnSshProcess(ssh, script, label) {
-    const built = buildSshArgv(ssh, script, { sshBinary: deps.sshBinary });
-    logger?.info?.(`[remote] ${label}: ssh ${built.ssh.target}`);
+  /** Resolve an optional password-auth session for a long-lived ssh process. */
+  async function resolveSpawnSession(ssh) {
+    if (typeof deps.resolveSshAuth !== 'function') return null;
+    return deps.resolveSshAuth(ssh);
+  }
+
+  async function spawnSshProcess(ssh, script, label) {
+    const session = await resolveSpawnSession(ssh);
+    const built = buildSshArgv(session ? session.ssh : ssh, script, {
+      sshBinary: deps.sshBinary,
+      batchMode: session ? session.batchMode : true,
+      extraOptions: session?.extraOptions || [],
+    });
+    logger?.info?.(`[remote] ${label}: ssh ${built.ssh.target}（${session?.method || 'agent/key'}）`);
     const ready = { url: null, port: null };
     const handle = spawnManaged({
       spawn,
       command: built.command,
       args: built.args,
-      env: buildChildEnv({}, env),
+      env: buildChildEnv(session?.env || {}, env),
       logger,
       onStderrLine(line) {
         const parsed = parseReadyLine(line);
@@ -234,18 +245,41 @@ export function createRemoteServeController(options) {
         }
       },
     });
+    // The askpass helper is only needed during authentication; keep it until
+    // the ssh process exits so retries inside ssh still work.
+    handle.exited.finally(() => {
+      try {
+        session?.cleanup?.();
+      } catch {
+        // ignore
+      }
+    });
     return { built, handle, ready };
   }
 
-  function spawnTunnelProcess(ssh, localPort, remotePort) {
-    const built = buildSshTunnelArgv(ssh, { localPort, remotePort, sshBinary: deps.sshBinary });
+  async function spawnTunnelProcess(ssh, localPort, remotePort) {
+    const session = await resolveSpawnSession(ssh);
+    const built = buildSshTunnelArgv(session ? session.ssh : ssh, {
+      localPort,
+      remotePort,
+      sshBinary: deps.sshBinary,
+      batchMode: session ? session.batchMode : true,
+      extraOptions: session?.extraOptions || [],
+    });
     logger?.info?.(`[remote] 建立 SSH 隧道 127.0.0.1:${localPort} → ${ssh.target}:127.0.0.1:${remotePort}`);
     const handle = spawnManaged({
       spawn,
       command: built.command,
       args: built.args,
-      env: buildChildEnv({}, env),
+      env: buildChildEnv(session?.env || {}, env),
       logger,
+    });
+    handle.exited.finally(() => {
+      try {
+        session?.cleanup?.();
+      } catch {
+        // ignore
+      }
     });
     return { built, handle };
   }
@@ -481,7 +515,7 @@ export function createRemoteServeController(options) {
           env: remote.env,
           pidFile: pidToken,
         });
-        const serveState = spawnSshProcess(ssh, pidScript, '启动远程 ca serve');
+        const serveState = await spawnSshProcess(ssh, pidScript, '启动远程 ca serve');
         serve = serveState;
         activeRemotePid = { token: pidToken, repoPath, ssh };
         let tunnelHandle = null;
@@ -491,7 +525,7 @@ export function createRemoteServeController(options) {
             Number(remote.localPort) > 0
               ? Number(remote.localPort)
               : await freePort({ host: '127.0.0.1' });
-          const tunnelState = spawnTunnelProcess(ssh, localPort, port);
+          const tunnelState = await spawnTunnelProcess(ssh, localPort, port);
           tunnelHandle = tunnelState.handle;
           tunnel = tunnelHandle;
           const readyInfo = await waitForLocalHealth(
@@ -691,13 +725,18 @@ export function createRemoteServeController(options) {
       env: remote.env,
       pidTag,
     });
-    const built = buildSshArgv(ssh, script, { sshBinary: deps.sshBinary });
+    const session = await resolveSpawnSession(ssh);
+    const built = buildSshArgv(session ? session.ssh : ssh, script, {
+      sshBinary: deps.sshBinary,
+      batchMode: session ? session.batchMode : true,
+      extraOptions: session?.extraOptions || [],
+    });
     logger?.info?.(`[remote] 远程执行 ca ${args.join(' ')}（${ssh.target}）`);
     const handle = spawnManaged({
       spawn,
       command: built.command,
       args: built.args,
-      env: buildChildEnv({}, env),
+      env: buildChildEnv(session?.env || {}, env),
       logger,
       onStdoutLine: (line, info) => {
         try {
@@ -773,6 +812,11 @@ export function createRemoteServeController(options) {
       clearTimeout(forceTimer);
       if (externalSignal && typeof externalSignal.removeEventListener === 'function') {
         externalSignal.removeEventListener('abort', onAbort);
+      }
+      try {
+        session?.cleanup?.();
+      } catch {
+        // ignore
       }
     }
   }

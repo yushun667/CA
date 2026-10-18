@@ -96,16 +96,16 @@ function fakeAdapters(options) {
     hashHistory: [],
     panelSelected: false,
     panelAttempts: 0,
-    formOpen: false,
-    validationShown: false,
+    tab: 'local',
     dropdownOpen: false,
+    pickerClicks: 0,
     clicks: [],
     clock: 0,
   }
   const buttons = [
-    { kind: 'new-project', textContent: 'New project' },
-    { kind: 'save', textContent: 'Save project' },
-    { kind: 'cancel', textContent: 'Cancel' },
+    { kind: 'pick-directory', textContent: 'Choose directory…' },
+    { kind: 'remote-tab', textContent: 'Remote server' },
+    { kind: 'local-tab', textContent: 'This computer' },
   ]
   const adapters = {
     state,
@@ -122,8 +122,7 @@ function fakeAdapters(options) {
       if (selector === '.ca-projects-page .ca-empty') {
         return settings.noProjects === true && state.hash === '#/projects' ? element('div') : null
       }
-      if (selector === '.ca-projects-page .ca-projects-grid') return state.formOpen ? element('div') : null
-      if (selector === '.ca-projects-page .ca-field-error') return state.validationShown ? element('span') : null
+      if (selector === '.ca-projects-dir') return state.tab === 'local' ? element('div') : null
       if (selector === '.ca-project-trigger') return state.hash !== '#/projects' || !settings.failRoute ? element('button') : null
       if (selector === '.ca-project-dropdown') return state.dropdownOpen ? element('div') : null
       const expected = routeSelectors.get(state.hash)
@@ -132,30 +131,23 @@ function fakeAdapters(options) {
     },
     queryAll(selector) {
       if (selector === 'button') return buttons
-      if (selector === '.ca-projects-page .ca-table tbody tr') {
+      if (selector === '.ca-projects-page .ca-projects-list-row') {
         if (settings.noProjects === true) return []
-        return state.hash === '#/projects' ? [element('tr')] : []
-      }
-      if (selector === '.ca-projects-page .ca-projects-grid input') {
-        return state.formOpen ? Array.from({ length: 6 }, () => element('input')) : []
-      }
-      if (selector === '.ca-projects-page .ca-field-error') {
-        return state.validationShown ? [element('span')] : []
+        return state.hash === '#/projects' ? [element('div')] : []
       }
       return []
     },
     text() {
       const parts = ['CA source explorer']
-      if (state.hash === '#/projects') parts.push('Saved projects')
+      if (state.hash === '#/projects') parts.push('Add project', 'Projects')
       if (settings.noProjects !== true) parts.push(PROJECT_NAME)
+      if (state.tab === 'remote') parts.push('Username', 'Host / IP', 'Port', 'Authentication', 'Password', 'Connect')
       if (state.dropdownOpen) parts.push(PROJECT_NAME, 'Manage projects')
       return parts.join(' ')
     },
     setHash(hash) {
       state.hash = hash
       state.hashHistory.push(hash)
-      state.formOpen = false
-      state.validationShown = false
       state.dropdownOpen = false
     },
     getHash() {
@@ -165,10 +157,9 @@ function fakeAdapters(options) {
       const node = typeof target === 'string' ? adapters.query(target) : target
       if (!node) return false
       state.clicks.push(node.kind || node.tagName || 'element')
-      if (node.kind === 'new-project') state.formOpen = true
-      else if (node.kind === 'save') {
-        if (settings.validationMissing !== true) state.validationShown = true
-      } else if (node.kind === 'cancel') state.formOpen = false
+      if (node.kind === 'pick-directory') state.pickerClicks += 1
+      else if (node.kind === 'remote-tab' && settings.remoteTabBroken !== true) state.tab = 'remote'
+      else if (node.kind === 'local-tab') state.tab = 'local'
       else if (node.tagName === 'button') state.dropdownOpen = true
       return true
     },
@@ -259,9 +250,8 @@ test('pending=true: runs the DOM walk and submits the report', async () => {
     'route #/search',
     'route #/projects',
     'projects.list',
-    'projects.form.open',
-    'projects.form.validation',
-    'projects.form.close',
+    'projects.add',
+    'projects.remote',
     'project.selector',
     'hash.restore',
   ]) {
@@ -336,17 +326,17 @@ test('a route that does not render is reported as a failed route check', async (
   assert.ok(result.report.summary.fail >= 1)
 })
 
-test('missing project-form validation is a failed step', async () => {
+test('a broken remote tab is a failed step', async () => {
   const api = fakeApi({ pending: true })
   const storage = fakeStorage()
-  const adapters = fakeAdapters({ validationMissing: true })
+  const adapters = fakeAdapters({ remoteTabBroken: true })
   const result = await maybeRunSelfTest(null, {}, fakeShell(), { api }, { adapters, storage })
   assert.equal(result.ran, true)
   assert.equal(result.ok, false)
-  const validation = result.report.steps.find((entry) => entry.name === 'projects.form.validation')
-  assert.ok(validation)
-  assert.equal(validation.ok, false)
-  assert.ok(validation.detail.includes('validation'))
+  const step = result.report.steps.find((entry) => entry.name === 'projects.remote')
+  assert.ok(step)
+  assert.equal(step.ok, false)
+  assert.ok(step.detail.includes('remote'))
 })
 
 test('empty project list is accepted through the empty state', async () => {

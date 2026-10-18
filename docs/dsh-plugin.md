@@ -29,6 +29,26 @@ to `dsh/lib/host/bootstrap.js` always need a full Harness restart.
 This installs the **plugin** itself; the CA analyzer **backend** is installed
 separately by the plugin's backend installer (next sections).
 
+## Adding a project (one step)
+
+The project page asks for one thing:
+
+- **Local**: click **Choose directory…** and pick a source tree. The plugin installs
+  or reuses the bundled CA backend, creates the database under
+  `$DSH_HOME/plugin-data/dsh-ca/data/<name>/index.db`, starts `ca serve` and activates
+  the project.
+- **Remote Linux**: enter username, host/IP, port (22), and either a password or a
+  key / none (免密); click **Connect**, browse the server directories and click
+  **Choose this directory**. The plugin installs the backend under
+  `~/dsh-ca/backend` on the server, creates `~/.dsh-ca/data/<name>/index.db`, starts
+  `ca serve` behind the SSH tunnel and activates the project.
+
+Password authentication uses a transient `SSH_ASKPASS` helper on the DSH host: the
+password is never logged or persisted, so it must be entered again after a restart.
+Windows hosts should use a key or the SSH agent (password mode is rejected there).
+Everything else — venv, wheel file, DB path, ports, compile database detection — is
+automatic; the old full form stays available under **Advanced** for special cases.
+
 ## Configuration
 
 Deployment config lives in the Cordis patch row (`dsh/cordis.patch.yml`); edits made in
@@ -50,7 +70,7 @@ the backend page are persisted as a sparse user patch in
 | `local.repo` / `local.compdb` | — | repo root / `compile_commands.json` for deep tools |
 | `local.host` / `local.port` | `127.0.0.1` / `0` | bind address and port; `0` = OS-assigned |
 | `local.maxRestarts` | `3` | bounded crash restarts |
-| `remote.ssh.host` / `user` / `port` / `keyPath` | — | SSH target (alias or `user@host`), port, local private-key path; no passwords |
+| `remote.ssh.host` / `user` / `port` / `keyPath` | — | SSH target (alias or `user@host`), port, local private-key path; optional transient password (askpass; never persisted) |
 | `remote.repoPath` | — | existing CA checkout on the Linux host (source mode / manual installs) |
 | `remote.installDir` | — | rsync destination and legacy source-mode install target; wheel installs use the installer form's own directory |
 | `remote.python` | auto (`python3`) | remote interpreter |

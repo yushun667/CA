@@ -9,7 +9,7 @@ Reasons:
 | Piece | Responsibility |
 |---|---|
 | `package.json`, `cordis.patch.yml` | private bundle manifest: host entry, patch, `dsh.client`, client export, locale |
-| `lib/host/bootstrap.js` | Host entry, `inject=['tools','connection','webServer']`; cache-busted import of `impl.js` reloads host code on re-activation (bootstrap edits need a restart) |
+| `lib/host/bootstrap.js` | Host entry, `inject=['tools','connection','webServer']`; cache-busted `impl.js` import reloads host code on re-activation |
 | `lib/host/impl.js` | wiring: backend/tasks/explain → RPC, tools, prompt, inside `ctx.effect` |
 | `lib/client/index.js` → `client.js` | bundled by `scripts/build-client.mjs` into `window.__ModuleLoader__.load(...)`; mounts `main` page (key/locale `ca`) + `sidebar.panellist` |
 
@@ -17,12 +17,13 @@ Reasons:
 
 **Project** = source tree `sourceRoot` + exactly one database (`db` file or `dbDir`
 shards) + backend location (`local`, or `remote` with SSH fields), plus optional
-`compdb`/`python`/`caRepoPath` (CA checkout). Users create/edit/delete named projects
-(unique, case-insensitive) on `#/projects`; they persist in
-`$DSH_HOME/plugin-data/dsh-ca/settings.json` as `projects[]` + `activeProjectId` (0600).
-Activation maps it to backend config, restarts `ca serve`, rolls back on failure; legacy
-settings migrate into one default project. Paths are validated on save/activate (remote
-only format-checked). Directory scanning (`backend.databases`) is a low-level helper.
+`compdb`/`python`/`caRepoPath` (CA checkout). Named projects (unique, case-insensitive) are
+created on `#/projects`; they persist in the plugin settings (`projects[]` +
+`activeProjectId`, 0600).
+Activation restarts `ca serve`, rolls back on failure; paths are validated on save.
+One-step creation: `remote.connect` → `remote.browse` → `projects.createSimple` (auto DB
+path) → `projects.prepare` (install backend if needed → DB dir → activate); password auth
+uses a transient askpass helper and is never persisted.
 
 ## Host services
 

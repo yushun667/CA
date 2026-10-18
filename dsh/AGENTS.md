@@ -5,7 +5,7 @@
 ## 结构
 
 - `package.json`、`cordis.patch.yml`：bundle 清单与 Host 行；`locale/`、`icon.svg`：展示元数据。
-- `lib/host/`：Host 半（backend 生命周期、项目存储、跨平台 CA 安装器、RPC、tools、tasks、explain、prompt）。
+- `lib/host/`：Host 半（backend 生命周期、项目存储、跨平台 CA 安装器、SSH 认证/远程目录浏览、RPC、tools、tasks、explain、prompt）。
 - `lib/client/`：Client 半 ESM 源；`client.js` 由 `scripts/build-client.mjs` 从 `lib/client/index.js` 生成，禁止手改。
 - `backend/wheels/`：内置 CA wheel；`scripts/build-wheelhouse.mjs` 生成离线依赖 wheelhouse。
 - `test/`：node:test；`scripts/verify/`：安装核验；`scripts/build-client.mjs`：无依赖打包器。

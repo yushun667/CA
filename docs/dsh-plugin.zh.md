@@ -25,6 +25,23 @@ bundle）；改 `dsh/lib/host/bootstrap.js` 必须完整重启 Harness。
 
 这里安装的是**插件**本身；CA 分析器**后端**由插件的后端安装器单独安装（见下文）。
 
+## 添加项目（一步完成）
+
+项目页只需要一件事：
+
+- **本机**：点「选择目录…」选一个源码目录。插件自动安装或复用内置 CA 后端，在
+  `$DSH_HOME/plugin-data/dsh-ca/data/<name>/index.db` 建数据库，启动 `ca serve` 并
+  激活项目。
+- **远程 Linux**：填用户名、主机/IP、端口（22），选择密码或密钥/免密；点「连接」，
+  在服务器目录树里浏览并点「选择此目录」。插件会在服务器
+  `~/dsh-ca/backend` 安装后端，在 `~/.dsh-ca/data/<name>/index.db` 建数据库，透
+  过 SSH 隧道启动 `ca serve` 并激活项目。
+
+密码认证在 DSH 本机用临时 `SSH_ASKPASS` helper 完成：密码不会写日志或配置文件，
+DSH 重启后需重新输入；Windows 宿主请用密钥或 SSH agent（不支持密码模式）。其余
+全部自动：venv、wheel、数据库路径、端口、compile database 探测；旧的完整表单保留
+在「高级」里供特殊场景使用。
+
 ## 配置
 
 部署配置来自 Cordis patch 行（`dsh/cordis.patch.yml`）；在后端页面里做的修改以稀疏
@@ -45,7 +62,7 @@ bundle）；改 `dsh/lib/host/bootstrap.js` 必须完整重启 Harness。
 | `local.repo` / `local.compdb` | — | 深析工具的仓库根 / `compile_commands.json` |
 | `local.host` / `local.port` | `127.0.0.1` / `0` | 绑定地址与端口；`0` = 系统分配 |
 | `local.maxRestarts` | `3` | 崩溃重启次数上限 |
-| `remote.ssh.host` / `user` / `port` / `keyPath` | — | SSH 目标（alias 或 `user@host`）、端口、本地私钥路径；不支持密码 |
+| `remote.ssh.host` / `user` / `port` / `keyPath` | — | SSH 目标（alias 或 `user@host`）、端口、本机私钥路径；可选一次性密码（askpass，不持久化） |
 | `remote.repoPath` | — | Linux 主机上已有的 CA checkout（source 模式/手工安装） |
 | `remote.installDir` | — | rsync 目标与 legacy source 模式的安装目录；wheel 安装使用安装表单里的独立目录 |
 | `remote.python` | 自动（`python3`） | 远端解释器 |

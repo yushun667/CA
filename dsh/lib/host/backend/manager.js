@@ -51,16 +51,27 @@ import { createLocalBackend } from './local.js';
 import { createLogger } from './log.js';
 import {
   buildProjectFromLegacyConfig,
+  buildSimpleProject,
   createProjectId,
+  ensureDefaultDirs,
   findProjectById,
   normalizeProject,
   projectNameKey,
+  projectSlug,
   projectToBackendPatch,
   sanitizeStoredProject,
+  uniqueProjectName,
 } from './projects.js';
 import { runProcess as runProcessOneShot } from './process.js';
+import {
+  createSshAuthSession,
+  listRemoteDirs as listRemoteDirsViaSsh,
+  normalizeSshAuth,
+  sshTargetKey,
+  testRemoteConnection as testRemoteConnectionViaSsh,
+} from './remote/auth.js';
 import { createRemoteBackend } from './remote/index.js';
-import { cloneJson, isPlainObject, nonEmptyString } from './util.js';
+import { cloneJson, isExecutableFile, isPlainObject, nonEmptyString } from './util.js';
 
 export { BackendError } from './errors.js';
 
@@ -178,6 +189,22 @@ export function createBackendManager(ctx, configInput, deps = {}) {
   /** @type {AbortController|null} */
   let localInstallAbort = null;
   let lastInstallScope = null;
+  // -- simplified remote auth + project preparation -------------------- //
+  /** In-memory SSH passwords keyed by `user@host:port`. Never persisted/logged. */
+  const sshSecrets = new Map();
+  let prepareStatus = {
+    state: 'idle',
+    scope: 'prepare',
+    projectId: null,
+    installScope: null,
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+    result: null,
+  };
+  /** @type {Promise<any>|null} */
+  let preparePromise = null;
+  let prepareAbort = null;
   const installStatePath = path.join(paths.stateDir, 'install-state.json');
   /** @type {{local: Record<string, any>|null, remote: Record<string, any>|null}} */
   let persistedInstallInfo = loadPersistedInstallInfo();
@@ -268,6 +295,7 @@ export function createBackendManager(ctx, configInput, deps = {}) {
       homedir,
       now,
       paths,
+      resolveSshAuth: (sshInput) => resolveRuntimeSshAuth(sshInput),
     };
   }
 
@@ -688,10 +716,75 @@ export function createBackendManager(ctx, configInput, deps = {}) {
       now,
       hostPlatform: safeDeps.hostPlatform,
       hostArch: safeDeps.hostArch,
+      platform: safeDeps.platform,
       bundledWheelDir: safeDeps.bundledWheelDir,
       fsImpl: safeDeps.fsImpl,
       paths,
+      resolveSshAuth: (sshInput) => resolveRuntimeSshAuth(sshInput),
     };
+  }
+
+  /** Deps for one-shot SSH helpers (connection test / browse / mkdir). */
+  function sshExecDeps() {
+    return {
+      ...installerDeps(),
+      spawn: typeof safeDeps.spawn === 'function' ? safeDeps.spawn : undefined,
+    };
+  }
+
+  function recordSshPassword(sshInput, project = null) {
+    try {
+      const normalized = normalizeSshAuth(sshInput);
+      if (!normalized.password) return;
+      sshSecrets.set(sshTargetKey(normalized), normalized.password);
+      if (project?.id) {
+        // Same target key is enough; projects may share credentials.
+      }
+    } catch {
+      // invalid ssh input is reported by the caller
+    }
+  }
+
+  /** Normalized ssh input with the in-memory password (if we saw one) attached. */
+  function withRuntimeSshSecret(sshInput) {
+    const normalized = normalizeSshAuth(sshInput);
+    if (!normalized.password) {
+      const key = sshTargetKey(normalized);
+      const password = sshSecrets.get(key);
+      if (password) normalized.password = password;
+    }
+    return normalized;
+  }
+
+  function runtimeSshForProject(project) {
+    if (!project?.ssh) return null;
+    try {
+      const key = sshTargetKey(project.ssh);
+      const password = sshSecrets.get(key);
+      return password ? { ...project.ssh, password } : { ...project.ssh };
+    } catch {
+      return project.ssh;
+    }
+  }
+
+  /**
+   * Resolve an optional password-auth session for ssh invoked by installed
+   * backends/installers (they receive this via `deps.resolveSshAuth`).
+   */
+  async function resolveRuntimeSshAuth(sshInput) {
+    try {
+      const normalized = normalizeSshAuth(sshInput);
+      const password = normalized.password || sshSecrets.get(sshTargetKey(normalized)) || null;
+      if (!password) return null;
+      return createSshAuthSession({
+        ssh: { ...normalized, password },
+        deps: { platform: safeDeps.platform || process.platform, fsImpl: safeDeps.fsImpl },
+        logger,
+      });
+    } catch (error) {
+      if (error instanceof BackendError) throw error;
+      return null;
+    }
   }
 
   function remoteInstallStatusSnapshot() {
@@ -902,6 +995,7 @@ export function createBackendManager(ctx, configInput, deps = {}) {
       startedAt: primary.startedAt,
       finishedAt: primary.finishedAt,
       updatedAt: now(),
+      prepare: cloneJson(prepareStatus),
     };
   }
 
@@ -1414,6 +1508,346 @@ export function createBackendManager(ctx, configInput, deps = {}) {
   }
 
   /**
+   * Test a remote SSH connection for the simplified UX.
+   * Password (if provided) is used through SSH_ASKPASS and kept in memory only.
+   * @param {string|object} ssh
+   */
+  async function testRemoteConnection(ssh) {
+    if (disposed) throw new BackendError('DISPOSED', 'CA 后端管理器已释放，无法连接');
+    const normalized = withRuntimeSshSecret(ssh);
+    const report = await testRemoteConnectionViaSsh(normalized, {
+      deps: sshExecDeps(),
+      logger,
+      signal: undefined,
+    });
+    recordSshPassword(normalized);
+    return report;
+  }
+
+  /**
+   * List remote sub-directories for the project directory picker.
+   * @param {string|object} ssh
+   * @param {{path?: string|null, home?: string|null}} [selection]
+   */
+  async function listRemoteDirs(ssh, selection = {}) {
+    if (disposed) throw new BackendError('DISPOSED', 'CA 后端管理器已释放，无法浏览');
+    const normalized = withRuntimeSshSecret(ssh);
+    const report = await listRemoteDirsViaSsh(normalized, selection, {
+      deps: sshExecDeps(),
+      logger,
+    });
+    recordSshPassword(normalized);
+    return report;
+  }
+
+  /**
+   * Create a minimal project from one directory (stored, not activated).
+   * Remote projects need `ssh` (and `home`, or a successful connection first).
+   *
+   * @param {{kind:'local'|'remote', directory:string, name?:string, ssh?:string|object, home?:string}} input
+   * @returns {Promise<{project: Record<string, any>, projects: Array<Record<string, any>>, activeProjectId: string|null}>}
+   */
+  async function createSimpleProject(input = {}) {
+    if (disposed) throw new BackendError('DISPOSED', 'CA 后端管理器已释放，无法创建项目');
+    if (!isPlainObject(input)) {
+      throw new BackendError('INVALID_ARGUMENT', 'createSimpleProject 需要对象参数');
+    }
+    const kind = input.kind;
+    if (kind !== 'local' && kind !== 'remote') {
+      throw new BackendError('INVALID_ARGUMENT', `kind 必须是 'local' 或 'remote'（当前 ${JSON.stringify(kind)}）`, {
+        field: 'kind',
+      });
+    }
+    let home = nonEmptyString(input.home) || null;
+    let sshInput = input.ssh;
+    let discoveredPython = nonEmptyString(input.python) || null;
+    if (kind === 'remote') {
+      const normalized = normalizeSshAuth(sshInput);
+      if (!normalized.host) {
+        throw new BackendError('INVALID_ARGUMENT', '远程项目必须提供 ssh.host', { field: 'ssh.host' });
+      }
+      if (!home || !discoveredPython) {
+        // One round trip discovers both the home directory and a usable
+        // Python (including an existing CA venv on the server).
+        try {
+          const connection = await testRemoteConnectionViaSsh(withRuntimeSshSecret(normalized), {
+            deps: sshExecDeps(),
+            logger,
+          });
+          if (!home) home = connection.home;
+          if (!discoveredPython && connection.python?.supported && connection.python.path) {
+            discoveredPython = connection.python.path;
+          }
+        } catch (connectionError) {
+          if (!home) throw connectionError;
+          logger.warn(
+            `[backend] 远程连接探测失败（继续使用已提供的 home）: ${connectionError?.message || connectionError}`,
+          );
+        }
+      }
+      if (!home) {
+        throw new BackendError('PREPARE_FAILED', '无法连接远程服务器（未获取到 home 目录）', {
+          hint: '请确认用户名/密码或密钥、主机地址与端口',
+        });
+      }
+      recordSshPassword(normalized);
+      sshInput = normalized;
+    }
+    const make = (options) => {
+      const project = buildSimpleProject({
+        kind,
+        directory: input.directory,
+        name: options?.name !== undefined ? options.name : input.name,
+        ssh: sshInput,
+        home,
+        stateDir: paths.stateDir,
+        slugSuffix: options?.slugSuffix,
+        now,
+        generateId: generateProjectId,
+      });
+      if (discoveredPython) project.python = discoveredPython;
+      return project;
+    };
+    let project = make();
+    if (projectState.projects.some((existing) => projectNameKey(existing.name) === projectNameKey(project.name))) {
+      project = make({ name: uniqueProjectName(projectState.projects, project.name) });
+    }
+    let suffix = 2;
+    while (projectState.projects.some((existing) => existing.db === project.db)) {
+      project = make({ name: project.name, slugSuffix: suffix });
+      suffix += 1;
+      if (suffix > 999) {
+        throw new BackendError('PROJECT_NAME_CONFLICT', `无法为目录 ${project.sourceRoot} 生成唯一数据库路径`);
+      }
+    }
+    projectState.projects.push(project);
+    try {
+      persistSettings();
+    } catch (error) {
+      projectState.projects.pop();
+      throw error;
+    }
+    logger.info(`[backend] 已创建项目 "${project.name}"（${project.backend}:${project.sourceRoot} → ${project.db}）`);
+    emit('projects', listProjects(), { reason: 'created-simple' });
+    return {
+      project: cloneJson(project),
+      projects: listProjects().projects,
+      activeProjectId: projectState.activeProjectId,
+    };
+  }
+
+  function getPrepareStatus() {
+    return cloneJson(prepareStatus);
+  }
+
+  function validatePrepareOptions(options = {}) {
+    if (!isPlainObject(options)) {
+      throw new BackendError('INVALID_ARGUMENT', 'prepare 参数必须是对象');
+    }
+    if (options.offline !== undefined && typeof options.offline !== 'boolean') {
+      throw new BackendError('INVALID_ARGUMENT', 'offline 必须是布尔值', { field: 'offline' });
+    }
+    const wheelhousePath = options.wheelhousePath === undefined ? undefined : nonEmptyString(options.wheelhousePath);
+    if (options.wheelhousePath !== undefined && !wheelhousePath) {
+      throw new BackendError('INVALID_ARGUMENT', 'wheelhousePath 必须是非空字符串', { field: 'wheelhousePath' });
+    }
+    return { offline: options.offline === true, wheelhousePath };
+  }
+
+  function requireProject(projectId) {
+    const id = nonEmptyString(projectId);
+    if (!id) throw new BackendError('INVALID_ARGUMENT', 'project id 不能为空', { field: 'id' });
+    const project = findProjectById(projectState.projects, id);
+    if (!project) throw new BackendError('PROJECT_NOT_FOUND', `项目不存在: ${id}`, { id });
+    return project;
+  }
+
+  function beginPrepareStatus(projectId, installScope) {
+    prepareAbort = new AbortController();
+    prepareStatus = {
+      state: 'running',
+      scope: 'prepare',
+      projectId,
+      installScope,
+      startedAt: now(),
+      finishedAt: null,
+      error: null,
+      result: null,
+    };
+    emit('prepare', cloneJson(prepareStatus));
+  }
+
+  /**
+   * Prepare a simple project in the background: install the backend if needed,
+   * fill the project's venv python, create the DB directory/file and start the
+   * backend. Progress is visible through `getInstallStatus()` (local/remote)
+   * and `getPrepareStatus()`.
+   *
+   * @param {string} projectId
+   * @param {{offline?: boolean, wheelhousePath?: string}} [options]
+   * @returns {{started: boolean, running: boolean, scope: 'prepare', projectId: string,
+   *            installScope: 'local'|'remote', startedAt: number}}
+   */
+  function startPrepareProject(projectId, options = {}) {
+    if (disposed) throw new BackendError('DISPOSED', 'CA 后端管理器已释放，无法准备项目');
+    const project = requireProject(projectId);
+    const prepareOptions = validatePrepareOptions(options);
+    if (preparePromise) {
+      return {
+        started: false,
+        running: true,
+        scope: 'prepare',
+        projectId: prepareStatus.projectId,
+        installScope: prepareStatus.installScope,
+        startedAt: prepareStatus.startedAt,
+      };
+    }
+    beginPrepareStatus(project.id, project.backend);
+    const promise = runPrepareProject(project.id, prepareOptions);
+    preparePromise = promise.catch(() => {}).finally(() => {
+      preparePromise = null;
+      prepareAbort = null;
+    });
+    return {
+      started: true,
+      running: true,
+      scope: 'prepare',
+      projectId: project.id,
+      installScope: project.backend,
+      startedAt: prepareStatus.startedAt,
+    };
+  }
+
+  /** Foreground prepare (resolves with the final result, rejects on failure). */
+  async function prepareProject(projectId, options = {}) {
+    if (disposed) throw new BackendError('DISPOSED', 'CA 后端管理器已释放，无法准备项目');
+    const project = requireProject(projectId);
+    const prepareOptions = validatePrepareOptions(options);
+    if (preparePromise) {
+      throw new BackendError('ALREADY_RUNNING', '项目正在准备中；请用 getInstallStatus/getPrepareStatus 轮询', {
+        projectId: prepareStatus.projectId,
+      });
+    }
+    beginPrepareStatus(project.id, project.backend);
+    const promise = runPrepareProject(project.id, prepareOptions);
+    preparePromise = promise.catch(() => {}).finally(() => {
+      preparePromise = null;
+      prepareAbort = null;
+    });
+    return promise;
+  }
+
+  async function runPrepareProject(projectId, prepareOptions) {
+    const project = requireProject(projectId);
+    const installScope = project.backend;
+    try {
+      const runtimeSsh = installScope === 'remote' ? runtimeSshForProject(project) : null;
+      let installResult = null;
+      const summary = getInstallSummary();
+      if (installScope === 'local') {
+        const existingPython =
+          project.python && isExecutableFile(project.python)
+            ? project.python
+            : summary.local.installed
+              ? summary.local.venvPython
+              : null;
+        if (!existingPython) {
+          installResult = await installLocal({
+            offline: prepareOptions.offline,
+            wheelhousePath: prepareOptions.wheelhousePath,
+          });
+        }
+        project.python = installResult?.venvPython || existingPython || project.python;
+        if (!project.python) {
+          throw new BackendError('PREPARE_FAILED', '本地 CA 后端安装后没有得到 venv python');
+        }
+      } else {
+        if (!project.python) {
+          try {
+            const connection = await testRemoteConnectionViaSsh(withRuntimeSshSecret(runtimeSsh), {
+              deps: sshExecDeps(),
+              logger,
+            });
+            if (connection.python?.supported && connection.python.path) {
+              project.python = connection.python.path;
+            }
+          } catch (connectionError) {
+            logger.warn(`[backend] 远程 Python 探测失败: ${connectionError?.message || connectionError}`);
+          }
+        }
+        const remoteSummary = summary.remote;
+        const alreadyInstalled = Boolean(remoteSummary && remoteSummary.installed && remoteSummary.venvPython);
+        if (!alreadyInstalled) {
+          installResult = await installRemote({
+            mode: 'wheel',
+            offline: prepareOptions.offline,
+            wheelhousePath: prepareOptions.wheelhousePath,
+            python: project.python || undefined,
+            ssh: runtimeSsh,
+          });
+        }
+        const after = installResult || getInstallSummary().remote || remoteSummary || {};
+        project.python = after.venvPython || remoteSummary?.venvPython || project.python;
+        project.caRepoPath = after.installDir || after.repoPath || remoteSummary?.installDir || project.caRepoPath;
+        if (!project.python || !project.caRepoPath) {
+          throw new BackendError('PREPARE_FAILED', '远程 CA 后端安装后没有得到 venv python / 安装目录');
+        }
+      }
+      // Create the DB parent dir and an empty SQLite DB before starting serve.
+      await ensureDefaultDirs(project, { deps: sshExecDeps(), logger, ssh: runtimeSsh });
+      const updated = normalizeProject(
+        { ...project, id: project.id },
+        { now, generateId: () => project.id, previous: project },
+      );
+      const index = projectState.projects.findIndex((entry) => entry.id === project.id);
+      if (index >= 0) projectState.projects[index] = updated;
+      persistSettings();
+      const activated = await activateProject(project.id);
+      prepareStatus = {
+        state: 'succeeded',
+        scope: 'prepare',
+        projectId: project.id,
+        installScope,
+        startedAt: prepareStatus.startedAt,
+        finishedAt: now(),
+        error: null,
+        result: {
+          projectId: project.id,
+          installed: Boolean(installResult),
+          installScope,
+          status: activated.status,
+          version: installResult?.version || activated.status.version || null,
+        },
+      };
+      emit('prepare', cloneJson(prepareStatus));
+      logger.info(`[backend] 项目 "${updated.name}" 准备完成（${installScope}，install=${Boolean(installResult)}）`);
+      return {
+        ok: true,
+        project: cloneJson(updated),
+        config: activated.config,
+        status: activated.status,
+        installed: Boolean(installResult),
+        installScope,
+      };
+    } catch (rawError) {
+      const normalized = normalizeError(rawError, 'PREPARE_FAILED', '项目准备失败');
+      prepareStatus = {
+        state: 'failed',
+        scope: 'prepare',
+        projectId: project?.id || null,
+        installScope,
+        startedAt: prepareStatus.startedAt,
+        finishedAt: now(),
+        error: normalized.toJSON(),
+        result: null,
+      };
+      emit('prepare', cloneJson(prepareStatus));
+      logger.error(`[backend] 项目准备失败：${normalized.message}`);
+      throw normalized;
+    }
+  }
+
+  /**
    * Persist sparse user settings and resolve them. While a backend is running
    * the new settings only take effect on the next start/restart; the return
    * value says so via `restartRequired`.
@@ -1518,6 +1952,12 @@ export function createBackendManager(ctx, configInput, deps = {}) {
     startRemoteInstall,
     getInstallStatus,
     getInstallSummary,
+    testRemoteConnection,
+    listRemoteDirs,
+    createSimpleProject,
+    startPrepareProject,
+    prepareProject,
+    getPrepareStatus,
     listDatabases,
     useDatabase,
     listProjects,

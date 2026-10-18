@@ -50,6 +50,10 @@ export const RPC_ENDPOINTS = Object.freeze([
   'projects.save',
   'projects.remove',
   'projects.activate',
+  'projects.createSimple',
+  'projects.prepare',
+  'remote.connect',
+  'remote.browse',
   'ui.selftest.pending',
   'ui.selftest.report',
   'tasks.start',
@@ -78,6 +82,8 @@ const MAX_PROJECT_ID_LENGTH = 256
 const SELFTEST_REPORT_MAX_BYTES = 512 * 1024
 const MAX_INSTALL_PATH_LENGTH = 4096
 const MAX_PYTHON_ARG_LENGTH = 1024
+const MAX_PASSWORD_LENGTH = 1024
+const MAX_REMOTE_PATH_LENGTH = 4096
 
 /** Stable RPC error carrying a machine-readable code. */
 export class RpcError extends Error {
@@ -311,6 +317,23 @@ function normalizeInstallScope(primary, fallback) {
   }
 }
 
+/** Normalize a prepare snapshot (`getPrepareStatus()` / getInstallStatus().prepare). */
+function normalizePrepareStatus(value) {
+  if (!isPlainObject(value)) return null
+  const safe = jsonSafe(value) ?? {}
+  return {
+    state: typeof safe.state === 'string' ? safe.state : 'idle',
+    projectId: typeof safe.projectId === 'string' ? safe.projectId : null,
+    installScope:
+      safe.installScope === 'local' || safe.installScope === 'remote' ? safe.installScope : null,
+    startedAt: Number.isFinite(Number(safe.startedAt)) ? Number(safe.startedAt) : null,
+    finishedAt: Number.isFinite(Number(safe.finishedAt)) ? Number(safe.finishedAt) : null,
+    error: isPlainObject(safe.error) ? safe.error : safe.error ?? null,
+    result: safe.result ?? null,
+    ...(typeof safe.scope === 'string' ? { scope: safe.scope } : {}),
+  }
+}
+
 /** Legacy top-level aliases (old clients read value.status/state/steps/logs). */
 function installScopeAliases(scope) {
   return {
@@ -500,10 +523,13 @@ function selftestPaths(backend, config) {
 /** Normalize a project list/save/remove/activate manager result. */
 function projectPayload(result) {
   const safe = isPlainObject(result) ? jsonSafe(result) ?? {} : {}
+  const mask = (value) => (isPlainObject(value) ? publicConfig(value) ?? {} : null)
   return {
     ...safe,
-    project: isPlainObject(safe.project) ? safe.project : null,
-    projects: Array.isArray(safe.projects) ? safe.projects.slice(0, 500) : [],
+    project: mask(safe.project),
+    projects: Array.isArray(safe.projects)
+      ? safe.projects.slice(0, 500).map((project) => mask(project)).filter(Boolean)
+      : [],
     activeProjectId:
       typeof safe.activeProjectId === 'string' && safe.activeProjectId.length > 0
         ? safe.activeProjectId
@@ -606,7 +632,207 @@ function validateSsh(ssh) {
       fail('INVALID_ARGUMENT', 'payload.ssh.port must be an integer between 1 and 65535')
     }
   }
+  if (ssh.password !== undefined && ssh.password !== null) {
+    if (typeof ssh.password !== 'string') {
+      fail('INVALID_ARGUMENT', 'payload.ssh.password must be a string')
+    }
+    if (ssh.password.length > MAX_PASSWORD_LENGTH) {
+      fail('INVALID_ARGUMENT', `payload.ssh.password is too long (maximum ${MAX_PASSWORD_LENGTH} characters)`)
+    }
+    if (ssh.password.includes('\0')) {
+      fail('INVALID_ARGUMENT', 'payload.ssh.password must not contain NUL characters')
+    }
+  }
   return jsonSafe(ssh)
+}
+
+/** Remote/auth error codes that the UI should see verbatim (not BACKEND_ERROR). */
+const REMOTE_ERROR_CODES = new Set([
+  'AUTH_FAILED',
+  'SSH_UNREACHABLE',
+  'SSH_AUTH_FAILED',
+  'SSH_HOST_UNKNOWN',
+  'HOST_KEY',
+  'HOST_KEY_UNKNOWN',
+  'HOST_KEY_CHANGED',
+  'HOST_KEY_VERIFICATION_FAILED',
+  'PASSWORD_AUTH_UNSUPPORTED_ON_WINDOWS',
+  'REMOTE_PATH_NOT_FOUND',
+  'PATH_OUTSIDE_HOME',
+  'DIR_NOT_FOUND',
+  'DIR_NOT_A_DIRECTORY',
+  'DIR_NOT_READABLE',
+  'PROBE_FAILED',
+])
+
+/** Normalize a remote/auth failure; secrets never reach errors or responses. */
+function remoteFailure(error) {
+  if (!error || typeof error !== 'object' || typeof error.code !== 'string') return error
+  const details = publicConfig(detailsOf(error.details)) ?? {}
+  const message = typeof error.message === 'string' ? error.message : String(error.code)
+  if (error.code === 'INVALID_ARGUMENT' || error.code === 'CONFIG_INVALID') {
+    return new RpcError('INVALID_ARGUMENT', message, details)
+  }
+  if (error.code === 'DB_NOT_FOUND' || error.code === 'PROJECT_NOT_FOUND' || error.code === 'NOT_FOUND') {
+    return new RpcError('DB_NOT_FOUND', message, details)
+  }
+  if (REMOTE_ERROR_CODES.has(error.code) || error.code.startsWith('SSH_')) {
+    return new RpcError(error.code, message, details)
+  }
+  return new RpcError('BACKEND_ERROR', message, { ...details, backendCode: error.code })
+}
+
+/** Build an RpcError from a structured `{ok:false,error}` remote report. */
+function remoteReportFailure(errorLike) {
+  const safe = isPlainObject(errorLike) ? jsonSafe(errorLike) ?? {} : {}
+  return remoteFailure({
+    code: typeof safe.code === 'string' ? safe.code : 'BACKEND_ERROR',
+    message: typeof safe.message === 'string' ? safe.message : 'remote operation failed',
+    details: safe.details,
+  })
+}
+
+/** SSH auth mode for display (never the credential itself). */
+function sshAuthMode(ssh) {
+  if (isPlainObject(ssh)) {
+    if (typeof ssh.password === 'string' && ssh.password.length > 0) return 'password'
+    if (typeof ssh.keyPath === 'string' || typeof ssh.identityFile === 'string') return 'key'
+  }
+  return 'agent'
+}
+
+/** Remote directory path validation (POSIX absolute path, no escapes). */
+function validateRemotePath(payload) {
+  const value = payload.path
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string') fail('INVALID_ARGUMENT', 'payload.path must be a string')
+  const text = value.trim()
+  if (text.length === 0) return undefined
+  if (text.length > MAX_REMOTE_PATH_LENGTH) {
+    fail('INVALID_ARGUMENT', `payload.path is too long (maximum ${MAX_REMOTE_PATH_LENGTH} characters)`)
+  }
+  if (/[\0\r\n]/.test(text)) {
+    fail('INVALID_ARGUMENT', 'payload.path must not contain NUL or newline characters')
+  }
+  if (!text.startsWith('/')) {
+    fail('INVALID_ARGUMENT', 'payload.path must be an absolute remote path (start with "/")')
+  }
+  if (text.split('/').includes('..')) {
+    fail('INVALID_ARGUMENT', 'payload.path must not contain ".." segments')
+  }
+  return text
+}
+
+/** Required absolute directory path for simple projects. */
+function requiredDirectoryPath(payload) {
+  const value = payload.directory
+  if (value === undefined || value === null) {
+    fail('INVALID_ARGUMENT', 'payload.directory is required')
+  }
+  if (typeof value !== 'string') fail('INVALID_ARGUMENT', 'payload.directory must be a string')
+  const text = value.trim()
+  if (text.length === 0) fail('INVALID_ARGUMENT', 'payload.directory must not be empty')
+  if (text.length > MAX_REMOTE_PATH_LENGTH) {
+    fail('INVALID_ARGUMENT', `payload.directory is too long (maximum ${MAX_REMOTE_PATH_LENGTH} characters)`)
+  }
+  if (/[\0\r\n]/.test(text)) {
+    fail('INVALID_ARGUMENT', 'payload.directory must not contain NUL or newline characters')
+  }
+  if (!path.isAbsolute(text)) {
+    fail('INVALID_ARGUMENT', 'payload.directory must be an absolute path')
+  }
+  if (text.split(/[\\/]/).includes('..')) {
+    fail('INVALID_ARGUMENT', 'payload.directory must not contain ".." segments')
+  }
+  return text
+}
+
+/** Normalize a remote `platform` value (string or structured object). */
+function normalizeRemotePlatform(value) {
+  if (typeof value === 'string') return value
+  if (!isPlainObject(value)) return null
+  const safe = jsonSafe(value) ?? {}
+  return {
+    os: typeof safe.os === 'string' ? safe.os : null,
+    arch: typeof safe.arch === 'string' ? safe.arch : null,
+    platformId: typeof safe.platformId === 'string' ? safe.platformId : null,
+    label: typeof safe.label === 'string' ? safe.label : null,
+  }
+}
+
+/** Normalize `remote.connect` into the UI contract. */
+function normalizeRemoteConnect(result) {
+  const safe = isPlainObject(result) ? jsonSafe(result) ?? {} : {}
+  if (safe.ok === false) throw remoteReportFailure(safe.error)
+  const pythonRaw = isPlainObject(safe.python) ? safe.python : null
+  const python = pythonRaw
+    ? {
+        path:
+          typeof pythonRaw.path === 'string'
+            ? pythonRaw.path
+            : typeof pythonRaw.executable === 'string'
+              ? pythonRaw.executable
+              : null,
+        version: typeof pythonRaw.version === 'string' ? pythonRaw.version : null,
+        versionText: typeof pythonRaw.versionText === 'string' ? pythonRaw.versionText : null,
+        supported: pythonRaw.supported === true,
+        system: typeof pythonRaw.system === 'string' ? pythonRaw.system : null,
+        candidates: Array.isArray(pythonRaw.candidates)
+          ? pythonRaw.candidates
+              .filter((candidate) => isPlainObject(candidate))
+              .slice(0, 16)
+              .map((candidate) => ({
+                path: typeof candidate.path === 'string' ? candidate.path : null,
+                version: typeof candidate.version === 'string' ? candidate.version : null,
+                supported: candidate.supported === true,
+              }))
+          : [],
+      }
+    : null
+  const caRaw = isPlainObject(safe.ca) ? safe.ca : null
+  const ca = caRaw
+    ? {
+        installed: caRaw.installed === true,
+        version: typeof caRaw.version === 'string' ? caRaw.version : null,
+      }
+    : { installed: false, version: null }
+  return {
+    ok: true,
+    authMethod: typeof safe.authMethod === 'string' ? safe.authMethod : null,
+    target: typeof safe.target === 'string' ? safe.target : null,
+    home: typeof safe.home === 'string' ? safe.home : null,
+    platform: normalizeRemotePlatform(safe.platform),
+    python,
+    ca,
+  }
+}
+
+/** Normalize `remote.browse` entries into `{name,path}` rows. */
+function normalizeRemoteBrowse(result) {
+  const safe = isPlainObject(result) ? jsonSafe(result) ?? {} : {}
+  if (safe.ok === false) throw remoteReportFailure(safe.error)
+  const basePath = typeof safe.path === 'string' ? safe.path.replace(/\/+$/, '') : ''
+  const entries = (Array.isArray(safe.entries) ? safe.entries : [])
+    .filter((entry) => isPlainObject(entry))
+    .slice(0, 2000)
+    .map((entry) => ({
+      name: typeof entry.name === 'string' ? entry.name : '',
+      path:
+        typeof entry.path === 'string' && entry.path.length > 0
+          ? entry.path
+          : basePath && typeof entry.name === 'string'
+            ? `${basePath}/${entry.name}`
+            : '',
+    }))
+    .filter((entry) => entry.name.length > 0 && entry.path.length > 0)
+  return {
+    path: typeof safe.path === 'string' ? safe.path : null,
+    parent: typeof safe.parent === 'string' ? safe.parent : null,
+    home: typeof safe.home === 'string' ? safe.home : null,
+    isHome: safe.isHome === true,
+    authMethod: typeof safe.authMethod === 'string' ? safe.authMethod : null,
+    entries,
+  }
 }
 
 /** Redact credential-like ssh fields for status display. */
@@ -1131,6 +1357,21 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
         local: localInstallState,
         remote: installState,
       })
+      // Preparation progress (install + start) is exposed additively so the
+      // UI can show one prepare status without a separate endpoint.
+      let prepare = isPlainObject(managerStatus?.prepare)
+        ? normalizePrepareStatus(managerStatus.prepare)
+        : null
+      if (prepare === null) {
+        const readPrepare = backendMethod(backend, ['getPrepareStatus'])
+        if (readPrepare !== null) {
+          try {
+            prepare = normalizePrepareStatus(await readPrepare())
+          } catch {
+            prepare = null
+          }
+        }
+      }
       const selected =
         scope === 'local' ? merged.local : scope === 'remote' ? merged.remote : merged.aggregate
       return {
@@ -1140,6 +1381,7 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
         scope,
         local: merged.local,
         remote: merged.remote,
+        prepare,
       }
     },
 
@@ -1323,6 +1565,152 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
         project: safe.project,
         config: publicConfig(safe.config ?? backend.config ?? config) ?? {},
         status: safeStatus(backend),
+      }
+    },
+
+    async 'remote.connect'(payload) {
+      if (payload.ssh === undefined || payload.ssh === null) {
+        fail('INVALID_ARGUMENT', 'payload.ssh is required (host, user and a password or key)')
+      }
+      const ssh = validateSsh(payload.ssh)
+      const connect = backendMethod(backend, [
+        'testRemoteConnection',
+        'connectRemote',
+        'remoteConnect',
+        'probeRemoteConnection',
+      ])
+      if (connect === null) {
+        fail('BACKEND_UNSUPPORTED', 'Remote connection testing is not available in this CA backend build.')
+      }
+      let result
+      try {
+        result = await connect(ssh)
+      } catch (error) {
+        throw remoteFailure(error)
+      }
+      const value = normalizeRemoteConnect(result)
+      return { ...value, auth: value.authMethod ?? sshAuthMode(ssh) }
+    },
+
+    async 'remote.browse'(payload) {
+      if (payload.ssh === undefined || payload.ssh === null) {
+        fail('INVALID_ARGUMENT', 'payload.ssh is required (host, user and a password or key)')
+      }
+      const ssh = validateSsh(payload.ssh)
+      const targetPath = validateRemotePath(payload)
+      const browse = backendMethod(backend, ['listRemoteDirs', 'browseRemoteDirs', 'remoteListDirs'])
+      if (browse === null) {
+        fail('BACKEND_UNSUPPORTED', 'Remote directory browsing is not available in this CA backend build.')
+      }
+      let result
+      try {
+        result = await browse(ssh, targetPath === undefined ? {} : { path: targetPath })
+      } catch (error) {
+        throw remoteFailure(error)
+      }
+      return normalizeRemoteBrowse(result)
+    },
+
+    async 'projects.createSimple'(payload) {
+      const kindRaw = optionalString(payload, 'kind', { required: true, maxLength: 16 }).toLowerCase()
+      if (kindRaw !== 'local' && kindRaw !== 'remote') {
+        fail('INVALID_ARGUMENT', 'payload.kind must be "local" or "remote"')
+      }
+      const directory = requiredDirectoryPath(payload)
+      const name = optionalString(payload, 'name', { maxLength: 256 })
+      let ssh
+      if (kindRaw === 'remote') {
+        if (payload.ssh === undefined || payload.ssh === null) {
+          fail('INVALID_ARGUMENT', 'payload.ssh is required for kind "remote"')
+        }
+        ssh = validateSsh(payload.ssh)
+      }
+      const create = backendMethod(backend, ['createSimpleProject'])
+      if (create === null) {
+        fail(
+          'BACKEND_UNSUPPORTED',
+          'Creating simple projects is not available in this CA backend build; check the CA backend page.',
+        )
+      }
+      const input = { kind: kindRaw, directory }
+      if (name !== undefined) input.name = name
+      if (ssh !== undefined) input.ssh = ssh
+      let result
+      try {
+        result = await create(input)
+      } catch (error) {
+        throw backendMutationFailure(error)
+      }
+      const safe = isPlainObject(result) ? jsonSafe(result) ?? {} : {}
+      const project = isPlainObject(safe.project)
+        ? safe.project
+        : isPlainObject(safe) && typeof safe.id === 'string'
+          ? safe
+          : null
+      const out = projectPayload({
+        project,
+        projects: safe.projects,
+        activeProjectId: safe.activeProjectId,
+      })
+      return {
+        project: out.project,
+        projects: out.projects,
+        activeProjectId: out.activeProjectId,
+      }
+    },
+
+    async 'projects.prepare'(payload) {
+      const id = optionalString(payload, 'id', {
+        required: true,
+        maxLength: MAX_PROJECT_ID_LENGTH,
+      })
+      const offline = optionalBool(payload, 'offline')
+      const wheelhousePath = normalizeInstallValue('wheelhousePath', payload.wheelhousePath)
+      const startPrepare = backendMethod(backend, ['startPrepareProject', 'prepareProject'])
+      if (startPrepare === null) {
+        fail(
+          'BACKEND_UNSUPPORTED',
+          'Preparing a project is not available in this CA backend build; configure the backend on the CA backend page.',
+        )
+      }
+      const options = {}
+      if (offline !== undefined) options.offline = offline
+      if (wheelhousePath !== undefined) options.wheelhousePath = wheelhousePath
+      let result
+      try {
+        result = startPrepare(id, options)
+      } catch (error) {
+        throw backendMutationFailure(error)
+      }
+      const hint =
+        'Poll backend.installStatus ({"scope":"local"} or {"scope":"remote"}) and status until the backend is running.'
+      if (result && typeof result.then === 'function') {
+        // Background preparation: failures are surfaced through installStatus,
+        // so never let the promise reject unhandled here.
+        result.then(
+          () => {},
+          () => {},
+        )
+        return {
+          started: true,
+          scope: 'prepare',
+          projectId: id,
+          offline: offline === true,
+          hint,
+        }
+      }
+      const safe = isPlainObject(result) ? jsonSafe(result) ?? {} : {}
+      const installScope =
+        safe.installScope === 'local' || safe.installScope === 'remote' ? safe.installScope : null
+      return {
+        ...safe,
+        started: safe.started !== false,
+        scope: 'prepare',
+        projectId: id,
+        offline: offline ?? safe.offline ?? null,
+        hint: installScope
+          ? `Poll backend.installStatus ({"scope":"${installScope}"}) and status until the backend is running.`
+          : hint,
       }
     },
 
