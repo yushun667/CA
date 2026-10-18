@@ -8,7 +8,7 @@
 - `server_bootstrap.sh`：源码服务器部署校验（venv/editable/pytest/MCP stdio 冒烟）；可传已有 DB，否则用合成小样建临时库；输出 `SERVER_OK`。
 - `check_artifacts.py`：CI/交付前的产物一致性检查（双语文档 i18n SHA-256、agent_eval JSON、benchmark results JSON）。
 - `verify_shard_mcp.py`：分片 DB 的 MCP 验收（stdio/HTTP、15 工具、ensure_deep 首次/命中延迟、deep_status）；输出 JSON。
-- `sample_candidates.py`：OH `call_targets` 候选边分层抽样（totals/samples/对照/graph 集成/TU 健康度），供 analyze 精度复核。
+- `sample_candidates.py`：OH `call_targets` 候选边按 kind/reason 抽样（totals/samples/对照/graph 集成/TU 健康度），供 analyze 精度复核。
 
 ## 局部规则
 

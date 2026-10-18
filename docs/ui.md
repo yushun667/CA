@@ -125,8 +125,8 @@ What you can inspect:
 - **Call graph** — SVG traversal (direction `both`/forward/reverse, depth 1–6).
   Edge colours encode type: direct calls solid grey, indirect callback candidates
   purple dashed, virtual candidates teal dashed, cycles red. Candidate edges are
-  possible targets for runtime dispatch; the UI does not show a probability or
-  confidence number. Direct calls remain deterministic. **Single-clicking** a node (or pressing Enter on it)
+  possible targets for runtime dispatch; the UI shows no score or ranking.
+  Direct calls remain deterministic. **Single-clicking** a node (or pressing Enter on it)
   opens that function's **complete source in the right panel** without leaving
   the page: line numbers, a `file:line` header, the owning shard badge,
   independent scrolling, plus Close and Open-detail buttons; when the node's
@@ -148,8 +148,7 @@ What you can inspect:
 - **Stats** — table row counts, database size, schema/SQLite versions, callback
   statistics and, in federated mode, per-shard size/schema/counts.
 - **Callbacks** — function-pointer registration facts (object path, target,
-  registration kind, confidence, module); filter by object-path prefix, field or
-  module.
+  registration kind, module); filter by object-path prefix, field or module.
 - Keyboard: `/` focuses search, `Esc` clears it.
 
 Both code viewers share a local C/C++ tokenizer (`highlight.js`): keywords,
@@ -215,7 +214,7 @@ All endpoints return the same envelope and are `GET`-only:
 | `GET /api/callees` | `symbol` (required), `limit` (≤2000), `offset` | merged direct + candidate callee edges |
 | `GET /api/graph` | `symbol`, `direction=both\|forward\|reverse`, `depth=0..12`, `limit` | normalized graph: `root, direction, depth, nodes[], edges[], cycles, truncated, stats, found` |
 | `GET /api/stats` | — | table counts, `db_bytes`, schema version, `callbacks`, federated `shards` |
-| `GET /api/callbacks` | `path` (prefix), `field`, `module`, `kind`, `limit`, `offset` | registration facts (target, evidence, confidence) |
+| `GET /api/callbacks` | `path` (prefix), `field`, `module`, `kind`, `limit`, `offset` | registration facts (target, evidence, registration kind) |
 | `GET /api/source` | `symbol` (required), `context` (0–10, default 3) | read-only source window: `{symbol, function{id,name,qualified_name,kind,file,line,end_line,signature}, file, language, start, end, total_lines, function_start, function_end, context, truncated, lines[{line,text}], shard, path, repo_root}` |
 | `GET /api/cfg` | `symbol` (required) | read-only control-flow graph: `{symbol, function{id,name,qualified_name,kind,file,line,end_line}, deep_ready, shard, federated, blocks[], edges[], branches[], truncated, stats}`; blocks carry `index/kind/terminator/line/end_line/statement_count`, branch annotations (`condition`, `branch_kind`, `true_block`, `false_block`) and `is_entry`/`is_exit`; edges carry a display `label` (`true`/`false` for branch edges) |
 | `GET /api/branches`, `/api/assignments`, `/api/returns`, `/api/resources` | `symbol` (required) | per-function fact rows (additive convenience endpoints) |

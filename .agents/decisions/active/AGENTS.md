@@ -10,5 +10,6 @@
 - 2026-10-18-openharmony-first-strategy.md、2026-10-18-openharmony-first-strategy.zh.md、2026-10-18-openharmony-first-strategy.i18n.yaml
 - 2026-10-18-readonly-web-ui.md、2026-10-18-readonly-web-ui.zh.md、2026-10-18-readonly-web-ui.i18n.yaml
 - 2026-10-18-remove-ai-explain.md、2026-10-18-remove-ai-explain.zh.md、2026-10-18-remove-ai-explain.i18n.yaml
+- 2026-10-18-remove-confidence.md、2026-10-18-remove-confidence.zh.md、2026-10-18-remove-confidence.i18n.yaml
 - 2026-10-18-unified-serve-backend.md、2026-10-18-unified-serve-backend.zh.md、2026-10-18-unified-serve-backend.i18n.yaml
 - 2026-10-18-virtual-dispatch.md、2026-10-18-virtual-dispatch.zh.md、2026-10-18-virtual-dispatch.i18n.yaml

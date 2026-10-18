@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: cross-tu-callbacks.md
-  sha256: 797a5730dd81aca31021dda2ecaf1a9dbacba08b265aabd619a0e277d7066f45
+  sha256: 7038faaa0c208933b97dcdb66af1782de5e209f861ef599e2a4e8cfef52b645a
 zh:
   file: cross-tu-callbacks.zh.md
-  sha256: ec4cb548637c45b29eec2c0115e77a2215a4fae6842ed10cb099c7fe7b13f897
+  sha256: 322f7b479cdb3386b725ffd3036c5235dcabbef54dc08d795cd5fe99f2f40e6e

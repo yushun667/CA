@@ -62,9 +62,8 @@ returns:
 
 - `ca query callees fn:6e2268c6d1c202d014c3f31e --db camera.db --json`:
   37 rows = 8 direct call edges (including direct virtual `Executing`, kept with
-  `source="call"`, confidence 1.0) + **29 `virtual_candidate` edges**
-  (27 depth-1 confidence 0.6, 2 depth-2 confidence 0.5) across 10 different TU
-  files (`video_process_command.cpp`, `photo_command.cpp`,
+  `source="call"`) + **29 `virtual_candidate` edges** (27 depth-1, 2 depth-2)
+  across 10 different TU files (`video_process_command.cpp`, `photo_command.cpp`,
   `notify_video_job_command.cpp`, `service_died_command.cpp`, ...).
 - reverse check `ca query callers <override-id> --db camera.db`: the override
   `Executing` (video_process_command.cpp:45) reports 1 `virtual_candidate`
@@ -82,17 +81,18 @@ virtual call sites, **3,784 candidate edges** for 1,531 calls (20%), depth1
 3,739 / depth2 45; only 201 edges (5.3%) are test/gtest-related. dsoftbus-only
 materialised `call_targets` are mostly gtest (`TestBody`→`what`) because its
 domain virtuals are rare; query-time merging now surfaces domain candidates as
-well. Confidence tiers: direct override 0.6, depth-2 0.5, depth-3 0.45; each
-candidate carries `reason`/`source="virtual_candidate"` and direct edges are
-never replaced.
+well. Every known override within depth ≤3 is included in the possible-target
+set; candidates carry `reason`/`source="virtual_candidate"` with override
+depth/relation as evidence, and direct edges are never replaced. Candidates are
+not ranked or scored.
 
 ## Registration-based indirect calls
 
 dsoftbus `NetBuilderMessageHandler`
 (`core/bus_center/lnn/net_builder/src/lnn_net_builder_process.c:893`) dispatches
 through the global table at line 906 (`g_messageProcessor[msg->what]`). The
-graph/query returns **16 `indirect_candidate` edges** with confidence 0.65 and
-the registration reason (e.g. `ProcessDeviceVerifyPass`, `ProcessMasterElect`,
+graph/query returns **16 `indirect_candidate` edges** with the registration
+reason (e.g. `ProcessDeviceVerifyPass`, `ProcessMasterElect`,
 `ProcessSetReSyncDeviceName`, ...); the direct call edges remain the
 `HiLogPrint`/`__builtin_strrchr` calls. This validates the registration-table
 path; pointer arithmetic/dynamic indices remain heuristic and candidate-only.

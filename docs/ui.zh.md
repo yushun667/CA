@@ -117,8 +117,8 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
 - **返回 / 资源 / findings** —— CFG 与数据流分析提取的深析事实及位置。
 - **统计** —— 表行数、数据库大小、schema/SQLite 版本、回调统计；联邦模式下还有
   每个 shard 的大小/schema/计数。
-- **回调** —— 函数指针注册事实（object path、目标函数、注册类型、confidence、
-  module）；可按 object path 前缀、字段或 module 过滤。
+- **回调** —— 函数指针注册事实（object path、目标函数、注册类型、module）；
+  可按 object path 前缀、字段或 module 过滤。
 - 键盘：`/` 聚焦搜索框，`Esc` 清空。
 
 两个代码区共用本地 C/C++ tokenizer（`highlight.js`）：关键字、类型、注释（含跨行
@@ -173,7 +173,7 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
 | `GET /api/callees` | `symbol`（必填）、`limit`（≤2000）、`offset` | 合并后的直接 + 候选被调用者边 |
 | `GET /api/graph` | `symbol`、`direction=both\|forward\|reverse`、`depth=0..12`、`limit` | 规范化图：`root, direction, depth, nodes[], edges[], cycles, truncated, stats, found` |
 | `GET /api/stats` | — | 表计数、`db_bytes`、schema 版本、`callbacks`、联邦 `shards` |
-| `GET /api/callbacks` | `path`（前缀）、`field`、`module`、`kind`、`limit`、`offset` | 注册事实（目标、evidence、confidence） |
+| `GET /api/callbacks` | `path`（前缀）、`field`、`module`、`kind`、`limit`、`offset` | 注册事实（目标、evidence、注册类型） |
 | `GET /api/source` | `symbol`（必填）、`context`（0–10，默认 3） | 只读源码窗口：`{symbol, function{id,name,qualified_name,kind,file,line,end_line,signature}, file, language, start, end, total_lines, function_start, function_end, context, truncated, lines[{line,text}], shard, path, repo_root}` |
 | `GET /api/cfg` | `symbol`（必填） | 只读控制流图：`{symbol, function{id,name,qualified_name,kind,file,line,end_line}, deep_ready, shard, federated, blocks[], edges[], branches[], truncated, stats}`；blocks 含 `index/kind/terminator/line/end_line/statement_count`、分支标注（`condition`、`branch_kind`、`true_block`、`false_block`）与 `is_entry`/`is_exit`；edges 含展示用 `label`（分支边为 `true`/`false`） |
 | `GET /api/branches`、`/api/assignments`、`/api/returns`、`/api/resources` | `symbol`（必填） | 按函数的事实行（附加的便捷端点） |

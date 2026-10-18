@@ -3,9 +3,9 @@
 
 Produces the JSON layout agreed with the analyze owner:
 
-* ``totals``: row count, kind distribution, confidence buckets, top caller dirs;
-* ``samples``: stratified indirect-candidate sample (per confidence bucket) plus
-  one sample per other kind, with caller/callee context and reason categories;
+* ``totals``: row count, kind distribution, reason categories, top caller dirs;
+* ``samples``: indirect-candidate sample stratified by reason/evidence category
+  plus one sample per other kind, with caller/callee context;
 * ``direct_control``: indirect-call callers and their candidate-edge coverage;
 * ``graph_integration``: ``ca graph`` JSON/DOT fragments showing candidate edges
   (plus one MCP ``graph`` check when ``--repo/--compdb`` are given);
@@ -36,19 +36,6 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIDENCE_BUCKETS = (
-    ("<0.4", 0.0, 0.4),
-    ("0.4-0.6", 0.4, 0.6),
-    ("0.6-0.8", 0.6, 0.8),
-    (">=0.8", 0.8, 1.0001),
-)
-
-
-def _bucket(confidence: float) -> str:
-    for name, low, high in CONFIDENCE_BUCKETS:
-        if low <= confidence < high:
-            return name
-    return ">=0.8"
 
 
 def _connect(db: str) -> sqlite3.Connection:
@@ -91,41 +78,14 @@ def _sample_rows(
     kinds: list[str],
     per_kind: int,
     seed: int,
-    per_bucket: int | None = None,
 ) -> dict[str, list[sqlite3.Row]]:
     rng = random.Random(seed)
     selected: dict[str, list[sqlite3.Row]] = defaultdict(list)
-    if "indirect_candidate" in kinds:
+    for kind in kinds:
         rows = connection.execute(
-            "SELECT * FROM call_targets WHERE kind='indirect_candidate' ORDER BY call_id"
+            "SELECT * FROM call_targets WHERE kind=? ORDER BY call_id", (kind,)
         ).fetchall()
-        by_bucket: dict[str, list[sqlite3.Row]] = defaultdict(list)
-        for row in rows:
-            by_bucket[_bucket(float(row["confidence"] or 0.0))].append(row)
-        target = max(
-            1,
-            per_bucket
-            if per_bucket is not None
-            else per_kind // max(1, len([bucket for bucket in by_bucket if by_bucket[bucket]])),
-        )
-        for bucket in sorted(by_bucket):
-            bucket_rows = by_bucket[bucket]
-            picked = rng.sample(bucket_rows, min(target, len(bucket_rows)))
-            for row in picked:
-                selected["indirect_candidate"].append(row)
-        for kind in kinds:
-            if kind == "indirect_candidate":
-                continue
-            rows = connection.execute(
-                "SELECT * FROM call_targets WHERE kind=? ORDER BY call_id", (kind,)
-            ).fetchall()
-            selected[kind].extend(rng.sample(rows, min(per_kind, len(rows))))
-    else:
-        for kind in kinds:
-            rows = connection.execute(
-                "SELECT * FROM call_targets WHERE kind=? ORDER BY call_id", (kind,)
-            ).fetchall()
-            selected[kind].extend(rng.sample(rows, min(per_kind, len(rows))))
+        selected[kind].extend(rng.sample(rows, min(per_kind, len(rows))))
     return selected
 
 
@@ -167,7 +127,6 @@ def _sample_entry(connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str,
         "callee_file": (callee["file"] if callee else ""),
         "callee_line": (callee["line"] if callee else 0),
         "kind": row["kind"],
-        "confidence": float(row["confidence"] or 0.0),
         "reason": reason,
         "reason_category": _reason_category(reason),
         "caller_indirect_sites": indirect_sites,
@@ -185,9 +144,9 @@ def _totals(connection: sqlite3.Connection) -> dict[str, Any]:
             "SELECT kind, count(*) AS count FROM call_targets GROUP BY kind ORDER BY count DESC"
         )
     }
-    buckets = Counter()
-    for row in connection.execute("SELECT confidence FROM call_targets"):
-        buckets[_bucket(float(row["confidence"] or 0.0))] += 1
+    reasons = Counter()
+    for row in connection.execute("SELECT reason FROM call_targets"):
+        reasons[_reason_category(row["reason"] or "")] += 1
     modules = Counter()
     for row in connection.execute(
         "SELECT f.file AS file, count(*) AS count FROM call_targets t"
@@ -208,7 +167,7 @@ def _totals(connection: sqlite3.Connection) -> dict[str, Any]:
         },
         "call_targets": total,
         "kinds": kinds,
-        "confidence_buckets": {name: buckets.get(name, 0) for name, _low, _high in CONFIDENCE_BUCKETS},
+        "reason_categories": dict(reasons.most_common()),
         "top_caller_modules": [
             {"module": module, "edges": count}
             for module, count in modules.most_common(15)
@@ -270,7 +229,7 @@ def _fp_suspects(connection: sqlite3.Connection, limit: int = 30) -> dict[str, A
         "SELECT t.*, f.name AS joined_caller_name FROM call_targets t"
         " JOIN functions f ON f.id=t.caller_id"
         " WHERE t.callee_name != '' AND t.callee_name = f.name"
-        " AND t.confidence <= 0.6 AND (lower(t.reason) LIKE 'assigned to%'"
+        " AND (lower(t.reason) LIKE 'assigned to%'"
         " OR lower(t.reason) LIKE '%suffix%')"
     )
     total = connection.execute(f"SELECT count(*) FROM ({query})").fetchone()[0]
@@ -283,10 +242,9 @@ def _fp_suspects(connection: sqlite3.Connection, limit: int = 30) -> dict[str, A
                 "caller_id": row["caller_id"],
                 "caller_name": row["joined_caller_name"],
                 "callee_name": row["callee_name"],
-                "confidence": float(row["confidence"] or 0.0),
                 "reason": row["reason"],
                 "caller_is_test": _is_test_path(row["joined_caller_name"] or ""),
-                "note": "same-name suffix candidate at low confidence: check for FP",
+                "note": "same-name suffix candidate: check for FP",
             }
             for row in rows
         ],
@@ -395,12 +353,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--per-kind", type=int, default=10)
-    parser.add_argument(
-        "--per-bucket",
-        type=int,
-        default=None,
-        help="indirect_candidate samples per confidence bucket (overrides --per-kind math)",
-    )
     parser.add_argument("--seed", type=int, default=18)
     parser.add_argument("--index-log", default=None)
     parser.add_argument("--repo", default=None)
@@ -414,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         totals = _totals(connection)
         kinds = list(totals["kinds"])
-        sampled = _sample_rows(connection, kinds, args.per_kind, args.seed, args.per_bucket)
+        sampled = _sample_rows(connection, kinds, args.per_kind, args.seed)
         samples: dict[str, list[dict[str, Any]]] = {}
         for kind, rows in sampled.items():
             samples[kind] = [_sample_entry(connection, row) for row in rows]

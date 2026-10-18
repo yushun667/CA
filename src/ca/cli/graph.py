@@ -13,10 +13,11 @@ Stable output schema (shared by CLI JSON, DOT and MCP):
     ``id, name, file, line, depth, direction``
 ``edges[]``
     ``caller_id, caller_name, caller_file, caller_line, callee_id, callee_name,
-    callee_file, callee_line, call_file, call_line, call_id, kind, confidence,
+    callee_file, callee_line, call_file, call_line, call_id, kind,
     is_resolved, depth, source, candidate, cycle``
-    ``source`` is ``call`` (direct, confidence 1.0) or ``call_target``
-    (candidate, confidence < 1.0).
+    ``source`` is ``call`` (direct) or ``call_target`` (one of possibly several
+    candidate targets for an indirect call site); dashed candidate edges are a
+    possible-target set, not a ranked or scored prediction.
 """
 
 from __future__ import annotations
@@ -136,12 +137,10 @@ def _normalize(
         if source == "call":  # tolerate older store rows
             source = "direct"
         edge["source"] = source
-        candidate = source in ("candidate", "call_target")
+        candidate = source in ("candidate", "call_target", "virtual_candidate")
         edge.setdefault(
             "kind", "indirect_candidate" if candidate else "direct"
         )
-        if edge.get("confidence") is None:
-            edge["confidence"] = 0.0 if candidate else 1.0
         edge["candidate"] = candidate
         edge.setdefault("cycle", False)
     cycles = raw.get("cycles") or []
@@ -182,7 +181,6 @@ def _edge_from_row(
         "call_line": _coerce_int(row.get("call_line"), 0),
         "call_id": str(row.get("call_id") or ""),
         "kind": str(row.get("kind") or "direct"),
-        "confidence": float(row.get("confidence") if row.get("confidence") is not None else 1.0),
         "is_resolved": bool(row.get("is_resolved", True)),
         "depth": depth,
         "source": source,
@@ -349,9 +347,7 @@ def to_dot(graph: dict[str, Any], title: str = "ca_call_graph") -> str:
         attributes = []
         if edge.get("candidate") or edge.get("source") in ("candidate", "call_target"):
             attributes.append('style=dashed')
-            attributes.append(
-                f"label={quote(str(edge.get('kind')) + ' ' + str(round(float(edge.get('confidence') or 0.0), 2)))}"
-            )
+            attributes.append(f"label={quote(edge.get('kind'))}")
         elif edge.get("kind") and edge.get("kind") != "direct":
             attributes.append(f"label={quote(edge.get('kind'))}")
         if edge.get("cycle"):
@@ -383,7 +379,6 @@ def edges_table_rows(graph: dict[str, Any]) -> list[dict[str, Any]]:
             "callee": edge.get("callee_name"),
             "source": edge.get("source"),
             "kind": edge.get("kind"),
-            "confidence": edge.get("confidence"),
             "resolved": edge.get("is_resolved"),
             "call_file": edge.get("call_file"),
             "call_line": edge.get("call_line"),

@@ -59,7 +59,7 @@ scripts/bootstrap.sh                       # venv + 固定依赖 + editable 安�
 | `brief` | `symbol`（必填） | 紧凑摘要：签名/位置、调用者/被调者计数、分支/返回/资源计数、关键条件、deep_ready |
 | `batch` | `kind`（必填）、`symbols` 或 `symbols_file`、`limit` | 一次查询多个符号；按稳定顺序返回逐符号结果 |
 | `stats` | – | 各表行数、数据库大小、schema 版本，以及 `callbacks` 注册/连边统计 |
-| `callbacks` | `path`（object_path 前缀）、`field`、`module`、`limit` | 跨 TU 回调注册事实（对象路径、目标函数、注册 kind、confidence、evidence） |
+| `callbacks` | `path`（object_path 前缀）、`field`、`module`、`limit` | 跨 TU 回调注册事实（对象路径、目标函数、注册 kind、evidence） |
 | `ensure_deep` | `symbols`（必填）、`jobs`、`wait`（默认 true） | L1 按需深析：解析所属 TU、分析请求函数、标记 deep_ready；返回每符号状态/延迟/事实 |
 | `deep_status` | `symbols`（可选） | deep_ready 覆盖率（`total_functions/deep_ready/pending/failed/coverage`）与每符号状态 |
 | `prewarm` | `limit`、`jobs`、`background` | 分析查询频次最高的待深析符号（L2 队列）；background=true 立即返回 |
@@ -75,7 +75,7 @@ JSON-RPC 端点，工具与 `ca mcp --db` 相同的 18 个只读工具；没有�
 
 `ca mcp --db-dir <dir>`（或重复 `--db`）以只读联邦方式暴露目录下所有 shard 数据库；
 合并后的每行增加 `shard` 字段，`stats` 返回汇总 totals 加 `shards`/`skipped`；`graph`
-跨 shard 合并节点/边，候选边保留 `source/candidate/confidence/kind` 并带 `shard`。
+跨 shard 合并节点/边，候选边保留 `source/candidate/kind` 并带 `shard`；候选虚线边表示可能目标集合。
 server 仍暴露同样 18 个工具。写型深析工具返回 `FEDERATED_READ_ONLY`（深析状态是
 分片本地的）：`ensure_deep`/`prewarm` 需用单 `--db` server；`deep_status` 以只读方式
 返回每个符号的 `deep_ready`/`shard` 信息。不可读 shard 跳过并 stderr 警告；没有可读
@@ -96,7 +96,7 @@ ca mcp --db-dir /home/yu/CA_OH/index
   "depth": 2,
   "nodes": [{"id": "fn:..", "name": "syscall", "file": "kernel/syscall.c", "line": 131, "depth": 0, "direction": "forward"}],
   "edges": [{"caller_name": "syscall", "callee_name": "sys_open", "kind": "direct",
-             "confidence": 1.0, "source": "direct", "candidate": false,
+             "source": "direct", "candidate": false,
              "is_resolved": true, "call_file": "kernel/syscall.c", "call_line": 143,
              "depth": 1, "cycle": false}],
   "cycles": [], "truncated": false,
@@ -104,9 +104,11 @@ ca mcp --db-dir /home/yu/CA_OH/index
 }
 ```
 
-直接调用 `source = "direct"`、`confidence = 1.0`；来自 `call_targets` 的函数指针/
-虚调用候选边 `source = "candidate"`、`candidate = true`，保留解析 `kind`、
-`reason` 与 `confidence`。节点与边排序稳定；`truncated` 表示节点上限截断了遍历。
+直接调用 `source = "direct"`；来自 `call_targets` 的函数指针/虚调用候选边
+`source = "candidate"`、`candidate = true`，保留解析 `kind` 与可读 `reason`
+（注册点、override 深度/关系、实参传递等）。候选边表示间接调用点的可能目标集合，
+不是评分预测；渲染为虚线，表示无序的目标集合。节点与边排序稳定；`truncated`
+表示节点上限截断了遍历。
 
 ## 协议示例
 

@@ -122,7 +122,7 @@ def analyzed(tmp_path):
 
 def test_deep_status_table_and_version(l0) -> None:
     meta = dict(l0.connection.execute("SELECT key, value FROM meta"))
-    assert meta["store_schema_version"] == "7"
+    assert meta["store_schema_version"] == "8"
     assert meta["schema_version"] == SCHEMA_VERSION
     assert l0.stats()["tables"]["deep_status"] == 0
     indexes = {

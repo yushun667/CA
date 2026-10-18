@@ -20,7 +20,8 @@ Merge rules (deterministic, contract for the CLI/MCP layer):
   key (the database filename stem, uniquified with ``_2`` suffixes);
 - duplicates are collapsed by stable ids (functions ``id``, fact ``id``, graph
   node ``id``, graph edge ``(caller_id, callee_id, call_file, call_line,
-  source)``, caller edge ``(caller_id, callee_name, call_file, call_line)``,
+  callee_name, call_file, call_line)``, caller edge
+  ``(caller_id, callee_name, call_file, call_line)``,
   call_target ``(call_id, callee_id, kind, callee_name)``, callback ``id``);
   direct call edges win over candidate edges; the first shard in path order wins
   otherwise;
@@ -923,9 +924,9 @@ class FederatedStore:
                         key = (
                             edge["caller_id"],
                             edge["callee_id"],
+                            edge.get("callee_name", ""),
                             edge["call_file"],
                             edge["call_line"],
-                            edge["source"],
                         )
                         if key in seen_edges:
                             continue

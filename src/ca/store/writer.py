@@ -221,7 +221,6 @@ CALL_TARGET_COLUMNS = (
     "callee_id",
     "callee_name",
     "kind",
-    "confidence",
     "reason",
     "file",
     "line",
@@ -446,7 +445,6 @@ def _call_target_row(record: Any) -> tuple[Any, ...]:
         record.callee_id,
         record.callee_name,
         record.kind,
-        float(record.confidence),
         record.reason,
         *_sloc(record.sloc),
     )
@@ -553,7 +551,7 @@ FTS_MIN_CHARS = 3
 # databases are upgraded in place by open() (CREATE/ALTER IF NOT EXISTS via
 # store.virtual_dispatch.migrate) plus finalize() (secondary indexes); no
 # destructive migration runs.
-STORE_SCHEMA_VERSION = "7"
+STORE_SCHEMA_VERSION = "8"
 STORE_SCHEMA_META_KEY = "store_schema_version"
 
 # Legacy backfill: phase-3 databases predate deep_status. Any function that
@@ -806,7 +804,6 @@ def add_call_targets(conn: sqlite3.Connection, records: Sequence[Any]) -> int:
                     str(record.get("callee_id", "")),
                     str(record.get("callee_name", "")),
                     str(record.get("kind", "indirect_candidate")),
-                    float(record.get("confidence", 0.0)),
                     str(record.get("reason", "")),
                     *sloc_values,
                 )

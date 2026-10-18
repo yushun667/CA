@@ -208,11 +208,51 @@ def _placeholders(count: int) -> str:
 
 def _edge_row(row: sqlite3.Row) -> dict[str, Any]:
     data = dict(row)
-    data["confidence"] = float(data["confidence"])
     data["is_resolved"] = bool(data["is_resolved"])
-    data["candidate"] = data["source"] == "call_target"
+    data["candidate"] = data["source"] != "call"
+    data["reason"] = data.get("reason") or ""
     data.pop("source_rank", None)
     return data
+
+
+_SOURCE_RANK = {"call": 0, "call_target": 1, "virtual_candidate": 2}
+
+
+def _dedupe_edges(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse merged candidate sets by natural key, keeping audit reasons.
+
+    Candidates are a *set* of possible targets, not probabilities: the same
+    (caller, callee, call site) found as a direct call, a persisted
+    ``call_target`` and/or a query-time ``virtual_candidate`` becomes one edge
+    (priority ``call < call_target < virtual_candidate``) whose ``reason`` joins
+    every distinct audit trail with ``"; "``.
+    """
+
+    best: dict[tuple[Any, ...], dict[str, Any]] = {}
+    reasons: dict[tuple[Any, ...], list[str]] = {}
+    for row in rows:
+        key = (
+            row.get("caller_id", ""),
+            row.get("callee_id", ""),
+            row.get("callee_name", ""),
+            row.get("call_file", ""),
+            row.get("call_line", 0),
+        )
+        current = best.get(key)
+        if current is None or _SOURCE_RANK.get(row.get("source", ""), 3) < _SOURCE_RANK.get(
+            current.get("source", ""), 3
+        ):
+            best[key] = row
+        reason = str(row.get("reason") or "").strip()
+        if reason:
+            bucket = reasons.setdefault(key, [])
+            if reason not in bucket:
+                bucket.append(reason)
+    for key, row in best.items():
+        joined = reasons.get(key) or []
+        if joined:
+            row["reason"] = "; ".join(joined)
+    return list(best.values())
 
 
 class QueryEngine:
@@ -372,20 +412,6 @@ class QueryEngine:
     # Merged call edges: direct CallRecord edges + candidate CallTargets.
     # Direct edges win when the same (caller, callee, call site) appears twice.
     # ------------------------------------------------------------------ #
-    _EDGE_SELECT = (
-        "SELECT {call_id} AS call_id, {caller_id} AS caller_id, "
-        "cf.name AS caller_name, cf.file AS caller_file, cf.line AS caller_line, "
-        "{callee_id} AS callee_id, "
-        "COALESCE(NULLIF(tf.name, ''), {callee_name}) AS callee_name, "
-        "COALESCE(tf.file, '') AS callee_file, COALESCE(tf.line, 0) AS callee_line, "
-        "{call_file} AS call_file, {call_line} AS call_line, "
-        "{kind} AS kind, {confidence} AS confidence, {is_resolved} AS is_resolved, "
-        "{source} AS source, {source_rank} AS source_rank "
-        "FROM {table} AS {alias} "
-        "{caller_join} {callee_join} {call_join} "
-        "WHERE {where} IN ({marks})"
-    )
-
     def _load_merged_edges(
         self, ids: Sequence[str], direction: str, limit: int
     ) -> list[dict[str, Any]]:
@@ -400,7 +426,7 @@ class QueryEngine:
                 "cf.file AS caller_file, cf.line AS caller_line, c.callee_id AS callee_id, "
                 "COALESCE(NULLIF(tf.name, ''), c.callee_name) AS callee_name, "
                 "COALESCE(tf.file, '') AS callee_file, COALESCE(tf.line, 0) AS callee_line, "
-                "c.file AS call_file, c.line AS call_line, c.kind AS kind, 1.0 AS confidence, "
+                "c.file AS call_file, c.line AS call_line, c.kind AS kind, '' AS reason, "
                 "c.is_resolved AS is_resolved, 'call' AS source, 0 AS source_rank "
                 "FROM calls AS c "
                 "LEFT JOIN functions AS cf ON cf.id = c.caller_id "
@@ -414,7 +440,7 @@ class QueryEngine:
                 "COALESCE(NULLIF(tf.name, ''), ct.callee_name) AS callee_name, "
                 "COALESCE(tf.file, '') AS callee_file, COALESCE(tf.line, 0) AS callee_line, "
                 "COALESCE(c.file, ct.file) AS call_file, COALESCE(c.line, ct.line) AS call_line, "
-                "ct.kind AS kind, ct.confidence AS confidence, 0 AS is_resolved, "
+                "ct.kind AS kind, ct.reason AS reason, 0 AS is_resolved, "
                 "'call_target' AS source, 1 AS source_rank "
                 "FROM call_targets AS ct "
                 "LEFT JOIN calls AS c ON c.id = ct.call_id "
@@ -429,7 +455,7 @@ class QueryEngine:
                 "cf.file AS caller_file, cf.line AS caller_line, c.callee_id AS callee_id, "
                 "COALESCE(NULLIF(tf.name, ''), c.callee_name) AS callee_name, "
                 "COALESCE(tf.file, '') AS callee_file, COALESCE(tf.line, 0) AS callee_line, "
-                "c.file AS call_file, c.line AS call_line, c.kind AS kind, 1.0 AS confidence, "
+                "c.file AS call_file, c.line AS call_line, c.kind AS kind, '' AS reason, "
                 "c.is_resolved AS is_resolved, 'call' AS source, 0 AS source_rank "
                 "FROM calls AS c "
                 "LEFT JOIN functions AS cf ON cf.id = c.caller_id "
@@ -443,7 +469,7 @@ class QueryEngine:
                 "COALESCE(NULLIF(tf.name, ''), ct.callee_name) AS callee_name, "
                 "COALESCE(tf.file, '') AS callee_file, COALESCE(tf.line, 0) AS callee_line, "
                 "COALESCE(c.file, ct.file) AS call_file, COALESCE(c.line, ct.line) AS call_line, "
-                "ct.kind AS kind, ct.confidence AS confidence, 0 AS is_resolved, "
+                "ct.kind AS kind, ct.reason AS reason, 0 AS is_resolved, "
                 "'call_target' AS source, 1 AS source_rank "
                 "FROM call_targets AS ct "
                 "LEFT JOIN calls AS c ON c.id = ct.call_id "
@@ -477,6 +503,7 @@ class QueryEngine:
                 merged.extend(virtual_dispatch.forward_edges(self._conn, ids, limit))
             else:
                 merged.extend(virtual_dispatch.reverse_edges(self._conn, ids, limit))
+        merged = _dedupe_edges(merged)
         source_rank = {"call": 0, "call_target": 1, "virtual_candidate": 2}
         merged.sort(
             key=lambda row: (
@@ -543,7 +570,11 @@ class QueryEngine:
     def query_call_targets(
         self, symbol: str, direction: str = "callee", limit: int = 200
     ) -> list[dict[str, Any]]:
-        """Candidate call_targets for a symbol (``direction`` callee|caller)."""
+        """Candidate call_targets for a symbol (``direction`` callee|caller).
+
+        Natural-key deduped target set; returns ``reason`` but never a
+        confidence score.
+        """
 
         if direction not in ("callee", "caller"):
             raise ValueError("direction must be 'callee' or 'caller'")
@@ -559,7 +590,7 @@ class QueryEngine:
             "ct.callee_id, COALESCE(NULLIF(tf.name, ''), ct.callee_name) AS callee_name, "
             "COALESCE(tf.file, '') AS callee_file, COALESCE(tf.line, 0) AS callee_line, "
             "COALESCE(c.file, ct.file) AS call_file, COALESCE(c.line, ct.line) AS call_line, "
-            "ct.kind, ct.confidence, ct.reason, 'call_target' AS source "
+            "ct.kind, ct.reason, 'call_target' AS source "
             "FROM call_targets AS ct "
             "LEFT JOIN calls AS c ON c.id = ct.call_id "
             "LEFT JOIN functions AS cf ON cf.id = ct.caller_id "
@@ -567,11 +598,38 @@ class QueryEngine:
             f"WHERE {join_column} IN ({marks}) "
             "ORDER BY call_file, call_line, ct.caller_id, ct.callee_id, ct.id LIMIT ?"
         )
-        rows = []
+        best: dict[tuple[Any, ...], dict[str, Any]] = {}
+        reasons: dict[tuple[Any, ...], list[str]] = {}
         for row in self._conn.execute(sql, [*ids, limit]):
             data = dict(row)
             data["candidate"] = True
-            rows.append(data)
+            data["source"] = "call_target"
+            reason = str(data.get("reason") or "").strip()
+            key = (
+                data.get("call_id", ""),
+                data.get("callee_id", ""),
+                data.get("callee_name", ""),
+                data.get("call_file", ""),
+                data.get("call_line", 0),
+            )
+            if key not in best:
+                best[key] = data
+            if reason:
+                bucket = reasons.setdefault(key, [])
+                if reason not in bucket:
+                    bucket.append(reason)
+        rows = list(best.values())
+        for row in rows:
+            key = (
+                row.get("call_id", ""),
+                row.get("callee_id", ""),
+                row.get("callee_name", ""),
+                row.get("call_file", ""),
+                row.get("call_line", 0),
+            )
+            joined = reasons.get(key) or []
+            if joined:
+                row["reason"] = "; ".join(joined)
         return rows
 
     # ------------------------------------------------------------------ #
@@ -611,10 +669,10 @@ class QueryEngine:
         """Who calls ``symbol``: merged direct calls + candidate call_targets.
 
         Keys: ``caller_id, caller_name, caller_file, caller_line, callee_name,
-        call_file, call_line, is_resolved, kind, confidence, source`` where
-        ``source`` is ``direct`` (CallRecord, confidence 1.0) or ``candidate``
-        (CallTargetRecord with its heuristic ``confidence``); duplicates are
-        collapsed with the direct edge winning. Unresolved calls
+        call_file, call_line, is_resolved, kind, source, candidate, reason``.
+        Direct calls and candidate targets (``call_target``/virtual) are a set;
+        duplicate edges are collapsed by natural key with the direct edge
+        winning and ``reason`` strings joined. Unresolved calls
         (``callee_id == ''``) are matched by their redundant ``callee_name``.
         """
 
@@ -635,9 +693,9 @@ class QueryEngine:
                         "call_line": edge["call_line"],
                         "is_resolved": edge["is_resolved"],
                         "kind": edge["kind"],
-                        "confidence": edge["confidence"],
                         "source": edge["source"],
                         "candidate": edge["candidate"],
+                        "reason": edge.get("reason", ""),
                         "_callee_id": edge["callee_id"],
                         "_rank": 0 if edge["source"] == "call" else 1,
                     }
@@ -679,20 +737,26 @@ class QueryEngine:
             "SELECT c.caller_id, COALESCE(caller.name, '') AS caller_name, "
             "COALESCE(caller.file, '') AS caller_file, COALESCE(caller.line, 0) AS caller_line, "
             "c.callee_name, c.file AS call_file, c.line AS call_line, c.is_resolved, "
-            "c.kind AS kind, 1.0 AS confidence, 'call' AS source, c.callee_id AS _callee_id, "
+            "c.kind AS kind, '' AS reason, 'call' AS source, c.callee_id AS _callee_id, "
             "0 AS _rank "
             "FROM calls AS c LEFT JOIN functions AS caller ON caller.id = c.caller_id "
             "WHERE c.callee_id = '' AND c.callee_name = ? "
             "ORDER BY c.file, c.line, c.id LIMIT ?"
         )
-        return [dict(row) for row in self._conn.execute(sql, (symbol, limit))]
+        rows = []
+        for row in self._conn.execute(sql, (symbol, limit)):
+            data = dict(row)
+            data["candidate"] = False
+            rows.append(data)
+        return rows
 
     def query_callees(self, symbol: str, limit: int = 200) -> list[dict[str, Any]]:
         """What ``symbol`` calls: merged direct calls + candidate call_targets.
 
         Keys: ``callee_id, callee_name, callee_file, callee_line, call_file,
-        call_line, is_resolved, kind, confidence, source``; ``source`` is
-        ``direct`` or ``candidate`` and duplicates keep the direct edge.
+        call_line, is_resolved, kind, source, candidate, reason``; duplicate
+        candidate targets are collapsed by natural key (direct edges win,
+        reasons joined).
         """
 
         if not symbol or limit <= 0:
@@ -712,9 +776,9 @@ class QueryEngine:
                     "call_line": edge["call_line"],
                     "is_resolved": edge["is_resolved"],
                     "kind": edge["kind"],
-                    "confidence": edge["confidence"],
                     "source": edge["source"],
                     "candidate": edge["candidate"],
+                    "reason": edge.get("reason", ""),
                     "_rank": 0 if edge["source"] == "call" else 1,
                 }
             )

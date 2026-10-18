@@ -200,10 +200,12 @@ class CallRecord:
 class CallTargetRecord:
     """A resolved or candidate target of a call site.
 
-    Phase-3 callback/function-pointer resolution emits these edges when a call
-    site cannot be resolved directly. ``kind`` distinguishes direct resolution
-    from type/registration-based candidates; ``confidence`` is a heuristic in
-    [0, 1] and ``reason`` records the evidence that produced the candidate.
+    Phase-3 callback/function-pointer/virtual resolution emits these edges when
+    a call site cannot be resolved directly. ``kind`` distinguishes direct
+    resolution from type/registration/override-based candidates. A record is a
+    member of the *possible target set* for the call site, never a probability
+    estimate: ``reason`` records the auditable evidence (registration site,
+    override relationship, argument passing, ...) that produced the candidate.
     """
 
     KIND: ClassVar[str] = "call_target"
@@ -214,7 +216,6 @@ class CallTargetRecord:
     callee_id: str
     callee_name: str
     kind: str = "indirect_candidate"  # direct | indirect_candidate | virtual_candidate
-    confidence: float = 0.0
     reason: str = ""
     sloc: Sloc = field(default_factory=lambda: Sloc(""))
 

@@ -25,14 +25,14 @@ store schema v7 持久化为 `functions.is_virtual`、`functions.is_pure_virtual
 
 - **同 TU**：`ca.analyze.virtual_dispatch` 把虚调用点变成
   `virtual_candidate` 的 `CallTargetRecord`，覆盖该 TU 内可见的静态目标的
-  所有 override（直接 override 置信度 0.6，第 2 层 0.5，第 3 层 0.45，
-  阈值 `AnalyzeOptions.call_target_min_confidence`）。
+  所有 override（override 深度 ≤3）。候选受 `max_call_targets` 有界；`reason`
+  记录 override 关系与深度作为证据，不表示概率。
 - **跨 TU**：查询时 `store.load_forward_edges`/`load_reverse_edges` 基于全部已索引
   shard 的 override 关系，在直接调用边上叠加 `virtual_candidate` 边；无需额外
   物化步骤，旧库缺表时退化为直接边。
 - 经由 `Base::m` 的调用，候选是 `m` 的已知 override（override 链最多 3 层）。
-  `callees` 以 `kind="virtual_candidate"`、低于直接边的 `confidence` 和可读
-  `reason` 返回；`Derived::m` 的 `callers` 会包含静态目标是其祖先方法的虚调用点。
+  `callees` 以 `kind="virtual_candidate"` 与可读 `reason` 返回；`Derived::m` 的
+  `callers` 会包含静态目标是其祖先方法的虚调用点。
 - 直接调用边从不被替换或升级：候选边是新增行（`source != "call"`），id 仍用
   `ca.core.ids.call_target_id`。
 

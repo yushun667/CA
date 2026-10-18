@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: agent-platform.md
-  sha256: 4bfca8ee9f42b1d2019426a3a33ff09fa78d577df60242b24bca0d255f0f1139
+  sha256: 5cbfb046108fac7cf93dd96e4fa2033c37613a4b63aa0ac2b9c7c9e74275372a
 zh:
   file: agent-platform.zh.md
-  sha256: ad5fb7708bfe30f4906bce709fd069bc7d68255588d68ed52f9eb49a11aa8407
+  sha256: 1e0c1ceab34891605c4d474aad8f7576f6ea30cb06d40769a7dab7a37b27246f

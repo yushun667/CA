@@ -359,13 +359,12 @@ are resolved by a separate pass that can run on an existing database:
 
 The pass reparses the database's TUs (it needs the AST) and reports units
 parsed/failed, registration facts (by kind), indirect call sites, candidate
-edges (with confidence buckets), links and elapsed time; `--max-tus` limits a
-trial run and `--min-confidence` filters weak matches. It only records
-registrations into *global* storage, which keeps same-name local test structs
-out of the candidate set. Candidate edges are ordinary `call_targets` rows
-(`kind="indirect_candidate"`, `source="call_target"`, `candidate=true`,
-confidence/reason), so `ca graph`, `ca query callees` and the MCP `graph` tool
-show them without any other change; MCP also gains a `callbacks` tool and a
+edges (by kind), links and elapsed time; `--max-tus` limits a trial run. It only
+records registrations into *global* storage, which keeps same-name local test
+structs out of the candidate set. Candidate edges are ordinary `call_targets`
+rows (`kind="indirect_candidate"`, `source="call_target"`, `candidate=true`,
+`reason`), so `ca graph`, `ca query callees` and the MCP `graph` tool show them
+without any other change; MCP also gains a `callbacks` tool and a
 `stats.callbacks` object. Re-running the pass on an unchanged database writes
 nothing (natural-key upserts and stable ids). Header-inline duplicates of the
 same logical edge (same caller/callee/line across TUs) are collapsed by the
@@ -381,8 +380,8 @@ sample. Incremental re-index/`ca update` and a watcher are documented in
 
 `ca ui` serves a local read-only web UI over the same index: symbol search,
 function detail (location/signature/branches/returns/resources/calls), merged
-callers/callees, an SVG call graph (candidate callback edges dashed with
-confidence), callback registrations and database statistics. Federated shard
+callers/callees, an SVG call graph (candidate callback edges dashed as the
+possible target set), callback registrations and database statistics. Federated shard
 queries show a `shard` badge per row. The server binds `127.0.0.1` by default,
 serves a stdlib JSON API (`/api/health`, `/api/search`, `/api/function/...`,
 `/api/callers`, `/api/callees`, `/api/graph`, `/api/stats`, `/api/callbacks`)

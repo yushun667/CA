@@ -55,10 +55,8 @@ def test_virtual_call_produces_override_candidates(derived_unit) -> None:
     candidates = [target for target in result.call_targets if target.kind == "virtual_candidate"]
     names = {target.callee_name for target in candidates}
     assert names == {"value"}
-    # Derived::value (depth 1, 0.6) and Leaf::value (depth 2, 0.5) are both
-    # possible dynamic targets of Base::value.
-    confidences = sorted(target.confidence for target in candidates)
-    assert confidences == [0.5, 0.6]
+    # Derived::value and Leaf::value are both possible dynamic targets of
+    # Base::value; they are a target set with no scored ranking.
     derived_value = function_by_name(derived_unit, "ast_virtual::Derived::value")
     leaf_value = function_by_name(derived_unit, "ast_virtual::Leaf::value")
     callee_ids = {target.callee_id for target in candidates}
@@ -68,9 +66,11 @@ def test_virtual_call_produces_override_candidates(derived_unit) -> None:
         assert target.call_id
         assert "virtual override" in target.reason
         assert target.id.startswith("ct:")
-    # Deepest candidate is Leaf (override of Derived::value).
+    # Deepest candidate is Leaf (override of Derived::value); depth is evidence.
     leaf_candidate = next(t for t in candidates if t.callee_id == leaf_value.id)
-    assert "depth 2" in leaf_candidate.reason
+    assert "override depth 2" in leaf_candidate.reason
+    derived_candidate = next(t for t in candidates if t.callee_id == derived_value.id)
+    assert "override depth 1" in derived_candidate.reason
 
 
 def test_virtual_call_without_override_has_no_candidates(derived_unit) -> None:
@@ -83,8 +83,8 @@ def test_candidates_are_deterministic(derived_unit) -> None:
     caller = function_by_name(derived_unit, "call_through_base")
     first = analyze_function(derived_unit, caller)
     second = analyze_function(derived_unit, caller)
-    assert [(t.id, t.callee_id, t.confidence, t.reason) for t in first.call_targets] == [
-        (t.id, t.callee_id, t.confidence, t.reason) for t in second.call_targets
+    assert [(t.id, t.callee_id, t.reason) for t in first.call_targets] == [
+        (t.id, t.callee_id, t.reason) for t in second.call_targets
     ]
 
 
@@ -100,14 +100,15 @@ def test_candidates_survive_main_file_scope_with_header_declarations() -> None:
     assert len(candidates) == 2
 
 
-def test_min_confidence_filters_candidates(derived_unit) -> None:
+def test_max_targets_caps_candidate_set(derived_unit) -> None:
     from ca.analyze import AnalyzeOptions
 
     caller = function_by_name(derived_unit, "call_through_base")
-    result = analyze_function(
-        derived_unit, caller, AnalyzeOptions(call_target_min_confidence=0.55)
-    )
+    result = analyze_function(derived_unit, caller, AnalyzeOptions(max_call_targets=1))
     candidates = [target for target in result.call_targets if target.kind == "virtual_candidate"]
-    # Only the depth-1 override (0.6) survives a 0.55 threshold.
     assert len(candidates) == 1
-    assert candidates[0].confidence == 0.6
+    # The retained member is deterministic (not confidence-ranked).
+    again = analyze_function(derived_unit, caller, AnalyzeOptions(max_call_targets=1))
+    assert [target.id for target in candidates] == [
+        target.id for target in again.call_targets if target.kind == "virtual_candidate"
+    ]

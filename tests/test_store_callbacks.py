@@ -40,7 +40,6 @@ CALLBACK_KEYS = {
     "end_col",
     "tu_id",
     "registration_kind",
-    "confidence",
     "evidence",
     "module",
     "directory",
@@ -91,7 +90,6 @@ TARGET = CallTargetRecord(
     callee_id=ON_DATA.id,
     callee_name=ON_DATA.name,
     kind="indirect_candidate",
-    confidence=0.8,
     reason="registration fact g_conn.ops.read",
     sloc=_sloc(20),
 )
@@ -178,7 +176,8 @@ def test_add_and_round_trip(store) -> None:
     assert record["col"] == 5 and record["end_line"] == 12 and record["end_col"] == 35
     assert record["tu_id"] == TU.id
     assert record["registration_kind"] == "struct_field"
-    assert record["confidence"] == pytest.approx(0.9)
+    # Legacy producers may still send confidence; it is not persisted/returned.
+    assert "confidence" not in record
     assert record["evidence"] == ["g_conn.ops.read = on_data_received;"]
     assert record["module"] == "foundation/net"
     assert record["directory"] == "foundation/net"  # derived from file
@@ -197,7 +196,7 @@ def test_add_and_round_trip(store) -> None:
     assert row is not None
     assert row["target_function_id"] == ""
     assert row["object_field"] == "read"
-    assert row["confidence"] == pytest.approx(0.5)
+    assert "confidence" not in row
     assert row["evidence"] == []
     assert store.get_callback("cbreg:missing") is None
 
@@ -237,8 +236,9 @@ def test_filters_prefix_field_module(store) -> None:
         for row in store.query_callbacks(tu_id=TU.id)
     } == {"on_data_received", "on_connection_closed"}
     assert len(store.query_callbacks(target_function_id=ON_DATA.id)) == 1
-    fine = store.query_callbacks(min_confidence=0.8)
-    assert [row["object_path"] for row in fine] == ["g_conn.ops.read"]
+    # `min_confidence` was removed with the confidence column itself.
+    with pytest.raises(TypeError):
+        store.query_callbacks(min_confidence=0.8)
     assert len(store.query_callbacks(registration_kind="array_element")) == 1
     assert store.query_callbacks(limit=1)[0]["object_path"] == "g_conn.ops.close"
     assert len(store.query_callbacks(limit=2, offset=2)) == 1
@@ -295,7 +295,6 @@ def test_link_call_targets(store) -> None:
     assert target["call_target_id"] == TARGET.id
     assert target["callee_name"] == ON_DATA.name
     assert target["kind"] == "indirect_candidate"
-    assert target["confidence"] == pytest.approx(0.8)
     assert target["reason"] == "registration fact g_conn.ops.read"
     reverse = store.query_registrations_for_target(TARGET.id)
     assert [row["id"] for row in reverse] == [registration]
@@ -365,7 +364,7 @@ def test_phase4_database_upgrade_in_place(tmp_path) -> None:
         assert reopened.query_function_detail("on_data_received")["function"]
         reopened.finalize()
         meta = dict(reopened.connection.execute("SELECT key, value FROM meta"))
-        assert meta["store_schema_version"] == "7"
+        assert meta["store_schema_version"] == "8"
         indexes = {
             row[0]
             for row in reopened.connection.execute(

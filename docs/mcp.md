@@ -63,7 +63,7 @@ slicing (queries are indexed, so this stays cheap for modest offsets).
 | `brief` | `symbol` (required) | compact summary: signature/location, caller/callee counts, branch/return/resource counts, key condition, deep_ready |
 | `batch` | `kind` (required), `symbols` or `symbols_file`, `limit` | one call for several symbols; per-symbol results in stable order |
 | `stats` | – | table row counts, database size, schema version, `callbacks` registration/link stats |
-| `callbacks` | `path` (object_path prefix), `field`, `module`, `limit` | cross-TU callback registration facts (object path, target function, registration kind, confidence, evidence) |
+| `callbacks` | `path` (object_path prefix), `field`, `module`, `limit` | cross-TU callback registration facts (object path, target function, registration kind, evidence) |
 | `ensure_deep` | `symbols` (required), `jobs`, `wait` (default true) | L1 lazy deep analysis: parse owning TUs, analyze the requested functions, mark deep_ready; per-symbol status/latency/facts |
 | `deep_status` | `symbols` (optional) | deep_ready coverage (`total_functions/deep_ready/pending/failed/coverage`) and per-symbol status |
 | `prewarm` | `limit`, `jobs`, `background` | analyze the hottest queried pending symbols (L2 queue); background=true returns immediately |
@@ -82,7 +82,7 @@ explanation feature.
 over all shard databases in the directory; every merged row adds a `shard`
 field and `stats` returns aggregate totals plus `shards`/`skipped`. `graph`
 merges nodes/edges across shards and candidate edges keep
-`source/candidate/confidence/kind` plus `shard`. The server still exposes the
+`source/candidate/kind` plus `shard`; dashed candidate edges are the possible-target set. The server still exposes the
 same 18 tools. Write-oriented deep tools are rejected with
 `FEDERATED_READ_ONLY` because deep state is shard-local: start a single-`--db`
 server for `ensure_deep`/`prewarm`; `deep_status` returns read-only per-symbol
@@ -105,7 +105,7 @@ ca mcp --db-dir /home/yu/CA_OH/index
   "depth": 2,
   "nodes": [{"id": "fn:..", "name": "syscall", "file": "kernel/syscall.c", "line": 131, "depth": 0, "direction": "forward"}],
   "edges": [{"caller_name": "syscall", "callee_name": "sys_open", "kind": "direct",
-             "confidence": 1.0, "source": "direct", "candidate": false,
+             "source": "direct", "candidate": false,
              "is_resolved": true, "call_file": "kernel/syscall.c", "call_line": 143,
              "depth": 1, "cycle": false}],
   "cycles": [], "truncated": false,
@@ -113,11 +113,13 @@ ca mcp --db-dir /home/yu/CA_OH/index
 }
 ```
 
-Direct calls have `source = "direct"` and `confidence = 1.0`; function-pointer /
-virtual candidates from `call_targets` have `source = "candidate"`,
-`candidate = true`, their resolution `kind` and a `reason`/`confidence` pair.
-Nodes and edges are sorted deterministically; `truncated` means the node limit
-stopped the traversal.
+Direct calls have `source = "direct"`; function-pointer / virtual candidates
+from `call_targets` have `source = "candidate"`, `candidate = true`, their
+resolution `kind` and a human-readable `reason` (registration site, override
+depth/relation, argument passing, ...). Candidate edges are the set of possible
+targets at an indirect call site, not a scored prediction; they are rendered
+dashed as an unordered target set. Nodes and edges are sorted
+deterministically; `truncated` means the node limit stopped the traversal.
 
 ## Protocol examples
 
@@ -220,8 +222,7 @@ Verify a shard quickly with
 tools, `deep_status`, `ensure_deep` first call and cache-hit latency, `graph`)
 and an HTTP server (`/health` + `POST /mcp` tools/list) with a pure-stdlib
 client. Candidate-edge sampling for analyze review uses
-`python scripts/sample_candidates.py --db <shard.db> ...` (totals, stratified
-samples, direct-call control, graph/DOT integration). Lazy deep analysis needs `--repo`/`--compdb` exactly
+`python scripts/sample_candidates.py --db <shard.db> ...` (totals, kind/reason samples, direct-call control, graph/DOT integration). Lazy deep analysis needs `--repo`/`--compdb` exactly
 as above; `ensure_deep` parses only the symbol's TU, so it is safe to call
 against a finished shard while other shards are still indexing.
 

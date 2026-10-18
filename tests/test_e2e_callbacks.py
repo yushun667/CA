@@ -154,7 +154,8 @@ def test_resolve_callbacks_creates_cross_tu_edge(tmp_path: Path) -> None:
     assert edge["source"] == "call_target"
     assert edge["candidate"] is True
     assert edge["kind"] == "indirect_candidate"
-    assert 0.4 <= float(edge["confidence"]) <= 1.0
+    assert "confidence" not in edge
+    assert "confidence" not in data
 
     # Idempotent: a second pass writes nothing and keeps counts stable.
     second = resolve_callbacks(str(db), repo=str(repo), jobs=1).to_dict()
@@ -178,6 +179,10 @@ def test_resolve_callbacks_cli_and_stats(tmp_path: Path) -> None:
     assert payload["registrations"] >= 1
     assert payload["candidate_edges"] >= 1
     assert payload["written"]["candidate_edges"] >= 1
+    assert "confidence" not in payload
+    assert run_cli(
+        ["resolve-callbacks", "--db", str(db), "--repo", str(repo), "--min-confidence", "0.5"]
+    ) != 0
 
     code, stats, err = _run_cli_json(["stats", "--db", str(db), "--json"])
     assert code == 0, err
@@ -245,11 +250,13 @@ def test_mcp_exposes_cross_tu_candidate_and_callbacks(tmp_path: Path) -> None:
     assert graph["ok"] is True
     candidate_edges = [edge for edge in graph["data"]["edges"] if edge.get("candidate")]
     assert any(edge["callee_name"] == "read_impl" for edge in candidate_edges)
+    assert all("confidence" not in edge for edge in graph["data"]["edges"])
 
     callbacks = envelope(3)
     assert callbacks["ok"] is True
     assert callbacks["data"]["count"] >= 1
     assert any(item["object_path"].startswith("g_ops") for item in callbacks["data"]["items"])
+    assert all("confidence" not in item for item in callbacks["data"]["items"])
 
     stats = envelope(4)
     assert stats["ok"] is True

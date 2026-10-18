@@ -18,8 +18,8 @@ not a phase-3 acceptance gate.
 - **Offline + realtime incremental**: offline batch builds the snapshot;
   realtime update reparses only affected TUs. Header dependencies must invalidate
   dependent TUs, not just the main TU source.
-- **Call intelligence**: indirect calls get callback/function-pointer candidates
-  with confidence; `ca graph` merges direct + candidate edges for
+- **Call intelligence**: indirect calls get callback/function-pointer candidate
+  target sets (unordered possible targets); `ca graph` merges direct + candidate edges for
   forward/reverse/path/depth queries in table/JSON/DOT. C++ virtual/dynamic
   dispatch must be covered in addition to registration-style callbacks.
 - **Agent interface**: `ca mcp` exposes symbol/reference/call-graph/context
@@ -62,8 +62,9 @@ acceptance is still deferred.
 
 - **C++ virtual/dynamic dispatch**: implemented (metadata on core records, store
   schema v7 `virtual_overrides`/`type_bases`, same-TU analyze candidates and
-  cross-TU query-time merge with confidence tiers 0.6/0.5/0.45); multi-inheritance
-  and unresolved dynamic types remain bounded heuristics (docs/cross-tu-virtual-dispatch.md).
+  cross-TU query-time merge of the possible-target set; all overrides within depth ≤3
+  are kept with depth/relation evidence); multi-inheritance and unresolved dynamic
+  types remain bounded heuristics (docs/cross-tu-virtual-dispatch.md).
 - **Header-dependency incremental**: implemented; parser records direct includes
   plus header→header edges, store persists the transitive closure in
   `tu_includes` (schema v6→7), `ca update`/`ca watch` invalidate only dependent

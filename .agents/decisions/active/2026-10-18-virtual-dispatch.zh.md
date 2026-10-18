@@ -23,20 +23,19 @@ OpenHarmony dsoftbus/camera 是 C++ 代码库，调用图很大程度上依赖�
    以及带索引的边表 `virtual_overrides(function_id, base_function_id)` 与
    `type_bases(type_id, base_type_id)`。
 3. **同 TU 候选**（`ca.analyze.virtual_dispatch`）：虚调用点为该 TU 内可见的静态
-   目标的每个 override 生成 `CallTargetRecord(kind="virtual_candidate")`。置信度随
-   override 深度下降（1 层 0.6、2 层 0.5、3 层 0.45），受配置的最低置信度约束，
-   结果确定、去重并有上限（`max_call_targets`）。
+   目标的每个 override 生成 `CallTargetRecord(kind="virtual_candidate")`（override
+   深度 ≤3）；`reason` 记录关系/深度作为证据。没有置信度分数或阈值：结果是确定、
+   去重、受 `max_call_targets` 有界的候选集合。
 4. **跨 TU 候选在查询时合并**：`store.load_forward_edges`/`load_reverse_edges` 基于
    所有已索引 shard 的 override 关系（递归 CTE，深度 ≤3）合并 virtual 候选。候选
-   是新增行（`source != "call"`），带 `kind`、`confidence` 与可读 `reason`；重复时
-   直接边优先。override 的 `callers` 同样会包含静态目标为其祖先方法的虚调用点。
+   是新增行（`source != "call"`），带 `kind` 与可读 `reason`；重复时直接边优先。override 的 `callers` 同样会包含静态目标为其祖先方法的虚调用点。
 5. **不物化**：跨 TU 候选在 callers/callees/graph 查询时计算，不由索引 pass 写入
    `call_targets`。
 
 ## 原因
 
-- 直接调用语义不变；虚目标以带类型/置信度/证据的显式候选呈现，agent 可区分事实与
-  启发式。
+- 直接调用语义不变；虚目标以带 kind/证据的显式候选集合呈现，agent 可区分直接事实
+  与候选集合（不是概率分数）。
 - 查询时合并天然使用全库数据，与 shard 划分和后续增量重索引无关；物化 pass 在
   shard 变化时需重算，且会重复直接调用关系。
 - 持久化的 override/基类边很小（每个直接关系一行），同 TU 分析与跨 TU 查询共享

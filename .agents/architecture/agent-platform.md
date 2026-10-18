@@ -20,10 +20,10 @@ semantics, call structure). Phase 3 targets OpenHarmony C/C++ first.
 | `ca.pipeline` resilience | Chunk cap 16 TUs, broken-pool retry, wave-level pool rebuild (`CA_POOL_RECYCLE_CHUNKS`), stable-id idempotence, per-TU cache |
 | Parser backend | Default libclang 18; OH uses matched libclang 15 via `CA_LIBCLANG_LIBRARY` (see decisions) |
 | `ca graph` (`src/ca/cli/graph.py`) | Forward/reverse/both traversal (depth/limits, path/cycle, table/JSON/DOT); merges direct + candidate edges |
-| `ca.analyze.callbacks` | Indirect-call candidate resolution (assignments, arrays, params, typedefs, return pointers) filtered by function-pointer signature; emits `CallTargetRecord(kind=indirect_candidate, confidence, reason)` |
+| `ca.analyze.callbacks` | Indirect-call candidate resolution (assignments, arrays, params, typedefs, return pointers) filtered by function-pointer signature; emits `CallTargetRecord(kind=indirect_candidate, reason)` |
 | `ca.store.graph` / `ca.store.workspace` / `ca.store.deep` | Persist `call_targets`, graph helpers, workspace metadata and `deep_status`; L0 queries work with zero deep rows |
 | Offline/incremental modes | `ca index` builds a snapshot; `ca update --changed-files ...` reparses changed TUs; see [docs/incremental.md](../../docs/incremental.md) |
-| `ca ui` (`src/ca/ui/server.py`) | local read-only web UI: vanilla page + JSON API + SVG graph; loopback only; `--serve-url` proxies to the backend |
+| `ca ui` (`src/ca/ui/server.py`) | local read-only UI: vanilla page + JSON API + SVG graph; loopback only; `--serve-url` proxies to the backend |
 | `ca serve` (`src/ca/server/`) | unified backend for browser/MCP clients; see [unified-serve-backend.md](unified-serve-backend.md) |
 | `ca.build.openharmony` | OpenHarmony corpus logic: repo manifest/projects, GN/ninja command construction, `ninja -t compdb` normalization, metadata; operates on the working copy only |
 
@@ -61,8 +61,7 @@ changed TUs and invalidate their rows; never a realtime full parse.
 ## Interface and dependency boundaries
 
 - MCP tools return `{ok, data, error}` envelopes with stable keys; base queries
-  add `deep_ready` and deep lists carry `pending`; graph edges carry `kind`,
-  `confidence`, `source`, `candidate`.
+  add `deep_ready` and deep lists carry `pending`; graph edges carry `kind`, `source`, `candidate` (dashed = possible-target set).
 - Candidate edges are heuristic `may-call` sets, never mixed into direct edges.
 - Workspace metadata uses store-local IDs (`ws:`/`prj:`/`var:`) and does not
   change the core record contract.
@@ -73,7 +72,7 @@ changed TUs and invalidate their rows; never a realtime full parse.
 - Cross-TU callbacks are resolved via registration tables (same-TU and
   cross-TU); struct-array callbacks, integer-address function pointers, C++
   member pointers and virtual/dynamic dispatch are not modelled.
-- Candidate targets are bounded per call site/function and carry confidence.
+- Candidate targets are bounded per call site/function and described by evidence; an unordered target set, not a score.
 - Deep coverage is partial by design and reported separately from complete L0.
 - Full-corpus runs/acceptance are deferred until all features are complete;
   incremental updates are per changed TU. The read-only human UI is delivered.

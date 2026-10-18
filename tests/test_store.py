@@ -72,9 +72,9 @@ CALLER_KEYS = {
     "call_line",
     "is_resolved",
     "kind",
-    "confidence",
     "source",
     "candidate",
+    "reason",
 }
 CALLEE_KEYS = {
     "callee_id",
@@ -85,9 +85,9 @@ CALLEE_KEYS = {
     "call_line",
     "is_resolved",
     "kind",
-    "confidence",
     "source",
     "candidate",
+    "reason",
 }
 BRANCH_KEYS = {
     "id",
@@ -464,7 +464,6 @@ def test_query_callers_resolved_placeholder_and_unresolved(populated) -> None:
     assert row["call_line"] == 15
     assert row["is_resolved"] is True
     assert row["kind"] == "direct"
-    assert row["confidence"] == 1.0
     assert row["source"] == "call"
     assert row["candidate"] is False
 
@@ -502,7 +501,6 @@ def test_query_callees_resolved_placeholder_and_unresolved(populated) -> None:
     assert resolved["call_line"] == 15
     assert resolved["is_resolved"] is True
     assert resolved["source"] == "call"
-    assert resolved["confidence"] == 1.0
 
     wakeup_callees = populated.query_callees("wakeup")
     by_line = {row["call_line"]: row for row in wakeup_callees}

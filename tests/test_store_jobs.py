@@ -66,7 +66,7 @@ def test_state_database_open_creates_v5_tables(tmp_path) -> None:
             "idx_job_events_job",
         } <= indexes
         meta = dict(queue._conn.execute("SELECT key, value FROM meta"))
-        assert meta["store_schema_version"] == "7"
+        assert meta["store_schema_version"] == "8"
         assert meta["schema_version"] == SCHEMA_VERSION
     finally:
         queue.close()
@@ -374,7 +374,7 @@ def test_old_database_upgrade_in_place(tmp_path) -> None:
         }
         assert {"idx_jobs_status_created", "idx_job_events_job"} <= indexes
         meta = dict(reopened.connection.execute("SELECT key, value FROM meta"))
-        assert meta["store_schema_version"] == "7"
+        assert meta["store_schema_version"] == "8"
         job_id = reopened.create_job("batch", {"symbol": "after-upgrade"})
         assert reopened.claim_job(claimed_by="w", lease_seconds=30)["id"] == job_id
         assert reopened.complete_job(job_id, {"ok": True}, claimed_by="w") is True

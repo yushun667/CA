@@ -19,7 +19,7 @@ Canonical fields::
     id (optional), object_path (required), object_field (derived),
     target_function_id, target_function_name (one required), target_usr,
     file, line, col, end_line, end_col, tu_id, registration_kind,
-    confidence (0..1), evidence (str | list[str]), module, directory
+    evidence (str | list[str]), module, directory
     (derived from file), registrar_function_id
 
 Query results add the decoded ``evidence`` list. ``callback_target_links``
@@ -36,7 +36,6 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from ca.core.ids import digest
 
-DEFAULT_CONFIDENCE = 0.5
 DEFAULT_KIND = "unknown"
 ID_PREFIX = "cbreg:"
 
@@ -54,7 +53,6 @@ COLUMNS = (
     "end_col",
     "tu_id",
     "registration_kind",
-    "confidence",
     "evidence_json",
     "module",
     "directory",
@@ -183,10 +181,6 @@ def normalize_record(record: Any) -> dict[str, Any]:
         line=line,
         registration_kind=kind,
     )
-    try:
-        confidence = float(_get(record, "confidence", DEFAULT_CONFIDENCE))
-    except (TypeError, ValueError):
-        confidence = DEFAULT_CONFIDENCE
     return {
         "id": identifier,
         "object_path": object_path,
@@ -201,7 +195,6 @@ def normalize_record(record: Any) -> dict[str, Any]:
         "end_col": _int(_get(record, "end_col")),
         "tu_id": tu_id,
         "registration_kind": kind,
-        "confidence": min(1.0, max(0.0, confidence)),
         "evidence_json": _encode_evidence(_get(record, "evidence")),
         "module": _text(_get(record, "module")),
         "directory": _text(_get(record, "directory")) or _directory_of(file),
@@ -211,7 +204,6 @@ def normalize_record(record: Any) -> dict[str, Any]:
 
 def _row(row: sqlite3.Row) -> dict[str, Any]:
     data = dict(row)
-    data["confidence"] = float(data["confidence"])
     data["evidence"] = _decode_evidence(data.pop("evidence_json", None))
     return data
 
@@ -273,7 +265,6 @@ class CallbackRegistry:
         target_function_id: str | None = None,
         target_function_name: str | None = None,
         registration_kind: str | None = None,
-        min_confidence: float | None = None,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -310,9 +301,6 @@ class CallbackRegistry:
             if value is not None:
                 where.append(f"{column} = ?")
                 params.append(_text(value))
-        if min_confidence is not None:
-            where.append("confidence >= ?")
-            params.append(float(min_confidence))
         sql = _SELECT_SQL
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -384,19 +372,14 @@ class CallbackRegistry:
             return []
         rows = self._conn.execute(
             "SELECT l.registration_id, l.call_target_id, ct.call_id, ct.caller_id, "
-            "ct.callee_id, ct.callee_name, ct.kind, ct.confidence, ct.reason "
+            "ct.callee_id, ct.callee_name, ct.kind, ct.reason "
             "FROM callback_target_links AS l "
             "JOIN call_targets AS ct ON ct.id = l.call_target_id "
             "WHERE l.registration_id = ? "
             "ORDER BY ct.callee_name, ct.id LIMIT ?",
             (_text(registration_id_value), int(limit)),
         )
-        result = []
-        for row in rows:
-            data = dict(row)
-            data["confidence"] = float(data["confidence"])
-            result.append(data)
-        return result
+        return [dict(row) for row in rows]
 
     def query_registrations_for_target(
         self, call_target_id_value: str, limit: int = 200

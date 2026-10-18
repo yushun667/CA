@@ -13,8 +13,9 @@ translation unit by tracking how function addresses are stored and passed:
 
 Candidates are filtered by the call expression's function-pointer signature
 (return type, parameter canonical types, variadicity). No evidence => no
-record (precision first). Everything is intra-TU; the record carries a
-confidence and a human-auditable ``reason`` naming the registration site.
+record (precision first). Everything is intra-TU; the record carries a human-auditable ``reason``
+naming the registration site and represents membership in the possible target
+set (no confidence scoring).
 
 Contract: :class:`ca.core.schema.CallTargetRecord` with
 ``kind="indirect_candidate"`` and :func:`ca.core.ids.call_target_id`.
@@ -69,6 +70,7 @@ _INITIALIZER_KINDS = tuple(
     if kind is not None
 )
 _MAX_REGISTRY_FUNCTIONS = 600
+_MAX_REASON_CHARS = 600
 _MAX_CANDIDATES_PER_CALL = 32
 _MAX_TOTAL_TARGETS = 64
 
@@ -361,8 +363,6 @@ def resolve_call_targets(
     cursor: Any,
     cache: SourceCache,
     *,
-    max_confidence: float = 0.95,
-    min_confidence: float = 0.4,
     max_targets: int = _MAX_TOTAL_TARGETS,
 ) -> list[CallTargetRecord]:
     """Return deterministic indirect-call candidate records for one function."""
@@ -382,9 +382,7 @@ def resolve_call_targets(
         if not candidates:
             continue
         call_id = _call_id_for_site(unit, function, site, parse_calls)
-        for candidate, confidence, reason in candidates:
-            if confidence < min_confidence:
-                continue
+        for candidate, reason in candidates:
             records.append(
                 CallTargetRecord(
                     id=core_ids.call_target_id(
@@ -395,7 +393,6 @@ def resolve_call_targets(
                     callee_id=candidate.id,
                     callee_name=candidate.name,
                     kind="indirect_candidate",
-                    confidence=min(round(confidence, 3), max_confidence),
                     reason=reason,
                     sloc=site.sloc,
                 )
@@ -405,7 +402,6 @@ def resolve_call_targets(
             record.sloc.line,
             record.sloc.col,
             record.call_id,
-            -record.confidence,
             record.callee_id,
         )
     )
@@ -503,28 +499,28 @@ def _candidates_for_site(
     registry: _Registry,
     cache: SourceCache,
     unit: Any,
-) -> list[tuple[FunctionRecord, float, str]]:
-    collected: dict[str, tuple[FunctionRecord, float, str]] = {}
+) -> list[tuple[FunctionRecord, str]]:
+    collected: dict[str, tuple[FunctionRecord, str]] = {}
     key = site.callee_text
     base, inner = _callee_keys(site, cache)
 
-    def add(candidates: dict[str, _Candidate], confidence: float) -> None:
+    def add(candidates: dict[str, _Candidate]) -> None:
         for candidate in candidates.values():
-            _merge(collected, candidate, confidence, site, function, unit)
+            _merge(collected, candidate, site, function, unit)
 
     if key and key in registry.exact:
-        add(registry.exact[key], 0.9)
+        add(registry.exact[key])
     if base and base != key and base in registry.exact:
-        add(registry.exact[base], 0.75)
+        add(registry.exact[base])
     if inner and inner in registry.exact:
-        add(registry.exact[inner], 0.8)
+        add(registry.exact[inner])
     # Function-pointer parameter of this function.
     for param_name, index in _param_index(_definition_cursor(unit, function)).items():
         if inner == _key(param_name) or key == _key(param_name):
-            add(registry.param.get((function.id, index), {}), 0.7)
+            add(registry.param.get((function.id, index), {}))
     suffix = _field_suffix(key)
     if suffix and suffix in registry.suffix:
-        add(registry.suffix[suffix], 0.55)
+        add(registry.suffix[suffix])
     # Call of a function returning a callback pointer: callbacks()(...).
     callee_kind = site.callee_cursor.kind
     if callee_kind == CursorKind.CALL_EXPR:
@@ -534,43 +530,46 @@ def _candidates_for_site(
         if inner_callee is not None:
             target = registry._function_for(inner_callee)
             if target is not None:
-                add(registry.returns.get(target.id, {}), 0.6)
-    filtered: list[tuple[FunctionRecord, float, str]] = []
+                add(registry.returns.get(target.id, {}))
+    filtered: list[tuple[FunctionRecord, str]] = []
     for candidate in collected.values():
         candidate_signature = _function_signature(unit, candidate[0])
         if not site.signature.matches(candidate_signature):
             continue
-        if candidate[0].id == function.id and candidate[1] < 0.7:
-            # A low-confidence (field-suffix) match that resolves to the caller
-            # itself is almost always a same-named field collision; drop it.
+        if candidate[0].id == function.id:
+            # A field-suffix/alias match that resolves to the caller itself is
+            # almost always a same-named field collision; precision guard.
             continue
         filtered.append(candidate)
     if len(filtered) > _MAX_CANDIDATES_PER_CALL:
         filtered = filtered[:_MAX_CANDIDATES_PER_CALL]
-    if len(filtered) > 1:
-        filtered = [
-            (candidate, max(0.4, confidence - 0.1), reason)
-            for candidate, confidence, reason in filtered
-        ]
     return filtered
 
 
 def _merge(
-    collected: dict[str, tuple[FunctionRecord, float, str]],
+    collected: dict[str, tuple[FunctionRecord, str]],
     candidate: _Candidate,
-    confidence: float,
     site: _CallSite,
     function: FunctionRecord,
     unit: Any,
 ) -> None:
-    existing = collected.get(candidate.function.id)
-    if existing is not None and existing[1] >= confidence:
-        return
+    """Merge one candidate; duplicate candidates keep a single merged evidence."""
+
     reason = (
         f"indirect call {site.callee_text or '?'} at "
         f"{site.sloc.file}:{site.sloc.line}: {candidate.evidence}"
     )
-    collected[candidate.function.id] = (candidate.function, confidence, reason)
+    existing = collected.get(candidate.function.id)
+    if existing is None:
+        collected[candidate.function.id] = (candidate.function, reason)
+        return
+    prior = existing[1]
+    if reason == prior:
+        return
+    merged = f"{prior} ; also {reason}"
+    if len(merged) > _MAX_REASON_CHARS:
+        merged = merged[:_MAX_REASON_CHARS - 4] + " ..."
+    collected[candidate.function.id] = (candidate.function, merged)
 
 
 # --------------------------------------------------------------------------- #

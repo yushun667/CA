@@ -83,6 +83,31 @@ def test_graph_forward_depth1(indexed: dict[str, Path]) -> None:
         for edge in data["edges"]
     )
     assert all(edge["source"] in ("direct", "candidate") for edge in data["edges"])
+    assert all("confidence" not in edge for edge in data["edges"])
+
+
+def test_graph_normalize_marks_virtual_candidates_without_scores() -> None:
+    from ca.cli import graph as graph_module
+
+    raw = {
+        "root": "Base::run",
+        "edges": [
+            {
+                "caller_name": "Base::run",
+                "callee_name": "Derived::run",
+                "kind": "virtual_candidate",
+                "source": "virtual_candidate",
+                "is_resolved": False,
+            }
+        ],
+        "nodes": [{"id": "fn:1", "name": "Base::run", "depth": 0}],
+    }
+    normalized = graph_module._normalize(raw, "Base::run", "forward", 1, 100)
+    edge = normalized["edges"][0]
+    assert edge["candidate"] is True
+    assert edge["kind"] == "virtual_candidate"
+    assert edge["source"] == "virtual_candidate"
+    assert "confidence" not in edge
 
 
 def test_graph_forward_depth2_includes_second_hop(indexed: dict[str, Path]) -> None:
@@ -115,6 +140,7 @@ def test_graph_dot_and_invalid_requests(
     assert code == 0
     assert captured.out.startswith("digraph")
     assert "->" in captured.out
+    assert "confidence" not in captured.out
 
     assert run_cli(["graph", "--from", "main", "--db", str(indexed["db"]), "--depth", "99"]) == 1
     assert run_cli(["graph", "--from", "no_such_symbol", "--db", str(indexed["db"]), "--depth", "1"]) == 2
@@ -268,6 +294,8 @@ def test_mcp_stdio_server(indexed: dict[str, Path]) -> None:
     assert any(item["caller_name"] == "proc_alloc" for item in callers["data"]["items"])
     graph = envelope(5)
     assert {node["name"] for node in graph["data"]["nodes"]} >= {"main", "proc_alloc"}
+    assert all("confidence" not in edge for edge in graph["data"]["edges"])
+    assert all("confidence" not in item for item in callers["data"]["items"])
     stats = envelope(6)
     assert stats["data"]["tables"]["functions"] > 0
     detail = envelope(7)

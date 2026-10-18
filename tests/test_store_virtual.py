@@ -73,10 +73,10 @@ def test_callees_merge_cross_tu_virtual_candidates(virtual_store) -> None:
     candidates = [row for row in rows if row["kind"] == "virtual_candidate"]
     names = {row["callee_name"] for row in candidates}
     assert names == {"value"}
-    confidences = sorted(row["confidence"] for row in candidates)
-    assert confidences == [0.5, 0.6]
-    derived = [row for row in candidates if row["confidence"] == 0.6]
+    derived = [row for row in candidates if row["callee_name"] == "value"]
     assert derived and derived[0]["callee_file"] == "ast_virtual_derived.cpp"
+    # Candidate target set: both overrides resolve, no scored ranking.
+    assert {row["kind"] for row in candidates} == {"virtual_candidate"}
     # Direct virtual call edge is still present and kept as the direct source.
     direct = [row for row in rows if row["kind"] == "virtual" and row["source"] == "call"]
     assert direct
@@ -84,9 +84,7 @@ def test_callees_merge_cross_tu_virtual_candidates(virtual_store) -> None:
 
 def test_callers_merge_virtual_candidates(virtual_store) -> None:
     rows = virtual_store.query_callers("ast_virtual::Derived::value", limit=50)
-    candidates = [
-        row for row in rows if row["kind"] == "virtual_candidate" and row["confidence"] == 0.6
-    ]
+    candidates = [row for row in rows if row["kind"] == "virtual_candidate"]
     assert candidates
     assert candidates[0]["caller_name"] == "call_through_base"
 
@@ -159,7 +157,7 @@ def test_cross_tu_candidates_work_without_materialized_call_targets() -> None:
     empty. This test builds a store from parse results only (no analyze pass, so
     ``call_targets`` contains no materialized virtual candidates) and requires
     ``forward_edges``/``reverse_edges`` plus query_callees/query_callers to
-    return query-time rows with the expected confidences.
+    return query-time rows with the expected target set.
     """
 
     db = os.path.join(tempfile.mkdtemp(), "virtual_query_time.db")
@@ -187,7 +185,6 @@ def test_cross_tu_candidates_work_without_materialized_call_targets() -> None:
 
         forward = virtual_dispatch.forward_edges(connection, [caller_id], 50)
         assert forward, "forward virtual candidates must be non-empty (LIMIT binding bug)"
-        assert sorted(round(row["confidence"], 2) for row in forward) == [0.5, 0.6]
         assert {row["callee_id"] for row in forward} == {
             derived_id,
             connection.execute(
@@ -199,11 +196,10 @@ def test_cross_tu_candidates_work_without_materialized_call_targets() -> None:
         reverse = virtual_dispatch.reverse_edges(connection, [derived_id], 50)
         assert reverse, "reverse virtual candidates must be non-empty (LIMIT binding bug)"
         assert reverse[0]["callee_id"] == derived_id
-        assert round(reverse[0]["confidence"], 2) == 0.6
 
         callees = [row for row in store.query_callees("call_through_base", limit=50)
                    if row["kind"] == "virtual_candidate"]
-        assert {round(row["confidence"], 2) for row in callees} == {0.5, 0.6}
+        assert {row["callee_id"] for row in callees} == {row["callee_id"] for row in forward}
         assert all(row["source"] == "virtual_candidate" for row in callees)
         callers = [row for row in store.query_callers("ast_virtual::Derived::value", limit=50)
                    if row["kind"] == "virtual_candidate"]

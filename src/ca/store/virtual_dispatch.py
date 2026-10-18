@@ -20,7 +20,8 @@ from all indexed shards participates: a virtual call whose static target is
 ``Base::m`` gains a ``virtual_candidate`` edge to every known override of
 ``Base::m`` (transitive override chain, depth <= 3). Reverse queries follow the
 same relation upwards: callers of ``Derived::m`` include virtual call sites
-whose static target is an ancestor method. Confidence decreases with depth and
+whose static target is an ancestor method. Candidates form a *set* of possible
+targets (no probability/confidence); ``reason`` records the override depth and
 candidate edges never replace direct ones.
 """
 
@@ -31,7 +32,6 @@ from typing import Any, Sequence
 
 VIRTUAL_OVERRIDES_TABLE = "virtual_overrides"
 TYPE_BASES_TABLE = "type_bases"
-_DEPTH_CONFIDENCE = {1: 0.6, 2: 0.5, 3: 0.45}
 MAX_DEPTH = 3
 
 _SCHEMA_STATEMENTS = (
@@ -90,17 +90,6 @@ def has_tables(connection: sqlite3.Connection) -> bool:
     return row is not None
 
 
-def _confidence_case(depth_column: str) -> str:
-    return (
-        "CASE "
-        + " ".join(
-            f"WHEN {depth_column} = {depth} THEN {confidence}"
-            for depth, confidence in _DEPTH_CONFIDENCE.items()
-        )
-        + f" ELSE {_DEPTH_CONFIDENCE[MAX_DEPTH]} END"
-    )
-
-
 _FORWARD_SQL = f"""
 WITH RECURSIVE vt(function_id, base_function_id, depth) AS (
     SELECT function_id, base_function_id, 1 FROM virtual_overrides
@@ -122,7 +111,7 @@ SELECT c.id AS call_id, c.caller_id AS caller_id, cf.name AS caller_name,
        COALESCE(NULLIF(tf.name, ''), edges.function_id) AS callee_name,
        COALESCE(tf.file, '') AS callee_file, COALESCE(tf.line, 0) AS callee_line,
        c.file AS call_file, c.line AS call_line, 'virtual_candidate' AS kind,
-       {_confidence_case("edges.depth")} AS confidence, 0 AS is_resolved,
+       ('virtual override depth=' || edges.depth) AS reason, 0 AS is_resolved,
        'virtual_candidate' AS source, 2 AS source_rank
 FROM calls AS c
 JOIN edges ON c.callee_id = edges.base_function_id
@@ -154,7 +143,6 @@ def forward_edges(
     for row in rows:
         data = dict(row)
         data["candidate"] = True
-        data["confidence"] = float(data["confidence"])
         data["is_resolved"] = bool(data["is_resolved"])
         result.append(data)
     return result
@@ -183,7 +171,7 @@ SELECT c.id AS call_id, c.caller_id AS caller_id, cf.name AS caller_name,
        COALESCE(NULLIF(tf.name, ''), edges.function_id) AS callee_name,
        COALESCE(tf.file, '') AS callee_file, COALESCE(tf.line, 0) AS callee_line,
        c.file AS call_file, c.line AS call_line, 'virtual_candidate' AS kind,
-       {_confidence_case("edges.depth")} AS confidence, 0 AS is_resolved,
+       ('virtual override depth=' || edges.depth) AS reason, 0 AS is_resolved,
        'virtual_candidate' AS source, 2 AS source_rank
 FROM calls AS c
 JOIN edges ON c.callee_id = edges.ancestor_id
@@ -212,7 +200,6 @@ def reverse_edges(
     for row in rows:
         data = dict(row)
         data["candidate"] = True
-        data["confidence"] = float(data["confidence"])
         data["is_resolved"] = bool(data["is_resolved"])
         result.append(data)
     return result

@@ -384,7 +384,6 @@ def test_call_targets_and_findings(tmp_path) -> None:
         callee_id=callee.id,
         callee_name=callee.name,
         kind="indirect_candidate",
-        confidence=0.8,
         reason="fed",
         sloc=_sloc(12),
     )
@@ -413,7 +412,6 @@ def test_callbacks_federated(tmp_path) -> None:
         "line": 12,
         "tu_id": "tu:one",
         "registration_kind": "struct_field",
-        "confidence": 0.9,
         "evidence": ["g_ops.read = alpha"],
         "module": "kernel",
     }
@@ -426,7 +424,6 @@ def test_callbacks_federated(tmp_path) -> None:
         "line": 22,
         "tu_id": "tu:two",
         "registration_kind": "registration_call",
-        "confidence": 0.7,
         "evidence": ["register(&g_ops.write, beta)"],
         "module": "kernel",
     }
@@ -570,7 +567,7 @@ def test_stats_aggregation(tmp_path) -> None:
         for entry in stats["shards"]:
             assert entry["path"]
             assert entry["schema_version"] == SCHEMA_VERSION
-            assert entry["store_schema_version"] == "7"
+            assert entry["store_schema_version"] == "8"
             assert entry["tables"]["functions"] >= 1
 
 

@@ -22,10 +22,12 @@ safe.
 
 Schema versioning: ``meta.schema_version`` tracks the core contract
 (``ca.core.schema.SCHEMA_VERSION``) while ``meta.store_schema_version`` tracks
-the additive physical layout (``"5"`` adds ``call_targets``, the
+the additive physical layout (``"8"`` adds ``call_targets``, the
 ``workspaces``/``projects``/``variants`` metadata tables, ``deep_status``, the
-cross-TU callback tables ``callback_registrations``/``callback_target_links`` and
-the backend job queue ``jobs``/``job_events``). Upgrades are
+cross-TU callback tables ``callback_registrations``/``callback_target_links``,
+the backend job queue ``jobs``/``job_events``, virtual-dispatch metadata and
+``tu_includes``; v8 also removes the legacy candidate ``confidence`` columns).
+Upgrades are
 non-destructive: ``open()`` applies ``CREATE TABLE IF NOT EXISTS`` and
 ``finalize()`` adds indexes, so a phase-2 database stays queryable before
 ``finalize()`` and gains the new tables/indexes afterwards.
@@ -40,15 +42,17 @@ Query result keys (CLI/benchmark contract, flattened ``Sloc``):
   databases without a usable FTS5 index).
 - ``query_callers(symbol, limit=200)`` ->
   ``caller_id, caller_name, caller_file, caller_line, callee_name, call_file,
-  call_line, is_resolved, kind, confidence, source, candidate``.
+  call_line, is_resolved, kind, source, candidate, reason``.
 - ``query_callees(symbol, limit=200)`` ->
   ``callee_id, callee_name, callee_file, callee_line, call_file, call_line,
-  is_resolved, kind, confidence, source, candidate``.
-  Both merge direct ``calls`` rows (``source="call"``, confidence ``1.0``,
-  ``kind`` = calls.kind) with ``call_targets`` candidate edges
-  (``source="call_target"``, ``candidate=True``, heuristic ``confidence`` and
-  target ``kind``); when both describe the same (caller, callee, call site) the
-  direct edge wins. ``query_callers`` also matches unresolved call sites by
+  is_resolved, kind, source, candidate, reason``.
+  Both merge direct ``calls`` rows (``source="call"``, ``kind`` = calls.kind)
+  with ``call_targets`` candidate edges (``source="call_target"``) and
+  query-time ``virtual_candidate`` edges. Candidate targets are a *set* (no
+  confidence); duplicate edges are collapsed by natural key
+  ``(caller_id, callee_id, callee_name, call_file, call_line)`` with priority
+  direct < call_target < virtual_candidate and their audit ``reason`` strings
+  joined with ``"; "``. ``query_callers`` also matches unresolved call sites by
   their redundant ``callee_name``. Ordering is ``(call_file, call_line,
   caller/callee id, callee name)`` and limit applies after dedupe.
 - ``add_call_targets(records) -> int`` inserts candidate ``CallTargetRecord``
@@ -58,8 +62,8 @@ Query result keys (CLI/benchmark contract, flattened ``Sloc``):
   immediately (``source="call_target"``, ``candidate=True``).
 - ``query_call_targets(symbol, direction="callee"|"caller", limit=200)`` ->
   ``call_id, caller_id, caller_name, callee_id, callee_name, callee_file,
-  callee_line, call_file, call_line, kind, confidence, reason, source,
-  candidate`` (candidate edges only).
+  callee_line, call_file, call_line, kind, reason, source, candidate``
+  (candidate edges only; natural-key deduped, no confidence).
 - ``query_function_detail(symbol)`` -> ``{function, deep_ready, branches,
   assignments, returns, resource_ops, findings}`` (``deep_ready`` reports whether
   the on-demand deep pass has completed for the function; base facts are always
@@ -122,6 +126,7 @@ from ca.store import (
     deep,
     graph,
     jobs as job_queue,
+    migrations,
     queries,
     virtual_dispatch,
     workspace,
@@ -177,6 +182,9 @@ class SqliteStore:
         # virtual_overrides/type_bases tables plus functions/types dispatch
         # columns on databases created before schema v7.
         virtual_dispatch.migrate(connection)
+        # Schema v8: drop legacy candidate-confidence columns (idempotent; a
+        # failure keeps the old column and logs a warning instead of failing).
+        migrations.migrate_confidence_columns(connection)
         connection.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
             (SCHEMA_VERSION,),

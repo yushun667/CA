@@ -81,7 +81,6 @@ class AnalyzeOptions:
     max_var_names: int = 16
     max_blocks: int = 20000
     max_call_targets: int = 64
-    call_target_min_confidence: float = 0.4
     # Optional guard for pathological bodies (template/macro expansions from
     # OpenHarmony can be MBs of source). 0 means unlimited (default).
     max_function_bytes: int = 0
@@ -237,13 +236,11 @@ def analyze_function(
         function,
         cursor,
         cache,
-        min_confidence=opts.call_target_min_confidence,
         max_targets=opts.max_call_targets,
     )
     virtual_targets = resolve_virtual_targets(
         unit,
         function,
-        min_confidence=opts.call_target_min_confidence,
         max_targets=opts.max_call_targets,
     )
     if virtual_targets:
@@ -275,7 +272,6 @@ def _merge_call_targets(
             record.sloc.line,
             record.sloc.col,
             record.call_id,
-            -record.confidence,
             record.callee_id,
         )
     )

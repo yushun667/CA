@@ -44,7 +44,6 @@ class CallbackPassSummary:
     written_links: int = 0
     existing_edges: int = 0
     registration_kinds: dict[str, int] = field(default_factory=dict)
-    confidence: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     elapsed_seconds: float = 0.0
     pass_version: int = _CALLBACK_PASS_VERSION
@@ -59,7 +58,6 @@ class CallbackPassSummary:
             "registration_kinds": self.registration_kinds,
             "indirect_call_sites": self.indirect_call_sites,
             "candidate_edges": self.candidate_edges,
-            "confidence": self.confidence,
             "links": self.links,
             "existing_edges": self.existing_edges,
             "written": {
@@ -191,16 +189,6 @@ def _iter_extracted(
 # --------------------------------------------------------------------------- #
 
 
-def _confidence_bucket(value: float) -> str:
-    if value < 0.5:
-        return "<0.5"
-    if value < 0.6:
-        return "0.5-0.6"
-    if value < 0.8:
-        return "0.6-0.8"
-    return ">=0.8"
-
-
 def _count_by(items: Sequence[Any], attribute: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     for item in items:
@@ -291,7 +279,6 @@ def resolve_callbacks(
     jobs: int = 1,
     max_tus: int | None = None,
     batch_size: int = 4,
-    min_confidence: float = 0.4,
     finalize: bool = True,
     progress: Any | None = None,
 ) -> CallbackPassSummary:
@@ -356,15 +343,9 @@ def resolve_callbacks(
             functions,
             signatures=signatures,
             existing_edges=existing,
-            min_confidence=min_confidence,
         )
         summary.candidate_edges = len(call_targets)
         summary.links = len(links)
-        buckets: dict[str, int] = {}
-        for record in call_targets:
-            key = _confidence_bucket(float(record.confidence))
-            buckets[key] = buckets.get(key, 0) + 1
-        summary.confidence = dict(sorted(buckets.items()))
 
         if call_targets or registrations or links:
             store.begin()

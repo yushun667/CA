@@ -29,14 +29,15 @@ without requiring a pointer analysis.
    and `type_bases(type_id, base_type_id)`.
 3. **Same-TU candidates** (`ca.analyze.virtual_dispatch`): a virtual call site
    emits `CallTargetRecord(kind="virtual_candidate")` for every override of its
-   static target visible in the TU. Confidence decreases with override depth
-   (1 = 0.6, 2 = 0.5, 3 = 0.45), respects the configured minimum, is
-   deterministic, deduplicated and capped (`max_call_targets`).
+   static target visible in the TU (override depth <= 3); `reason` records the
+   relationship/depth as evidence. There is no confidence score or threshold:
+   the result is a deterministic, deduplicated candidate set capped by
+   `max_call_targets`.
 4. **Cross-TU candidates at query time**: `store.load_forward_edges` /
    `load_reverse_edges` merge virtual candidates from the persisted override
    relation of every indexed shard (recursive CTE, depth <= 3). Candidates are
-   additional rows (`source != "call"`) with `kind`, `confidence` and a readable
-   `reason`; direct edges always win on duplicates. `callers` of an override
+   additional rows (`source != "call"`) with `kind` and a readable `reason`;
+   direct edges always win on duplicates. `callers` of an override
    likewise include virtual call sites whose static target is an ancestor
    method.
 5. **No materialization**: cross-TU candidates are computed during
@@ -46,7 +47,8 @@ without requiring a pointer analysis.
 ## Reasons
 
 - Direct-call semantics stay untouched; virtual targets are explicit candidates
-  with type/confidence/evidence, so agents can distinguish fact from heuristic.
+  with kind/evidence, so agents can distinguish direct facts from candidate
+  sets (never a scored probability).
 - Query-time merging uses the whole database regardless of ingestion order,
   shard boundaries or later incremental re-indexing; a materialized pass would
   have to be rerun whenever a shard changes and would duplicate the direct-call

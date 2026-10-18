@@ -645,7 +645,6 @@ def cmd_resolve_callbacks(args: Any) -> int:
         jobs=args.jobs,
         max_tus=args.max_tus,
         batch_size=getattr(args, "batch_size", 4),
-        min_confidence=args.min_confidence,
         finalize=not args.no_finalize,
     )
     data = summary.to_dict()
@@ -660,7 +659,6 @@ def cmd_resolve_callbacks(args: Any) -> int:
                 "registration_kinds": summary.registration_kinds,
                 "indirect_call_sites": summary.indirect_call_sites,
                 "candidate_edges": summary.candidate_edges,
-                "confidence": summary.confidence,
                 "links": summary.links,
                 "written": data["written"],
                 "elapsed_seconds": data["elapsed_seconds"],

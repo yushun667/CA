@@ -28,17 +28,18 @@ database adds the missing tables/columns in place.
 
 - **Same TU**: `ca.analyze.virtual_dispatch` turns virtual call sites into
   `virtual_candidate` `CallTargetRecord`s for every override of the static
-  target visible in that TU (direct override 0.6, depth 2 0.5, depth 3 0.45,
-  threshold `AnalyzeOptions.call_target_min_confidence`).
+  target visible in that TU (override depth <= 3). The set is bounded by
+  `max_call_targets`; `reason` records the override relationship and depth as
+  evidence, never as a probability.
 - **Cross TU**: query time merges `virtual_candidate` edges on top of direct
   calls in `store.load_forward_edges`/`load_reverse_edges` using the persisted
   override relation from all indexed shards. No extra materialization step is
   needed; old databases without the tables degrade to direct edges.
 - For a call through `Base::m`, candidates are the known overrides of `m`
   (transitive override chain, at most 3 levels). `callees` returns them with
-  `kind="virtual_candidate"`, a lower `confidence` than the direct edge and a
-  human-readable `reason`; `callers` of `Derived::m` include virtual call sites
-  whose static target is an ancestor method.
+  `kind="virtual_candidate"` and a human-readable `reason`; `callers` of
+  `Derived::m` include virtual call sites whose static target is an ancestor
+  method.
 - Direct call edges are never replaced or upgraded: candidates are additional
   rows (`source != "call"`), same ids via `ca.core.ids.call_target_id`.
 

@@ -18,7 +18,7 @@ Pipeline:
 3. :func:`resolve_cross_tu_targets` -- match call sites against facts:
    qualifier-aware (base symbol + field chain must match; a dynamic array index
    only matches constant-index registrations of the same base), signature
-   filtered, with confidence and evidence. Also handles callbacks passed as
+   filtered, with auditable evidence (candidate target set, no confidence). Also handles callbacks passed as
    arguments across TUs (``param:<callee>:<index>``) and function pointers
    returned by getters (``return:<getter>``).
 4. :func:`analyze_cross_tu` -- convenience orchestration over a list of parsed
@@ -116,7 +116,6 @@ class RegistrationFact:
     target_usr: str = ""
     object_field: str = ""
     registration_kind: str = KIND_GLOBAL_ASSIGN
-    confidence: float = 0.5
     file: str = ""
     line: int = 0
     col: int = 0
@@ -398,7 +397,6 @@ class _Extractor:
                         cursor=node,
                         evidence=f"returned from {function.name}",
                         registrar_function_id=function.id,
-                        confidence=0.5,
                     )
         for child in node.get_children():
             if child.kind in _FUNCTION_KINDS:
@@ -477,7 +475,6 @@ class _Extractor:
                         f"{_location(self.cache, node)}"
                     ),
                     registrar_function_id=function.id,
-                    confidence=0.5,
                 )
         if not _REGISTRATION_CALL_PATTERN.search(name):
             return
@@ -511,7 +508,6 @@ class _Extractor:
                     f"{_location(self.cache, node)}"
                 ),
                 registrar_function_id=function.id,
-                confidence=0.4,
             )
 
     # -- indirect call sites --------------------------------------------
@@ -611,7 +607,6 @@ class _Extractor:
         cursor: Any,
         evidence: str,
         registrar_function_id: str = "",
-        confidence: float = 0.5,
     ) -> None:
         if len(self.facts) >= self.max_facts:
             return
@@ -626,7 +621,6 @@ class _Extractor:
             target_usr=ref.usr,
             object_field=_field_of(object_path),
             registration_kind=kind,
-            confidence=confidence,
             file=file,
             line=sloc.line,
             col=sloc.col,
@@ -678,7 +672,6 @@ def resolve_cross_tu_targets(
     *,
     signatures: Mapping[str, _Signature] | None = None,
     existing_edges: Iterable[tuple[str, str]] = (),
-    min_confidence: float = 0.4,
     max_candidates_per_call: int = _MAX_CANDIDATES,
     max_targets: int = _MAX_TARGETS,
     dedupe: bool = True,
@@ -689,11 +682,13 @@ def resolve_cross_tu_targets(
     ``(registration_id, call_target_id)`` pairs for the store's
     ``callback_target_links`` table.
 
-    ``dedupe=True`` (default) collapses the same logical edge emitted from
-    header-inline functions instantiated in several TUs: the key is
+    Every candidate whose signature matches is retained (bounded per call site
+    and overall); there is no confidence score, threshold or ranking. ``dedupe``
+    collapses the same logical edge emitted from header-inline functions
+    instantiated in several TUs: the key is
     ``(caller_usr or caller_id, callee_usr or callee_id, call file, line)``.
-    The retained record has the highest confidence; duplicate evidence is
-    merged into its ``reason`` and every matching registration id links to the
+    The retained representative is deterministic, duplicate evidence is merged
+    into its ``reason`` and every matching registration id links to the
     retained ``call_target_id``.
     """
 
@@ -710,33 +705,31 @@ def resolve_cross_tu_targets(
         elif fact.registration_kind == KIND_RETURN_POINTER:
             by_return[fact.object_path].append(fact)
 
-    entries: list[tuple[IndirectCallSite, FunctionRecord, float, str, RegistrationFact]] = []
-    for site in sorted(call_sites, key=lambda s: (s.file, s.line, s.col, s.call_id)):
+    entries: list[tuple[IndirectCallSite, FunctionRecord, str, RegistrationFact]] = []
+    for site in sorted(call_sites, key=lambda item: (item.file, item.line, item.col, item.call_id)):
         candidates = _match_site(site, by_path, by_param, by_return)
-        filtered: list[tuple[FunctionRecord, float, str, RegistrationFact]] = []
-        for fact, confidence, reason in candidates:
-            if confidence < min_confidence:
-                continue
+        filtered: list[tuple[FunctionRecord, str, RegistrationFact]] = []
+        for fact, reason in candidates:
             function = functions.get(fact.target_function_id)
             if function is None:
                 continue
             if not _signature_matches(site.signature, signatures.get(function.id)):
                 continue
-            filtered.append((function, confidence, reason, fact))
-        filtered.sort(key=lambda item: (-item[1], item[0].id))
+            filtered.append((function, reason, fact))
+        filtered.sort(key=lambda item: item[0].id)
         if len(filtered) > max_candidates_per_call:
             filtered = filtered[:max_candidates_per_call]
-        for function, confidence, reason, fact in filtered:
+        for function, reason, fact in filtered:
             edge_key = (site.call_id, function.id)
             if edge_key in seen_edges:
                 continue
             seen_edges.add(edge_key)
-            entries.append((site, function, confidence, reason, fact))
+            entries.append((site, function, reason, fact))
 
-    groups: dict[tuple[str, str, str, int], list[tuple[IndirectCallSite, FunctionRecord, float, str, RegistrationFact]]] = {}
+    groups: dict[tuple[str, str, str, int], list[tuple[IndirectCallSite, FunctionRecord, str, RegistrationFact]]] = {}
     order: list[tuple[str, str, str, int]] = []
     for entry in entries:
-        site, function, _confidence, _reason, _fact = entry
+        site, function, _reason, _fact = entry
         if dedupe:
             key = (
                 site.caller_usr or site.caller_id,
@@ -756,12 +749,11 @@ def resolve_cross_tu_targets(
     seen_links: set[tuple[str, str]] = set()
     for key in order:
         bucket = groups[key]
-        # Highest confidence wins; ties fall back to the deterministic site order.
-        bucket.sort(key=lambda item: (-item[2], item[0].call_id, item[1].id))
-        site, function, confidence, reason, fact = bucket[0]
+        bucket.sort(key=lambda item: (item[0].call_id, item[1].id))
+        site, function, reason, fact = bucket[0]
         merged_reasons: list[str] = []
         for other in bucket[1:]:
-            other_reason = other[3]
+            other_reason = other[2]
             if other_reason and other_reason not in merged_reasons and other_reason != reason:
                 merged_reasons.append(other_reason)
         merged_reason = reason
@@ -781,7 +773,6 @@ def resolve_cross_tu_targets(
                 callee_id=function.id,
                 callee_name=function.name,
                 kind="indirect_candidate",
-                confidence=round(min(confidence, 0.95), 3),
                 reason=merged_reason,
                 sloc=Sloc(
                     file=site.file,
@@ -791,7 +782,7 @@ def resolve_cross_tu_targets(
             )
         )
         for other in bucket:
-            other_fact = other[4]
+            other_fact = other[3]
             if other_fact.id and (other_fact.id, target_id) not in seen_links:
                 seen_links.add((other_fact.id, target_id))
                 links.append((other_fact.id, target_id))
@@ -802,7 +793,6 @@ def resolve_cross_tu_targets(
             record.sloc.line,
             record.sloc.col,
             record.call_id,
-            -record.confidence,
             record.callee_id,
         )
     )
@@ -814,8 +804,8 @@ def _match_site(
     by_path: Mapping[tuple[str, tuple[str, ...]], list[RegistrationFact]],
     by_param: Mapping[str, list[RegistrationFact]],
     by_return: Mapping[str, list[RegistrationFact]],
-) -> list[tuple[RegistrationFact, float, str]]:
-    facts: list[tuple[RegistrationFact, float, str]] = []
+) -> list[tuple[RegistrationFact, str]]:
+    facts: list[tuple[RegistrationFact, str]] = []
     if site.callee_kind == "param":
         keys = [f"param:{site.caller_usr}:{site.param_index}"]
         if site.caller_name:
@@ -825,15 +815,10 @@ def _match_site(
             matched = by_param.get(key, [])
             if matched:
                 break
-        if len(matched) == 1:
-            confidence = 0.75
-        else:
-            confidence = 0.65
         for fact in matched:
             facts.append(
                 (
                     fact,
-                    confidence,
                     f"cross-TU argument pass: {fact.target_function_name} passed to "
                     f"{site.caller_name} parameter {site.param_index} at "
                     f"{fact.file}:{fact.line} ({fact.registration_kind})",
@@ -854,7 +839,6 @@ def _match_site(
             facts.append(
                 (
                     fact,
-                    0.6,
                     f"cross-TU returned callback: {fact.target_function_name} returned by "
                     f"{site.getter_name or site.getter_usr} at {fact.file}:{fact.line}",
                 )
@@ -864,16 +848,13 @@ def _match_site(
         if not call_path.base:
             return []
         for fact in _path_matches(call_path, by_path):
-            confidence = fact[1]
-            matched_fact = fact[0]
             facts.append(
                 (
-                    matched_fact,
-                    confidence,
-                    f"cross-TU registration: {matched_fact.object_path} = "
-                    f"{matched_fact.target_function_name} at "
-                    f"{matched_fact.file}:{matched_fact.line} "
-                    f"({matched_fact.registration_kind}, "
+                    fact,
+                    f"cross-TU registration: {fact.object_path} = "
+                    f"{fact.target_function_name} at "
+                    f"{fact.file}:{fact.line} "
+                    f"({fact.registration_kind}, "
                     f"qualifier={'dynamic' if _has_dynamic_qualifier(call_path) else 'exact'})",
                 )
             )
@@ -883,8 +864,8 @@ def _match_site(
 def _path_matches(
     call_path: _AccessPath,
     by_path: Mapping[tuple[str, tuple[str, ...]], list[RegistrationFact]],
-) -> list[tuple[RegistrationFact, float]]:
-    matches: list[tuple[RegistrationFact, float]] = []
+) -> list[RegistrationFact]:
+    matches: list[RegistrationFact] = []
     facts = by_path.get((call_path.base, call_path.fields), ())
     if facts:
         for fact in facts:
@@ -901,36 +882,37 @@ def _path_matches(
                 continue
             if len(registration_path.qualifiers) != len(call_path.qualifiers):
                 continue
-            confidence = _qualifier_confidence(
+            if not _qualifier_matches(
                 call_path.qualifiers, registration_path.qualifiers
-            )
-            if confidence is None:
+            ):
                 continue
-            matches.append((fact, confidence))
+            matches.append(fact)
     return matches
 
 
-def _qualifier_confidence(
+def _qualifier_matches(
     call_qualifiers: tuple[str, ...], registration_qualifiers: tuple[str, ...]
-) -> float | None:
+) -> bool:
+    """Whether a call site qualifier chain can reference the registration path.
+
+    Exact qualifiers must match; when both chains are constant but different the
+    match is rejected (distinct array slots/objects). A dynamic qualifier (index
+    variable, runtime field) can alias the other chain, so it is retained as a
+    candidate regardless of the other side.
+    """
+
     if not call_qualifiers and not registration_qualifiers:
-        return 0.85
+        return True
     if all(
         _key(call_q) == _key(registration_q)
         for call_q, registration_q in zip(call_qualifiers, registration_qualifiers)
     ):
-        return 0.8
+        return True
     call_dynamic = any(not _is_constant_qualifier(q) for q in call_qualifiers)
     registration_dynamic = any(
         not _is_constant_qualifier(q) for q in registration_qualifiers
     )
-    if not call_dynamic and not registration_dynamic:
-        return None
-    if call_dynamic and not registration_dynamic:
-        return 0.65
-    if not call_dynamic and registration_dynamic:
-        return 0.5
-    return 0.45
+    return call_dynamic or registration_dynamic
 
 
 def _has_dynamic_qualifier(path: _AccessPath) -> bool:
@@ -1000,7 +982,6 @@ def analyze_cross_tu(
     units: Sequence[Any],
     *,
     cache: SourceCache | None = None,
-    min_confidence: float = 0.4,
 ) -> CrossTuResult:
     """Run extraction + resolution over a batch of parsed TUs."""
 
@@ -1028,7 +1009,6 @@ def analyze_cross_tu(
         registrations,
         functions,
         signatures=signatures,
-        min_confidence=min_confidence,
     )
     stats = {
         "units": len(units),
@@ -1036,7 +1016,6 @@ def analyze_cross_tu(
         "registration_kinds": _count_by(registrations, "registration_kind"),
         "indirect_call_sites": len(call_sites),
         "call_targets": len(call_targets),
-        "confidence": _count_confidence(call_targets),
         "links": len(links),
     }
     return CrossTuResult(
@@ -1187,14 +1166,6 @@ def _count_by(items: Sequence[Any], attribute: str) -> dict[str, int]:
     for item in items:
         value = str(getattr(item, attribute, "") or "")
         counts[value] = counts.get(value, 0) + 1
-    return dict(sorted(counts.items()))
-
-
-def _count_confidence(records: Sequence[CallTargetRecord]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for record in records:
-        bucket = f"{record.confidence:.2f}"
-        counts[bucket] = counts.get(bucket, 0) + 1
     return dict(sorted(counts.items()))
 
 

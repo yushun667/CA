@@ -81,7 +81,6 @@ def test_registration_facts_cover_global_forms():
         "target_function_id",
         "target_usr",
         "registration_kind",
-        "confidence",
         "file",
         "line",
         "tu_id",
@@ -127,19 +126,18 @@ def test_cross_tu_targets_resolve_qualifier_aware():
     assert recall == 1.0
 
 
-def test_cross_tu_reasons_links_and_confidence():
+def test_cross_tu_reasons_links_and_target_sets():
     result = analyze_cross_tu(_units())
     assert result.stats["registrations"] > 0
     assert result.stats["indirect_call_sites"] > 0
     assert result.stats["call_targets"] == len(result.call_targets)
     assert len(result.links) == len(result.call_targets)
+    names = {record.callee_name for record in result.call_targets}
+    assert {"impl_a", "caller_impl"} <= names
     for record in result.call_targets:
         assert record.kind == "indirect_candidate"
         assert "cross-TU" in record.reason
-        assert 0.4 <= record.confidence <= 0.95
-    confident = {record.callee_name: record.confidence for record in result.call_targets}
-    assert confident["impl_a"] >= 0.6
-    assert confident["caller_impl"] >= 0.6
+        assert record.reason
 
 
 def test_cross_tu_deterministic_and_public_paths():
@@ -189,7 +187,7 @@ def _resolver_bundle():
     return result, functions, signatures
 
 
-def test_logical_dedupe_keeps_highest_confidence_and_merges_evidence():
+def test_logical_dedupe_keeps_deterministic_representative_and_merges_evidence():
     result, functions, signatures = _resolver_bundle()
     base = next(
         site for site in result.call_sites if site.callee_text == "g_ops_a.fn"
@@ -216,8 +214,8 @@ def test_logical_dedupe_keeps_highest_confidence_and_merges_evidence():
     assert len(raw) == 3
     assert len(merged) == 2
     impl_a = next(record for record in merged if record.callee_name == "impl_a")
-    assert impl_a.call_id == base.call_id
-    assert impl_a.confidence == 0.85
+    # Representative is deterministic (smallest call_id), not score-ranked.
+    assert impl_a.call_id == min(base.call_id, lower.call_id)
     assert " ; also " in impl_a.reason
     assert "g_table[" in impl_a.reason
     # every matching registration id still links to the retained candidate edge

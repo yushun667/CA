@@ -277,7 +277,6 @@ def _build_main_db(path: Path) -> dict[str, str]:
                     callee_id=read_impl.id,
                     callee_name=read_impl.name,
                     kind="indirect_candidate",
-                    confidence=0.62,
                     reason="callback registration g_ops.read",
                     sloc=_sloc(22),
                 )
@@ -292,7 +291,6 @@ def _build_main_db(path: Path) -> dict[str, str]:
                     "file": FILE,
                     "line": 60,
                     "registration_kind": "struct_assign",
-                    "confidence": 0.8,
                     "module": "kernel",
                     "evidence": ["g_ops.read = read_impl;"],
                 }
@@ -824,7 +822,8 @@ def test_callers_and_callees_merge_candidates(client: UiClient) -> None:
     candidate = callees["read_impl"]
     assert candidate["candidate"] is True
     assert candidate["source"] == "call_target"
-    assert candidate["confidence"] == pytest.approx(0.62)
+    assert "confidence" not in candidate
+    assert all("confidence" not in row for row in callees.values())
 
     status, payload = client.json("/api/callees?symbol=main")
     assert {"proc_init", "proc_alloc"} <= {
@@ -847,7 +846,8 @@ def test_graph_endpoint_has_direct_and_candidate_edges(client: UiClient) -> None
     assert edges[("proc_init", "kmalloc")]["candidate"] is False
     candidate = edges[("proc_init", "read_impl")]
     assert candidate["candidate"] is True
-    assert candidate["confidence"] == pytest.approx(0.62)
+    assert "confidence" not in candidate
+    assert all("confidence" not in edge for edge in data["edges"])
     assert data["stats"]["nodes"] == len(data["nodes"])
 
     status, payload = client.json("/api/graph?symbol=main&depth=2&direction=forward")

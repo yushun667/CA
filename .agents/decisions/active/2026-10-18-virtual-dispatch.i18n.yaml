@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: 2026-10-18-virtual-dispatch.md
-  sha256: 07906a8d3393fabef2b4be07b3d310ac46318fe3e18a94d2a4b8bfff1662903c
+  sha256: c41c0dcf34e3b3c2cd3d548cb4bb6cee22a6956bf5f2426858919a290070b9fe
 zh:
   file: 2026-10-18-virtual-dispatch.zh.md
-  sha256: 6d5f1702f1f757e77be7bdd8f73cdb3e292d1d30941ff05c484f9172c4c87fbe
+  sha256: 68640de4d8f539cdae5307da8d699771f86a60789bcdb5038ab30d60777fb0d1

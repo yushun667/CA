@@ -26,14 +26,18 @@ OpenHarmony listener/ops 表、`file_operations` 类表）。本文描述跨 TU 
 
 ## 匹配规则
 
-| 证据 | confidence |
+匹配表示调用点**可能目标集合**的成员，而不是分数：resolver 保留所有签名兼容
+的候选，并把证据写进 `reason`。候选按调用点（`max_candidates_per_call`）与函数
+（`max_targets`）有界；没有置信度阈值或按置信度排序。
+
+| 证据 | 写入 `reason` 的内容 |
 |---|---|
-| 全局路径精确匹配（无动态 qualifier） | 0.85 |
-| 同 base + 完整字段链，常量 qualifier 相同 | 0.80 |
-| 调用侧动态下标 vs 注册侧常量下标（表分发） | 0.65 |
-| 跨 TU 参数传递回调 | 0.65-0.75 |
-| getter 返回的函数指针 | 0.60 |
-| 同 base+字段链且 wildcard qualifier 未定 | 0.45-0.50 |
+| 全局路径精确匹配（无动态 qualifier） | `g_ops_a.fn = impl_a at file:line` |
+| 同 base + 完整字段链，常量 qualifier 相同 | 注册路径 + qualifier 类型 |
+| 调用侧动态下标 vs 注册侧常量下标（表分发） | 注册路径 + qualifier=`dynamic` |
+| 跨 TU 参数传递回调 | 参数下标 + `file:line` |
+| getter 返回的函数指针 | getter 名 + `file:line` |
+| 同 base+字段链且 wildcard qualifier 未定 | 注册路径 + qualifier 类型 |
 
 base 符号与完整字段链必须一致；不产生跨 base 的“字段名后缀”匹配。这是
 qualifier-aware 规则：`g_ops_a.fn` 不会匹配 `g_ops_b.fn` 下的注册。
@@ -43,9 +47,10 @@ qualifier-aware 规则：`g_ops_a.fn` 不会匹配 `g_ops_b.fn` 下的注册。
 header 内联函数会在多个 TU 中实例化，同一逻辑边可能按 TU 重复报告。因此
 resolver 默认按 `(caller_USR 或 caller_id, callee_USR 或 callee_id, 调用点 file,
 line)` 去重（`dedupe=True`；传 `dedupe=False` 可查看原始 per-call-site 边）。
-保留 confidence 最高的一条；重复 reason 合并进其 `reason`（`; also ...`），所有
-匹配的 registration id 都回链到保留的 `call_target_id`。验收同时报告原始
-per-call-site 数量与去重后逻辑数量；覆盖率口径使用去重后的逻辑边数。
+保留一条确定性代表（按 natural key 顺序，不按分数排序）；重复 reason 合并进其
+`reason`（`; also ...`），所有匹配的 registration id 都回链到保留的
+`call_target_id`。验收同时报告原始 per-call-site 数量与去重后逻辑数量；覆盖率
+口径使用去重后的逻辑边数。
 
 ## 验证
 

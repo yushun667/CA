@@ -59,7 +59,7 @@ def test_fixture_precision_and_recall():
     assert len(records) == 10
 
 
-def test_candidate_record_shape_and_confidence():
+def test_candidate_record_shape_and_evidence():
     unit = unit_for_fixture("df_callbacks.c")
     function_ids = {function.id for function in unit.functions}
     _, records = _emitted(unit)
@@ -70,16 +70,16 @@ def test_candidate_record_shape_and_confidence():
         assert record.caller_id != ""
         assert record.callee_id in function_ids
         assert record.callee_name in EXPECTED[function_name]
-        assert 0.0 < record.confidence <= 1.0
         assert record.reason
         assert record.sloc.is_valid()
         assert record.id == core_ids.call_target_id(
             record.call_id, record.callee_id, record.kind
         )
         assert record.call_id.startswith("call:")
-    # Evidence quality: field/array registrations are weaker than exact stores.
-    confidences = {record.callee_name: record.confidence for _, record in records}
-    assert confidences["handler_a"] >= 0.6
+        assert record.reason
+    # Candidate target sets are evidence-only: every record names its
+    # registration/dispatch evidence and there is no scored ranking.
+    assert all(record.reason for _, record in records)
 
 
 def test_self_suffix_candidate_is_suppressed():
@@ -105,8 +105,8 @@ def test_records_are_deterministic():
         assert [record.id for record in first.call_targets] == [
             record.id for record in second.call_targets
         ]
-        assert [record.confidence for record in first.call_targets] == [
-            record.confidence for record in second.call_targets
+        assert [(record.id, record.reason) for record in first.call_targets] == [
+            (record.id, record.reason) for record in second.call_targets
         ]
         positions = [
             (record.sloc.line, record.sloc.col) for record in first.call_targets

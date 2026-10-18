@@ -33,14 +33,20 @@ fixtures under `tests/fixtures/ast_crosstu_*.c`.
 
 ## Matching rules
 
-| Evidence | Confidence |
+A match means membership in the call site's **possible target set**, not a
+score: the resolver keeps every signature-compatible candidate and records the
+evidence in `reason`. Candidates are bounded per call site
+(`max_candidates_per_call`) and per function (`max_targets`); there is no
+no score or ranking of any kind.
+
+| Evidence | Recorded in `reason` |
 |---|---|
-| Exact global path match (no dynamic qualifier) | 0.85 |
-| Same base + field chain, same constant qualifier | 0.80 |
-| Dynamic call index vs constant registration index (table dispatch) | 0.65 |
-| Callback passed as function argument across TUs | 0.65-0.75 |
-| Function pointer returned by a getter | 0.60 |
-| Same base + field chain with an unresolved wildcard qualifier | 0.45-0.50 |
+| Exact global path match (no dynamic qualifier) | `g_ops_a.fn = impl_a at file:line` |
+| Same base + field chain, same constant qualifier | registration path + qualifier kind |
+| Dynamic call index vs constant registration index (table dispatch) | registration path + qualifier=`dynamic` |
+| Callback passed as function argument across TUs | argument index + `file:line` |
+| Function pointer returned by a getter | getter name + `file:line` |
+| Same base + field chain with an unresolved wildcard qualifier | registration path + qualifier kind |
 
 The base symbol and the complete field chain must match; field-name-suffix
 matches across different bases are not produced. This is the qualifier-aware
@@ -52,7 +58,8 @@ Header-inline functions are instantiated in many TUs, so the same logical edge
 can be reported once per TU. The resolver therefore dedupes by
 `(caller_USR or caller_id, callee_USR or callee_id, call file, line)` by default
 (`dedupe=True`; pass `dedupe=False` to inspect raw per-call-site edges). The
-retained record is the highest-confidence one; duplicate reasons are merged
+retained record is a deterministic representative chosen by natural-key order
+(not by any score); duplicate reasons are merged
 into its `reason` (`; also ...`) and every matching registration id links to the
 retained `call_target_id`. Raw and deduped counts are both reported for
 acceptance; coverage figures use the deduped ("logical") edge count.

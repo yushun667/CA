@@ -311,11 +311,11 @@ getter 返回的函数指针）由独立 pass 在**已有 DB**上后处理：
 ```
 
 该 pass 会重新解析 DB 中的 TU（需要 AST），输出解析成功/失败 TU 数、按 kind 的注册
-事实、间接调用点、候选边（含 confidence 分桶）、links 与耗时；`--max-tus` 可限制
-试跑规模，`--min-confidence` 过滤弱匹配。只记录写入**全局存储**的注册，避免同名
-局部测试结构体造成误报。候选边就是普通 `call_targets` 行（`kind="indirect_candidate"`、
-`source="call_target"`、`candidate=true`、confidence/reason），因此 `ca graph`、
-`ca query callees` 与 MCP `graph` 无需其他改动即可展示；MCP 另增 `callbacks` 工具
+事实、间接调用点、按 kind 的候选边、links 与耗时；`--max-tus` 可限制试跑规模。
+只记录写入**全局存储**的注册，避免同名局部测试结构体造成误报。候选边就是普通
+`call_targets` 行（`kind="indirect_candidate"`、`source="call_target"`、
+`candidate=true`、`reason`），因此 `ca graph`、`ca query callees` 与 MCP `graph`
+无需其他改动即可展示；MCP 另增 `callbacks` 工具
 与 `stats.callbacks` 字段。未变更的 DB 重复运行不会写入任何行（自然键 upsert + 稳定
 id）。同一逻辑边（同 caller/callee/line）的 header-inline 重复由 resolver 的
 dedupe 规则折叠；完整注册/限定符/去重契约见
@@ -327,8 +327,8 @@ S7 8），candidate callers 从 2.18% 提升到 2.32%，生产路径抽样 preci
 ## Web UI（只读浏览器）
 
 `ca ui` 在同一个索引上提供本地只读 Web UI：符号搜索、函数详情（位置/签名/分支/
-返回/资源/调用）、合并后的调用者/被调用者、SVG 调用图（候选回调边为虚线并标注
-confidence）、回调注册事实与数据库统计。联邦 shard 查询的每一行显示 `shard` 徽章。
+返回/资源/调用）、合并后的调用者/被调用者、SVG 调用图（候选虚线边表示可能目标
+集合）、回调注册事实与数据库统计。联邦 shard 查询的每一行显示 `shard` 徽章。
 服务默认只绑 `127.0.0.1`，提供标准库 JSON API（`/api/health`、`/api/search`、
 `/api/function/...`、`/api/callers`、`/api/callees`、`/api/graph`、`/api/stats`、
 `/api/callbacks`），且没有写端点：

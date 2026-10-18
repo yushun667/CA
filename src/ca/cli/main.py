@@ -391,7 +391,6 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_callbacks.add_argument("--jobs", type=int, default=1)
     resolve_callbacks.add_argument("--max-tus", type=int, default=None)
     resolve_callbacks.add_argument("--batch-size", type=int, default=4)
-    resolve_callbacks.add_argument("--min-confidence", type=float, default=0.4)
     resolve_callbacks.add_argument("--no-finalize", action="store_true")
     resolve_callbacks.add_argument("--json", action="store_true", dest="json_output")
     resolve_callbacks.set_defaults(func=commands.cmd_resolve_callbacks)

@@ -58,9 +58,8 @@ camera 中有一条真实跨 TU 虚派发链作为领域样例：
 （`store/virtual_dispatch.py`：LIMIT 绑定 + 递归方向）后：
 
 - `ca query callees fn:6e2268c6d1c202d014c3f31e --db camera.db --json`：
-  37 行 = 8 条 direct 边（含 direct virtual `Executing`，`source="call"`、
-  confidence 1.0）+ **29 条 `virtual_candidate`**
-  （27 条 depth-1 confidence 0.6、2 条 depth-2 confidence 0.5），分布在 10 个
+  37 行 = 8 条 direct 边（含 direct virtual `Executing`，`source="call"`）+
+  **29 条 `virtual_candidate`**（27 条 depth-1、2 条 depth-2），分布在 10 个
   不同 TU 文件（`video_process_command.cpp`、`photo_command.cpp`、
   `notify_video_job_command.cpp`、`service_died_command.cpp` 等）。
 - 反向：`ca query callers <override-id> --db camera.db` 中 override
@@ -76,15 +75,16 @@ combined 语料查询时统计（同修复代码，只读）：7,672 个 virtual
 **3,784 条候选边**、覆盖 1,531 个 call（20%），depth1 3,739 / depth2 45；
 仅 201 条（5.3%）与 test/gtest 相关。dsoftbus 单库物化 `call_targets` 以 gtest
 为主（`TestBody`→`what`），领域 virtual 少；查询时合并后领域候选也可用。
-confidence 分层：直接 override 0.6、depth-2 0.5、depth-3 0.45；每个候选带
-`reason`/`source="virtual_candidate"`，direct 边不会被替换。
+override 深度 ≤3 的全部已知目标都进入可能目标集合；候选带
+`reason`/`source="virtual_candidate"`，以 override 深度/关系作为证据，direct 边
+不会被替换；候选不排序、不评分。
 
 ## 注册式间接调用
 
 dsoftbus `NetBuilderMessageHandler`
 （`core/bus_center/lnn/net_builder/src/lnn_net_builder_process.c:893`）在第 906 行
 通过全局表 `g_messageProcessor[msg->what]` 派发。graph/query 返回 **16 条
-`indirect_candidate` 边**，confidence 0.65，带注册 reason（例如
+`indirect_candidate` 边**，带注册 reason（例如
 `ProcessDeviceVerifyPass`、`ProcessMasterElect`、`ProcessSetReSyncDeviceName`
 等）；直接调用边（`HiLogPrint`/`__builtin_strrchr`）保留。该结果验证注册表
 路径可用；指针运算/动态索引仍只是启发式候选。

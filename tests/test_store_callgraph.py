@@ -1,7 +1,7 @@
 """call_targets persistence, merged caller/callee edges and call-graph queries.
 
 Covers phase-3 contract: CallTargetRecord storage/export, merged direct+candidate
-edges (kind/confidence/source/candidate, direct wins on duplicates), graph
+edges (kind/source/candidate/reason, direct wins on duplicates), graph
 directions/depth/limit/truncation, simple paths, cycles, EXPLAIN index usage and
 in-place upgrade of a phase-2 database.
 """
@@ -44,9 +44,9 @@ CALLER_KEYS = {
     "call_line",
     "is_resolved",
     "kind",
-    "confidence",
     "source",
     "candidate",
+    "reason",
 }
 CALLEE_KEYS = {
     "callee_id",
@@ -57,9 +57,9 @@ CALLEE_KEYS = {
     "call_line",
     "is_resolved",
     "kind",
-    "confidence",
     "source",
     "candidate",
+    "reason",
 }
 EDGE_KEYS = {
     "call_id",
@@ -74,10 +74,10 @@ EDGE_KEYS = {
     "call_file",
     "call_line",
     "kind",
-    "confidence",
     "is_resolved",
     "source",
     "candidate",
+    "reason",
     "depth",
     "direction",
 }
@@ -135,7 +135,6 @@ def _target(
     caller: FunctionRecord,
     callee: FunctionRecord,
     line: int,
-    confidence: float = 0.55,
     kind: str = "indirect_candidate",
 ) -> CallTargetRecord:
     return CallTargetRecord(
@@ -145,7 +144,6 @@ def _target(
         callee_id=callee.id,
         callee_name=callee.name,
         kind=kind,
-        confidence=confidence,
         reason="registered callback" if kind == "indirect_candidate" else "direct resolve",
         sloc=_sloc(line),
     )
@@ -195,13 +193,11 @@ def test_call_target_persisted_and_exported(populated) -> None:
     assert record["caller_id"] == MAIN.id
     assert record["callee_id"] == CALLBACK.id
     assert record["callee_name"] == "cb_d"
-    assert record["confidence"] == pytest.approx(0.55)
     assert record["reason"] == "registered callback"
     assert record["file"] == FILE and record["line"] == 15
-    assert isinstance(record["confidence"], float)
 
 
-def test_merged_callees_keys_and_confidence(populated) -> None:
+def test_merged_callees_keys_and_candidates(populated) -> None:
     rows = populated.query_callees("main_a")
     assert len(rows) == 2
     assert all(set(row) == CALLEE_KEYS for row in rows)
@@ -210,18 +206,16 @@ def test_merged_callees_keys_and_confidence(populated) -> None:
     assert direct["callee_name"] == "mid_b"
     assert direct["source"] == "call"
     assert direct["candidate"] is False
-    assert direct["confidence"] == 1.0
     assert direct["kind"] == "direct"
     assert direct["is_resolved"] is True
     assert candidate["callee_name"] == "cb_d"
     assert candidate["source"] == "call_target"
     assert candidate["candidate"] is True
-    assert candidate["confidence"] == pytest.approx(0.55)
     assert candidate["kind"] == "indirect_candidate"
     assert candidate["callee_file"] == FILE and candidate["callee_line"] == 40
 
 
-def test_merged_callers_keys_and_confidence(populated) -> None:
+def test_merged_callers_keys_and_candidates(populated) -> None:
     candidate_rows = populated.query_callers("cb_d")
     assert len(candidate_rows) == 1
     assert set(candidate_rows[0]) == CALLER_KEYS
@@ -231,18 +225,16 @@ def test_merged_callers_keys_and_confidence(populated) -> None:
     assert row["callee_name"] == "cb_d"
     assert row["source"] == "call_target"
     assert row["candidate"] is True
-    assert row["confidence"] == pytest.approx(0.55)
     assert row["is_resolved"] is False
 
     direct_rows = populated.query_callers("leaf_c")
     assert len(direct_rows) == 1
     assert direct_rows[0]["caller_name"] == "mid_b"
     assert direct_rows[0]["source"] == "call"
-    assert direct_rows[0]["confidence"] == 1.0
 
 
 def test_direct_edge_wins_over_duplicate_candidate(populated) -> None:
-    duplicate = _target(CALL_MAIN_MID, MAIN, MID, 15, confidence=0.9, kind="direct")
+    duplicate = _target(CALL_MAIN_MID, MAIN, MID, 15, kind="direct")
     populated.begin()
     populated.add_analysis_result(AnalysisResult(function_id=MAIN.id, call_targets=[duplicate]))
     populated.commit()
@@ -251,7 +243,6 @@ def test_direct_edge_wins_over_duplicate_candidate(populated) -> None:
     assert len(rows) == 2  # mid_b (direct) + cb_d (candidate), no duplicate row
     by_name = {row["callee_name"]: row for row in rows}
     assert by_name["mid_b"]["source"] == "call"
-    assert by_name["mid_b"]["confidence"] == 1.0
     assert populated.stats()["tables"]["call_targets"] == 2
 
 
@@ -385,7 +376,7 @@ def test_add_call_targets_post_processing(tmp_path) -> None:
     store.add_parse_result(PARSE_RESULT)
     store.commit()
     store.finalize()
-    candidate = _target(CALL_MAIN_MID, MAIN, CALLBACK, 15, confidence=0.66)
+    candidate = _target(CALL_MAIN_MID, MAIN, CALLBACK, 15)
     assert store.add_call_targets([candidate]) == 1
     assert store.add_call_targets([candidate]) == 0  # idempotent
     mapping = {
@@ -395,7 +386,6 @@ def test_add_call_targets_post_processing(tmp_path) -> None:
         "callee_id": ORPHAN.id,
         "callee_name": ORPHAN.name,
         "kind": "indirect_candidate",
-        "confidence": 0.4,
         "reason": "post-process mapping form",
         "file": FILE,
         "line": 15,
@@ -409,7 +399,6 @@ def test_add_call_targets_post_processing(tmp_path) -> None:
 
     callees = {row["callee_name"]: row for row in store.query_callees("main_a")}
     assert callees["cb_d"]["source"] == "call_target"
-    assert callees["cb_d"]["confidence"] == pytest.approx(0.66)
     assert callees["orphan_e"]["source"] == "call_target"
     assert callees["orphan_e"]["reason"] if "reason" in callees["orphan_e"] else True
     graph = store.query_call_graph("main_a", direction="forward", depth=1, limit=50)
@@ -448,7 +437,7 @@ def test_phase2_database_upgrade_in_place(tmp_path) -> None:
         assert reopened.query_functions("main_a")[0]["id"] == MAIN.id
         assert reopened.query_callers("leaf_c")[0]["caller_name"] == "mid_b"
         meta = dict(reopened.connection.execute("SELECT key, value FROM meta"))
-        assert meta["store_schema_version"] == "7"
+        assert meta["store_schema_version"] == "8"
 
         reopened.finalize()
         indexes = {

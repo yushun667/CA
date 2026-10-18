@@ -1,10 +1,10 @@
 """Bounded call-graph traversal over merged direct + candidate edges.
 
 Edges come from :meth:`ca.store.queries.QueryEngine.load_forward_edges` /
-``load_reverse_edges``: direct ``CallRecord`` edges (``source="call"``,
-``confidence=1.0``) plus ``CallTargetRecord`` candidate edges
-(``source="call_target"``, heuristic ``confidence``), with the direct edge
-winning when both describe the same call site.
+``load_reverse_edges``: direct ``CallRecord`` edges (``source="call"``) plus
+``call_target``/``virtual_candidate`` target-set edges. Duplicate edges are
+collapsed by natural key (caller, callee, call site) with the direct edge
+winning and audit ``reason`` strings joined; there are no confidence scores.
 
 Traversal is deterministic and always bounded: nodes/edges are ordered by
 ``(depth, call_file, call_line, caller_id, callee_id, source)``, ``depth`` is a
@@ -99,7 +99,7 @@ class CallGraph:
         - ``nodes``: ``{id,name,file,line,depth,direction}`` (root depth 0);
         - ``edges``: ``{call_id,caller_id,caller_name,caller_file,caller_line,
           callee_id,callee_name,callee_file,callee_line,call_file,call_line,
-          kind,confidence,is_resolved,source,candidate,depth,direction}``;
+          kind,is_resolved,source,candidate,reason,depth,direction}``;
         - ``cycles``: id lists found inside the collected view;
         - ``truncated``: True when the edge ``limit`` stopped the walk.
         """
@@ -150,9 +150,9 @@ class CallGraph:
                     key = (
                         edge["caller_id"],
                         edge["callee_id"],
+                        edge.get("callee_name", ""),
                         edge["call_file"],
                         edge["call_line"],
-                        edge["source"],
                     )
                     if key in seen_edges:
                         continue

@@ -20,7 +20,7 @@ coding agent（引用/影响/调用关系）、测试生成 agent（分支条件
 | `ca.pipeline` 韧性 | 离线索引 chunk≤16 TU、broken-pool 重试（减半 workers→逐 TU）、wave 级重建池（`CA_POOL_RECYCLE_CHUNKS`）与稳定 id 幂等；TU 缓存与 scope key |
 | Parser 后端选择 | 默认内置 libclang 18；OpenHarmony 通过 `CA_LIBCLANG_LIBRARY` 使用匹配的 OH libclang 15（见决策 `2026-10-18-matched-libclang-backend.md`） |
 | `ca graph`（`src/ca/cli/graph.py`） | 正向/反向/双向遍历，深度与硬上限，路径/环查询，table/JSON/DOT；合并 direct 与候选边 |
-| `ca.analyze.callbacks` | 间接调用候选解析：注册赋值、数组、参数传递、typedef、返回指针；按函数指针签名过滤，产出 `CallTargetRecord(kind=indirect_candidate, confidence, reason)` |
+| `ca.analyze.callbacks` | 间接调用候选解析：注册赋值、数组、参数传递、typedef、返回指针；按函数指针签名过滤，产出 `CallTargetRecord(kind=indirect_candidate, reason)`（可能目标集合） |
 | `ca.store.graph` / `ca.store.workspace` / `ca.store.deep` | `call_targets` 持久化、图查询、workspace/project/variant 元数据与 `deep_status`；`store_schema_version=3`；L0 查询在零深析行时也可用 |
 | 离线/增量模式 | `ca index` 建立离线全量快照；`ca update --changed-files ...` 只重解析变更 TU；daemon 设计见 [docs/incremental.zh.md](../../docs/incremental.zh.md) |
 | `ca ui`（`src/ca/ui/server.py`）| 本地只读 Web UI：vanilla 页面 + JSON API + SVG 图；仅 loopback；`--serve-url` 模式代理统一后端 |
@@ -60,7 +60,7 @@ L0 基础查询立即返回并带 `deep_ready=0`；深析事实按请求函数/�
 ## 接口与依赖边界
 
 - MCP 工具返回 `{ok, data, error}` 信封与稳定键；基础查询增加 `deep_ready`，
-  深析列表带 `pending`；图边携带 `kind`、`confidence`、`source`、`candidate`。
+  深析列表带 `pending`；图边携带 `kind`、`source`、`candidate`（虚线=可能目标集合）。
 - 候选边是启发式 may-call 集合，绝不与 direct 边混同。
 - workspace 元数据使用 store 本地 ID（`ws:`/`prj:`/`var:`），不改变 core 契约。
 - 服务器访问仅限内网/SSH，尚无认证层。
