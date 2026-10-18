@@ -16,6 +16,16 @@
 
 import { toApiError } from '../api.js'
 
+/** `/api/health` shapes: caGet unwraps the CA envelope, older hosts may not. */
+function healthFunctionCount(health) {
+  if (!health || typeof health !== 'object') return 0
+  const database =
+    (health.database && typeof health.database === 'object' ? health.database : null) ||
+    (health.data && health.data.database && typeof health.data.database === 'object' ? health.data.database : null)
+  const counts = database && database.counts ? database.counts : null
+  return counts ? Number(counts.functions) || 0 : 0
+}
+
 const PROJECTS_CSS = `
 .ca-dir-overlay { position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.42)); }
 .ca-dir-modal { display: flex; flex-direction: column; gap: 10px; width: min(560px, calc(100vw - 32px)); max-height: min(70vh, 620px); padding: 14px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-lg, 10px); background: var(--dsw-alias-bg-layer-1, #ffffff); box-shadow: var(--dsw-elevation-panel, 0 10px 30px rgba(0, 0, 0, 0.16)); }
@@ -397,11 +407,7 @@ export function createProjectsPage(React, bag) {
       autoIndexRef.current = true
       try {
         const health = await api.caGet('/api/health')
-        const data = health && health.data ? health.data : null
-        const database = data && data.database ? data.database : null
-        const counts = database && database.counts ? database.counts : null
-        const functions = counts ? Number(counts.functions) || 0 : 0
-        if (functions > 0) return
+        if (healthFunctionCount(health) > 0) return
       } catch (_error) {
         /* no schema yet counts as empty */
       }
@@ -586,6 +592,62 @@ export function createProjectsPage(React, bag) {
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [preparing, preparingProjectId])
+
+    // Safety net: if a project is active with a single-file index but the
+    // database is still empty (e.g. prepare raced with a backend switch),
+    // start indexing once. Long tasks stay visible/cancellable on #/tasks.
+    const autoIndexRetryRef = React.useRef(false)
+    React.useEffect(() => {
+      if (creating) return undefined
+      const currentList = list
+      const activeId = currentList && currentList.activeProjectId
+      if (!activeId) return undefined
+      const activeProject = (currentList.projects || []).find((project) => project && project.id === activeId)
+      if (!activeProject || !activeProject.db) return undefined
+      if (autoIndexRetryRef.current) return undefined
+      let cancelled = false
+      const run = async () => {
+        try {
+          const status = await api.getStatus()
+          const backend = status && status.backend ? status.backend : null
+          if (!backend || backend.state !== 'running') return
+          const health = await api.caGet('/api/health')
+          const functions = healthFunctionCount(health)
+          if (functions > 0) {
+            autoIndexRetryRef.current = true
+            return
+          }
+          const tasks = await api.tasks.list()
+          const items = tasks && Array.isArray(tasks.tasks) ? tasks.tasks : Array.isArray(tasks) ? tasks : []
+          const busy = items.some(
+            (task) => task && task.kind === 'index' && ['queued', 'running'].includes(task.status),
+          )
+          if (busy) {
+            autoIndexRetryRef.current = true
+            return
+          }
+          if (cancelled || !mountedRef.current) return
+          const params = { repo: activeProject.sourceRoot, db: activeProject.db }
+          if (activeProject.compdb) params.compdb = activeProject.compdb
+          await api.tasks.start('index', params)
+          autoIndexRetryRef.current = true
+          showNotice(
+            t(
+              'projects.indexStarted',
+              null,
+              'Empty index detected: indexing started automatically — open Tasks for progress.',
+            ),
+          )
+        } catch (_error) {
+          /* transient: retry after the next project list refresh */
+        }
+      }
+      void run()
+      return () => {
+        cancelled = true
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [creating, list])
 
     // -- list actions ------------------------------------------------------ //
 

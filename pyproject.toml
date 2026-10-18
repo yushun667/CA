@@ -7,6 +7,11 @@ name = "ca-analyzer"
 version = "0.1.0"
 description = "CA: an OS source analysis tool. Real compile args -> Clang AST -> CFG/data-flow -> database."
 requires-python = ">=3.11"
+dependencies = [
+  "clang==18.1.8",
+  "libclang==18.1.1",
+  "duckdb==1.5.6",
+]
 
 [project.scripts]
 ca = "ca.cli.main:main"

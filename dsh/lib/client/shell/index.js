@@ -18,7 +18,7 @@
  */
 
 import { formatBytes, toApiError } from '../api.js'
-import { shouldAutoStartBackend, shouldLandOnProjects } from './logic.js'
+import { backendMatchesProject, shouldAutoStartBackend, shouldLandOnProjects } from './logic.js'
 
 /** Main-slot key and locale namespace used by this plugin. */
 export const PANEL_ID = 'ca'
@@ -1426,6 +1426,7 @@ export function createShell(React, bag) {
     const autoStartRef = React.useRef(0)
     React.useEffect(() => {
       const project = currentProject()
+      if (!backendMatchesProject(state.backend, project)) return
       if (!shouldAutoStartBackend(state.backend, project, autoStartRef.current)) return
       autoStartRef.current = Date.now()
       Promise.resolve(api.backend.start()).catch(() => {})

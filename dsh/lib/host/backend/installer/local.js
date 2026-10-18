@@ -121,6 +121,19 @@ export function summarizeLocalInstallReport(report) {
  * @param {AbortSignal} [options.signal]
  * @param {any} [options.logger]
  */
+/** Runtime imports the analyzer needs beyond the console script. */
+export const RUNTIME_DEPENDENCY_PROBE = ['-c', 'import clang.cindex, duckdb'];
+
+async function hasRuntimeDependencies(run, python, timeoutMs) {
+  if (typeof run !== 'function') return true;
+  try {
+    const result = await run(python, RUNTIME_DEPENDENCY_PROBE, { timeoutMs });
+    return result?.code === 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function performLocalInstall(options) {
   const { paths, logger } = options;
   const deps = options.deps || {};
@@ -391,7 +404,8 @@ export async function performLocalInstall(options) {
         timeoutMs: STEP_TIMEOUTS.verify,
       });
       const existing = readCaVersionOutput(`${probe?.stdout || ''}\n${probe?.stderr || ''}`);
-      if (probe?.code === 0 && existing) {
+      const depsOk = existing ? await hasRuntimeDependencies(run, layout.python, STEP_TIMEOUTS.verify) : false;
+      if (probe?.code === 0 && existing && depsOk) {
         skipStep('venv', '已有可用 venv（幂等复用）');
         skipStep('dependencies', '已有可用 CA 安装（幂等跳过；force=true 可重装）');
         startStep('verify', '复用已安装版本');
@@ -407,6 +421,9 @@ export async function performLocalInstall(options) {
           result: { ok: true, skipped: true, version: existing.version, installDir },
         });
         return finish({ ok: true });
+      }
+      if (existing && !depsOk) {
+        logger?.warn?.('[installer:local] 现有 venv 缺少运行时依赖（clang/libclang/duckdb），将重建');
       }
       logger?.warn?.('[installer:local] 现有 venv 不可用，将重建');
       repair = true;
@@ -478,6 +495,15 @@ export async function performLocalInstall(options) {
         `ca version 校验失败：无法解析输出（${
           String(verifyResult.stdout || verifyResult.stderr || '').slice(-500) || '(空)'
         }）`,
+      );
+    }
+    const depsOk = await hasRuntimeDependencies(run, layout.python, STEP_TIMEOUTS.verify);
+    if (!depsOk) {
+      throw stepError(
+        'verify',
+        'RUNTIME_DEPS_MISSING',
+        'CA 已安装但运行时依赖缺失（clang/libclang/duckdb）；重新安装/修复后端即可',
+        { venvDir: layout.venvDir, probe: RUNTIME_DEPENDENCY_PROBE.join(' ') },
       );
     }
     const consoleOk = fsImpl.existsSync(layout.caScript);

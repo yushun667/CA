@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   AUTO_START_THROTTLE_MS,
+  backendMatchesProject,
   shouldAutoStartBackend,
   shouldLandOnProjects,
 } from '../lib/client/shell/logic.js'
@@ -48,4 +49,17 @@ test('the panel lands on projects only after status is known and no project exis
   assert.equal(shouldLandOnProjects({ ...base, connected: null }), false)
   assert.equal(shouldLandOnProjects({ ...base, project: { id: 'p1' } }), false)
   assert.equal(shouldLandOnProjects({ ...base, routePage: 'projects' }), false)
+})
+
+test('auto-start only when the backend configuration matches the project', () => {
+  const project = { backend: 'local', db: '/src/.ca/index.db' }
+  assert.equal(backendMatchesProject({ mode: 'local', db: project.db }, project), true)
+  assert.equal(backendMatchesProject({ mode: 'remote', db: project.db }, project), false)
+  assert.equal(backendMatchesProject({ mode: 'local', db: 'other.db' }, project), false)
+  assert.equal(backendMatchesProject(null, project), false)
+  assert.equal(backendMatchesProject({ mode: 'local', db: '/x' }, null), false)
+  assert.equal(
+    backendMatchesProject({ mode: 'remote', db: '/srv/index' }, { backend: 'remote', dbDir: '/srv/index' }),
+    true,
+  )
 })

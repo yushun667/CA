@@ -252,14 +252,13 @@ export function requestDetail(request, symbol, signal) {
 }
 
 export function requestSource(request, symbol, signal) {
-  return request(
-    "/api/source?symbol=" + encodeURIComponent(symbol) + "&context=0",
-    { signal }
-  );
+  // Query parameters must travel in the RPC payload, not inside the path: the
+  // Host rejects `/api/...?...` paths (400) and some servers truncate them.
+  return request("/api/source", { signal, query: { symbol, context: 0 } });
 }
 
 export function requestCfg(request, symbol, signal) {
-  return request("/api/cfg?symbol=" + encodeURIComponent(symbol), { signal });
+  return request("/api/cfg", { signal, query: { symbol } });
 }
 
 /** AbortController when the client runtime offers one. */

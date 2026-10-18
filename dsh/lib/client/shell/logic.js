@@ -8,6 +8,22 @@
  * there is nothing to show yet.
  */
 
+/**
+ * Does the running backend configuration correspond to this project?
+ * Guards automatic starts against race conditions during project switches.
+ *
+ * @param {object|null} backend `status.backend`
+ * @param {object|null} project current project
+ * @returns {boolean}
+ */
+export function backendMatchesProject(backend, project) {
+  if (!backend || !project) return false
+  if (backend.mode !== project.backend) return false
+  const wanted = project.db || project.dbDir || null
+  if (wanted && backend.db !== wanted) return false
+  return true
+}
+
 /** Minimum delay between automatic start attempts (ms). */
 export const AUTO_START_THROTTLE_MS = 15000
 
