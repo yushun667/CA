@@ -5,9 +5,10 @@
 ## 关键文件
 
 - `app.py`：`ThreadingHTTPServer`；查询端点复用 `ca.ui.server` 的 `api_*` 与 `QueryService`，新增 `/api/jobs*`、`/events`、`/mcp`；统一 `{ok,data|error}` 信封；优雅停止。
-- `service.py`：`ServeConfig`/`ServeService`（查询服务、`SamplingGateway`、`JobService`、`McpSession`）；同步 explain（sampling）；MCP 额外 job 工具（legacy 兼容）；job 创建/领取/提交/失败与 explain 宽限自动完成。
-- `sampling.py`：`SamplingGateway` agent 会话（`POST /agent/session` + SSE events）与服务端→agent `sampling/createMessage` 请求/响应配对。
-- `agent_explain.py`：`explain_via_sampling`（收集事实→sampling→同步返回；无会话/超时/错误→heuristic 200）。
+- `service.py`：`ServeConfig`/`ServeService`（查询服务、`McpSessionRegistry`、`JobService`、`McpSession`）；同步 explain（sampling）；MCP 额外 job 工具（legacy 兼容）；job 创建/领取/提交/失败与 explain 宽限自动完成。
+- `mcp_sessions.py`：`McpSessionRegistry` 标准 MCP HTTP 会话（`Mcp-Session-Id`、`capabilities.sampling`）与 `GET /mcp` SSE 反向通道；`sampling/createMessage` 请求/响应配对。
+- `agent_explain.py`：`explain_via_sampling`（收集事实→标准 MCP sampling→同步返回；无会话/超时/错误→heuristic 200）。
+- `app.py` 的 `/mcp` 支持标准会话：`initialize` 返回 `Mcp-Session-Id`，`GET /mcp` SSE 接收服务端 sampling 请求，`DELETE /mcp` 关闭；`explain_function` 工具走同一通道。
 - `jobs.py`：`JobService` 薄封装 `ca.store.jobs.JobQueue`（每线程独立连接、单写者）+ `EventBus` 发布已追加事件。
 - `__init__.py`：导出 `ServeConfig`/`make_server`/`serve`。
 

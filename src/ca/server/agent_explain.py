@@ -16,9 +16,9 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from ca.server.sampling import (
+from ca.server.mcp_sessions import (
+    McpSessionRegistry,
     SamplingError,
-    SamplingGateway,
     SamplingTimeout,
     SamplingUnavailable,
 )
@@ -108,10 +108,11 @@ def _evidence(facts: dict[str, Any]) -> list[str]:
 
 def explain_via_sampling(
     query_service: Any,
-    gateway: SamplingGateway,
+    registry: McpSessionRegistry,
     symbol: str,
     language: str = "en",
     timeout: float = DEFAULT_SAMPLING_TIMEOUT,
+    preferred_session_id: str | None = None,
 ) -> dict[str, Any]:
     """Collect facts, ask a connected agent over MCP sampling, return the answer."""
 
@@ -124,12 +125,16 @@ def explain_via_sampling(
     explanation = ""
     fallback_reason = ""
     session_id = ""
-    if not gateway.has_sampling_session():
-        fallback_reason = "no connected MCP sampling agent session"
+    if not registry.has_sampling_session(
+        exclude=None
+    ):
+        fallback_reason = "no connected MCP sampling session"
     else:
         try:
-            result, session_id = gateway.request_sampling(
-                _sampling_params(facts, language), timeout=timeout
+            result, session_id = registry.request_sampling(
+                _sampling_params(facts, language),
+                timeout=timeout,
+                preferred_session_id=preferred_session_id,
             )
             explanation = _result_text(result)
             model = str(result.get("model") or "")

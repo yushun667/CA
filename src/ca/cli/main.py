@@ -507,31 +507,6 @@ def build_parser() -> argparse.ArgumentParser:
                               help="compile_commands.json for deep tools (optional)")
     serve_parser.set_defaults(func=commands.cmd_serve)
 
-    agent_session = sub.add_parser(
-        "agent-session",
-        help="keep an MCP sampling session open to ca serve (agent-side model)",
-        description=(
-            "Open a long-lived sampling session (POST /agent/session + SSE),"
-            " answer sampling/createMessage requests with the agent's own model"
-            " (or --command), so the Web UI explain endpoint returns answers"
-            " synchronously without jobs or backend LLM configuration."
-        ),
-    )
-    agent_session.add_argument("--serve-url", required=True,
-                               help="ca serve base URL (or host:port)")
-    agent_session.add_argument("--name", default="ca-agent-session",
-                               help="session name shown in /api/health")
-    agent_session.add_argument("--model", default="demo-agent",
-                               help="model label sent in sampling results")
-    agent_session.add_argument("--agent-command", default="",
-                               help="external handler: stdin=sampling params JSON,"
-                                    " stdout=explanation text/JSON")
-    agent_session.add_argument("--heartbeat", type=float, default=15.0,
-                               help="heartbeat interval seconds (default: 15)")
-    agent_session.add_argument("--once", action="store_true",
-                               help="answer one sampling request and exit (tests/demos)")
-    agent_session.set_defaults(func=commands.cmd_agent_session)
-
     agent_worker = sub.add_parser(
         "agent-worker",
         help="MCP agent worker: claim explain jobs from ca serve and submit",

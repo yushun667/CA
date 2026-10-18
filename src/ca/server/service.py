@@ -14,7 +14,7 @@ from ca.cli.dbsource import resolve_paths
 from ca.cli.mcp import McpSession, TOOLS as MCP_TOOLS
 from ca.core.schema import TOOL_VERSION
 from ca.server.jobs import JobService
-from ca.server.sampling import SamplingGateway
+from ca.server.mcp_sessions import McpSessionRegistry
 from ca.ui.server import QueryService, resolve_service
 
 JOB_MCP_TOOLS: list[dict[str, Any]] = [
@@ -55,6 +55,26 @@ JOB_MCP_TOOLS: list[dict[str, Any]] = [
         },
     },
 ]
+
+
+EXPLAIN_FUNCTION_TOOL: dict[str, Any] = {
+    "name": "explain_function",
+    "description": (
+        "Explain a function using the MCP client's own model via server-initiated"
+        " sampling/createMessage. The answer is returned synchronously in this"
+        " tool result; without a sampling-capable session the local heuristic is"
+        " returned instead."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "lang": {"type": "string", "enum": ["en", "zh"]},
+        },
+        "required": ["symbol"],
+        "additionalProperties": False,
+    },
+}
 
 
 class ServeError(Exception):
@@ -112,7 +132,7 @@ class ServeService:
         self.mcp = McpSession(
             self.paths, repo=config.repo, compdb=config.compdb, federated=self.federated
         )
-        self.sampling = SamplingGateway()
+        self.mcp_sessions = McpSessionRegistry()
         self._auto_lock = threading.Lock()
         self._auto_timers: dict[str, threading.Timer] = {}
         self._reschedule_auto_explain()
@@ -124,7 +144,7 @@ class ServeService:
             self._auto_timers.clear()
         for timer in timers:
             timer.cancel()
-        self.sampling.close_all()
+        self.mcp_sessions.close_all()
         self.jobs.close()
 
     # -- synchronous agent explain (MCP sampling, no jobs/queue) --------- #
@@ -144,7 +164,9 @@ class ServeService:
                 value = 30.0
         return max(1.0, min(value, 120.0))
 
-    def explain_agent(self, symbol: str, language: str = "en") -> dict[str, Any]:
+    def explain_agent(
+        self, symbol: str, language: str = "en", *, preferred_session_id: str | None = None
+    ) -> dict[str, Any]:
         """Synchronous explain over MCP sampling; heuristic fallback (HTTP 200)."""
 
         from ca.server.agent_explain import explain_via_sampling
@@ -153,10 +175,11 @@ class ServeService:
             raise ServeError("INVALID_ARGUMENT", "symbol is required")
         return explain_via_sampling(
             self.query,
-            self.sampling,
+            self.mcp_sessions,
             str(symbol).strip(),
             language,
             timeout=self.sampling_timeout(),
+            preferred_session_id=preferred_session_id,
         )
 
     # -- explain auto-complete ------------------------------------------- #
@@ -263,9 +286,11 @@ class ServeService:
             "jobs": self.jobs.job_stats(),
             "explain_grace_ms": self.explain_grace_ms(),
             "sampling": {
-                **self.sampling.stats(),
-                "endpoint": "/agent/session",
+                **self.mcp_sessions.stats(),
+                "transport": "mcp-http-sse",
+                "mcp_endpoint": "/mcp",
                 "explain_endpoint": "/api/explain/agent",
+                "explain_tool": "explain_function",
                 "timeout_seconds": self.sampling_timeout(),
             },
             "mcp_endpoint": "/mcp",
@@ -359,26 +384,121 @@ class ServeService:
 
     # -- MCP /mcp -------------------------------------------------------- #
     def mcp_tools(self) -> list[dict[str, Any]]:
-        return list(MCP_TOOLS) + list(JOB_MCP_TOOLS)
+        return list(MCP_TOOLS) + list(JOB_MCP_TOOLS) + [EXPLAIN_FUNCTION_TOOL]
 
-    def handle_mcp(self, message: Any) -> dict[str, Any] | None:
+    def _jsonrpc_result(self, request_id: Any, data: Any) -> dict[str, Any]:
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "content": [
+                    {"type": "text", "text": json.dumps(data, ensure_ascii=False)}
+                ],
+                "isError": False,
+            },
+        }
+
+    def _explain_function_tool(
+        self, request_id: Any, arguments: dict[str, Any], session_id: str | None
+    ) -> dict[str, Any]:
+        symbol = str(arguments.get("symbol") or arguments.get("name") or "").strip()
+        if not symbol:
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "ok": False,
+                                    "tool": "explain_function",
+                                    "error": {
+                                        "code": "INVALID_ARGUMENT",
+                                        "message": "symbol is required",
+                                    },
+                                }
+                            ),
+                        }
+                    ],
+                    "isError": True,
+                },
+            }
+        try:
+            data = self.explain_agent(
+                symbol,
+                str(arguments.get("lang") or arguments.get("language") or "en"),
+                preferred_session_id=session_id,
+            )
+            envelope = {"ok": True, "tool": "explain_function", "data": data}
+        except ServeError as exc:
+            envelope = {
+                "ok": False,
+                "tool": "explain_function",
+                "error": {"code": exc.code, "message": exc.message},
+            }
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "content": [{"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}],
+                "isError": not envelope["ok"],
+            },
+        }
+
+    def handle_mcp(
+        self, message: Any, session_id: str | None = None
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Handle one MCP message; returns ``(response, session_id)``.
+
+        ``initialize`` creates a standard MCP session (the app echoes
+        ``Mcp-Session-Id``); a sampling-capable session is later used for
+        server-initiated ``sampling/createMessage``.  Client responses to those
+        requests (id-only JSON-RPC result/error) are correlated here.
+        """
+
         if not isinstance(message, dict):
             raise ServeError("INVALID_ARGUMENT", "expected a JSON-RPC object")
         method = message.get("method")
+        if method == "initialize":
+            params = message.get("params") if isinstance(message.get("params"), dict) else {}
+            capabilities = params.get("capabilities")
+            client_info = params.get("clientInfo")
+            new_session = self.mcp_sessions.open_session(
+                capabilities if isinstance(capabilities, dict) else {},
+                client_info if isinstance(client_info, dict) else {},
+            )
+            return self.mcp.handle(message), new_session
         if method == "tools/list":
             request_id = message.get("id")
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "result": {"tools": self.mcp_tools()},
-            }
+            }, None
         if method == "tools/call":
             params = message.get("params") or {}
             name = str(params.get("name") or "")
             arguments = params.get("arguments") or {}
             if name in ("explain_jobs", "submit_explanation"):
-                return self._job_tool_response(message.get("id"), name, arguments)
-        return self.mcp.handle(message)
+                return self._job_tool_response(message.get("id"), name, arguments), None
+            if name == "explain_function":
+                return self._explain_function_tool(
+                    message.get("id"), arguments, session_id
+                ), None
+        if message.get("method") is None and "id" in message:
+            # JSON-RPC response from the client (sampling/createMessage answer).
+            result = message.get("result")
+            error = message.get("error")
+            self.mcp_sessions.respond(
+                session_id,
+                str(message.get("id")),
+                result if isinstance(result, dict) else None,
+                error if isinstance(error, dict) else None,
+            )
+            return None, None
+        return self.mcp.handle(message), None
 
     def _job_tool_response(
         self, request_id: Any, name: str, arguments: dict[str, Any]

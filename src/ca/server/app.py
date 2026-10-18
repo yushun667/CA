@@ -118,12 +118,19 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             print(f"[serve] {self.address_string()} {format % args}", file=sys.stderr, flush=True)
 
-        def _send_json(self, status: HTTPStatus | int, payload: Any) -> None:
+        def _send_json(
+            self,
+            status: HTTPStatus | int,
+            payload: Any,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
             body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             self.send_response(int(status))
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            for key, value in (extra_headers or {}).items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
 
@@ -186,9 +193,11 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
                         "federated": service.federated,
                     }
                     health["sampling"] = {
-                        **service.sampling.stats(),
-                        "endpoint": "/agent/session",
+                        **service.mcp_sessions.stats(),
+                        "transport": "mcp-http-sse",
+                        "mcp_endpoint": "/mcp",
                         "explain_endpoint": "/api/explain/agent",
+                        "explain_tool": "explain_function",
                         "timeout_seconds": service.sampling_timeout(),
                     }
                     health["jobs"] = service.jobs.job_stats()
@@ -214,9 +223,8 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
                         return
                     self._ok({"job": public_job(job)})
                     return
-                if path.startswith("/agent/session/") and path.endswith("/events"):
-                    session_id = path[len("/agent/session/") : -len("/events")].strip("/")
-                    self._stream_sampling_events(unquote(session_id))
+                if path == "/mcp":
+                    self._stream_mcp()
                     return
                 if path == "/events":
                     self._stream_events(params)
@@ -307,47 +315,6 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
                 if path == "/mcp":
                     self._handle_mcp()
                     return
-                if path == "/agent/session":
-                    body = self._body()
-                    capabilities = body.get("capabilities")
-                    if not isinstance(capabilities, dict):
-                        capabilities = {"sampling": {}}
-                    session = service.sampling.open_session(
-                        str(body.get("name") or "mcp-agent"), capabilities
-                    )
-                    self._ok(session, HTTPStatus.CREATED)
-                    return
-                if path.startswith("/agent/session/"):
-                    parts = [part for part in path.split("/") if part]
-                    if len(parts) == 4 and parts[:2] == ["agent", "session"]:
-                        session_id = unquote(parts[2])
-                        action = parts[3]
-                        body = self._body()
-                        if action == "heartbeat":
-                            accepted = service.sampling.touch(session_id)
-                            self._ok({"accepted": accepted})
-                            return
-                        if action == "response":
-                            request_id = str(
-                                body.get("id")
-                                or (body.get("request_id") if isinstance(body, dict) else "")
-                                or ""
-                            )
-                            result = body.get("result")
-                            error = body.get("error")
-                            accepted = service.sampling.respond(
-                                session_id,
-                                request_id,
-                                result if isinstance(result, dict) else None,
-                                error if isinstance(error, dict) else None,
-                            )
-                            if not accepted:
-                                raise ServeError(
-                                    "NOT_FOUND",
-                                    "unknown or expired sampling request/session",
-                                )
-                            self._ok({"accepted": True, "id": request_id})
-                            return
                 if path == "/api/explain/agent":
                     body = self._body()
                     self._ok(
@@ -402,6 +369,7 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
                 self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "INTERNAL", f"{type(exc).__name__}: {exc}")
 
         def _handle_mcp(self) -> None:
+            session_id = self.headers.get("Mcp-Session-Id")
             try:
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(length) if length > 0 else b"{}"
@@ -409,32 +377,115 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 self._send_json(
                     HTTPStatus.OK,
-                    {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"parse error: {exc}"}},
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": f"parse error: {exc}"},
+                    },
                 )
                 return
-            if isinstance(message, list):
-                responses = [response for response in (service.handle_mcp(item) for item in message) if response is not None]
-                if not responses:
-                    self.send_response(HTTPStatus.ACCEPTED)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                    return
-                self._send_json(HTTPStatus.OK, responses)
-                return
             try:
-                response = service.handle_mcp(message)
+                if isinstance(message, list):
+                    responses: list[dict[str, Any]] = []
+                    for item in message:
+                        response, new_session = service.handle_mcp(item, session_id)
+                        session_id = new_session or session_id
+                        if response is not None:
+                            responses.append(response)
+                    if not responses:
+                        self.send_response(HTTPStatus.ACCEPTED)
+                        if session_id:
+                            self.send_header("Mcp-Session-Id", session_id)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    self._send_json(
+                        HTTPStatus.OK,
+                        responses,
+                        {"Mcp-Session-Id": session_id} if session_id else None,
+                    )
+                    return
+                response, new_session = service.handle_mcp(message, session_id)
+                session_id = new_session or session_id
             except ServeError as exc:
-                response = {"jsonrpc": "2.0", "id": message.get("id") if isinstance(message, dict) else None, "error": {"code": -32602, "message": exc.message}}
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": message.get("id") if isinstance(message, dict) else None,
+                        "error": {"code": -32602, "message": exc.message},
+                    },
+                    {"Mcp-Session-Id": session_id} if session_id else None,
+                )
+                return
             except Exception as exc:  # pragma: no cover
-                response = {"jsonrpc": "2.0", "id": message.get("id") if isinstance(message, dict) else None, "error": {"code": -32603, "message": f"internal error: {type(exc).__name__}: {exc}"}}
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": message.get("id") if isinstance(message, dict) else None,
+                        "error": {
+                            "code": -32603,
+                            "message": f"internal error: {type(exc).__name__}: {exc}",
+                        },
+                    },
+                    {"Mcp-Session-Id": session_id} if session_id else None,
+                )
+                return
             if response is None:
                 self.send_response(HTTPStatus.ACCEPTED)
+                if session_id:
+                    self.send_header("Mcp-Session-Id", session_id)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            self._send_json(HTTPStatus.OK, response)
+            self._send_json(
+                HTTPStatus.OK,
+                response,
+                {"Mcp-Session-Id": session_id} if session_id else None,
+            )
 
-        # -- SSE ------------------------------------------------------ #
+        def _stream_mcp(self) -> None:
+            session_id = self.headers.get("Mcp-Session-Id")
+            session = service.mcp_sessions.get(session_id)
+            if session is None:
+                self._error(
+                    HTTPStatus.NOT_FOUND,
+                    "MCP_SESSION_NOT_FOUND",
+                    "missing or unknown Mcp-Session-Id (initialize first)",
+                )
+                return
+            try:
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "keep-alive")
+                self.send_header("X-Accel-Buffering", "no")
+                self.send_header("Mcp-Session-Id", session.session_id)
+                self.end_headers()
+                self.wfile.write(b": connected\n\n")
+                service.mcp_sessions.touch(session.session_id)
+                self.wfile.flush()
+                while True:
+                    try:
+                        event = session.events.get(timeout=SSE_HEARTBEAT_SECONDS)
+                    except Exception:
+                        self.wfile.write(b": ping\n\n")
+                        service.mcp_sessions.touch(session.session_id)
+                        self.wfile.flush()
+                        continue
+                    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                    self.wfile.write(
+                        f"event: message\ndata: {payload}\n\n".encode("utf-8")
+                    )
+                    service.mcp_sessions.touch(session.session_id)
+                    self.wfile.flush()
+            except OSError:  # client disconnected
+                pass
+            finally:
+                service.mcp_sessions.close_session(session.session_id)
+
+        # -- SSE ------------------------------------------------------ #        # -- SSE ------------------------------------------------------ #
         def _stream_events(self, params: dict[str, str]) -> None:
             since_id = 0
             header_id = self.headers.get("Last-Event-ID")
@@ -478,44 +529,6 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
             finally:
                 subscription.close()
 
-        def _stream_sampling_events(self, session_id: str) -> None:
-            session = service.sampling.get_session(session_id)
-            if session is None:
-                self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unknown sampling session")
-                return
-            try:
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Connection", "keep-alive")
-                self.send_header("X-Accel-Buffering", "no")
-                self.end_headers()
-                hello = json.dumps(
-                    {"type": "hello", "session_id": session_id, "sampling": True},
-                    ensure_ascii=False,
-                )
-                self.wfile.write(f"event: hello\ndata: {hello}\n\n".encode("utf-8"))
-                service.sampling.touch(session_id)
-                self.wfile.flush()
-                while True:
-                    try:
-                        event = session.events.get(timeout=SSE_HEARTBEAT_SECONDS)
-                    except Exception:
-                        self.wfile.write(b": ping\n\n")
-                        service.sampling.touch(session_id)
-                        self.wfile.flush()
-                        continue
-                    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-                    self.wfile.write(
-                        f"event: sampling\ndata: {payload}\n\n".encode("utf-8")
-                    )
-                    service.sampling.touch(session_id)
-                    self.wfile.flush()
-            except OSError:  # agent disconnected
-                pass
-            finally:
-                service.sampling.close_session(session_id)
-
         def _write_event(self, event: dict[str, Any]) -> None:
             public = _public_events([event])
             if not public:
@@ -536,11 +549,13 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
         def do_DELETE(self) -> None:  # noqa: N802 - http.server API
             parsed = urlsplit(self.path)
             path = parsed.path or "/"
-            if path.startswith("/agent/session/"):
-                session_id = unquote(path[len("/agent/session/") :].strip("/"))
-                closed = service.sampling.close_session(session_id)
+            if path == "/mcp":
+                session_id = self.headers.get("Mcp-Session-Id")
+                closed = service.mcp_sessions.close_session(session_id or "")
                 if not closed:
-                    self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", "unknown sampling session")
+                    self._error(
+                        HTTPStatus.NOT_FOUND, "MCP_SESSION_NOT_FOUND", "unknown MCP session"
+                    )
                     return
                 self._ok({"closed": True, "session_id": session_id})
                 return

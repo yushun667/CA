@@ -1248,23 +1248,6 @@ def cmd_serve(args: Any) -> int:
     return serve(config)
 
 
-def cmd_agent_session(args: Any) -> int:
-    """Keep an MCP sampling session open against a running ``ca serve``."""
-
-    from ca.cli.agent_session import AgentSessionConfig, run_agent_session
-
-    return run_agent_session(
-        AgentSessionConfig(
-            serve_url=args.serve_url,
-            name=args.name,
-            model=args.model,
-            command=args.agent_command,
-            once=bool(args.once),
-            heartbeat_interval=float(args.heartbeat),
-        )
-    )
-
-
 def cmd_agent_worker(args: Any) -> int:
     """Run the MCP explain-job worker against a running ``ca serve``."""
 

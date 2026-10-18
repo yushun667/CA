@@ -67,9 +67,30 @@ scripts/bootstrap.sh                       # venv + 固定依赖 + editable 安�
 ### 统一后端（`ca serve`）
 
 agent 可通过 stdio 代理连接常驻后端，而不必每进程打开数据库：
-`ca mcp --serve-url http://127.0.0.1:8765`。服务在 HTTP `/mcp` 暴露同样 18 个工具，
-另加两个 job 工具（`explain_jobs`、`submit_explanation`）用于 UI/agent 跨客户端闭环；
-见 [server.zh.md](server.zh.md)。
+`ca mcp --serve-url http://127.0.0.1:8765`。后端 `/mcp` 是标准 MCP HTTP server：
+18 个基础查询工具 + 2 个 legacy job 工具（`explain_jobs`、`submit_explanation`）+
+`explain_function` = 21 个工具。
+
+#### 支持 sampling 的会话（服务端发起的请求）
+
+client 的 `initialize` 声明 `capabilities.sampling` 时，服务端保留标准 MCP HTTP
+会话（`Mcp-Session-Id`），并通过 `GET /mcp` SSE 流向 client 发送
+`sampling/createMessage`。client 用 JSON-RPC response 原样 POST 回 `/mcp`（带同一
+会话头）。希望服务端使用自己模型的 client（例如 Web UI 的“AI 解释”）需要：
+
+1. `initialize` 带 `capabilities: {"sampling": {}}`，保存返回的 `Mcp-Session-Id`；
+2. 用会话头打开 `GET /mcp`（`Accept: text/event-stream`）；
+3. 收到 `sampling/createMessage` 后用自己的模型生成回答，POST JSON-RPC result
+   （`CreateMessageResult`：role/content/model/stopReason）；
+4. 保持会话存活（SSE ping 或请求续期），结束时 `DELETE /mcp`。
+
+`tools/call explain_function {symbol,lang}` 复用同一通道：agent 连上 MCP 后即可让
+CA 通过自己的模型解释函数；没有 sampling 会话时服务端返回本地 heuristic
+（HTTP 200，`fallback:true`）。端点细节见 [server.zh.md](server.zh.md)。
+
+stdio 代理 `ca mcp --serve-url URL` 会保存 `initialize` 返回的 `Mcp-Session-Id`，
+并把服务端发起的请求（sampling）转发给本地 stdio client，因此通过该代理接入的
+agent 同样是完整的 sampling-capable MCP client。
 
 ### 联邦模式（`--db-dir`）
 

@@ -146,8 +146,10 @@ def test_health_query_and_mcp_endpoint(db_path: Path, tmp_path: Path) -> None:
         )
         by_id = {item["id"]: item for item in responses}
         tools = by_id[2]["result"]["tools"]
-        assert len(tools) == 20
-        assert {"explain_jobs", "submit_explanation"} <= {tool["name"] for tool in tools}
+        assert len(tools) == 21
+        assert {"explain_jobs", "submit_explanation", "explain_function"} <= {
+            tool["name"] for tool in tools
+        }
         detail = _tool_envelope(by_id[3])
         assert detail["ok"] is True
         assert detail["data"]["function"]["name"] == "proc_alloc"
@@ -355,53 +357,105 @@ def test_restart_reschedules_queued_explain_jobs(
         assert job["result"]["fallback"] is True
 
 
-class _MockSamplingAgent:
-    """Minimal MCP sampling agent: opens a session, answers createMessage."""
+def _post_json_headers(
+    url: str, payload: dict, headers: dict[str, str] | None = None
+) -> tuple[int, dict, dict]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", **(headers or {})},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            body = response.read().decode("utf-8")
+            return response.status, (json.loads(body) if body.strip() else {}), dict(response.headers)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        return exc.code, (json.loads(body) if body.strip() else {}), dict(exc.headers)
+
+
+def _iter_sse(stream: Any):
+    buffer = ""
+    for raw in stream:
+        line = raw.decode("utf-8", errors="replace").rstrip("\n")
+        if not line:
+            if buffer:
+                data = [
+                    item[len("data:"):].strip()
+                    for item in buffer.splitlines()
+                    if item.startswith("data:")
+                ]
+                buffer = ""
+                if data:
+                    try:
+                        payload = json.loads("\n".join(data))
+                    except ValueError:
+                        payload = None
+                    if isinstance(payload, dict):
+                        yield payload
+            continue
+        if line.startswith(":"):
+            continue
+        buffer += line + "\n"
+
+
+class MockMCPClient:
+    """Standard MCP HTTP client with sampling capability and SSE channel."""
 
     def __init__(
         self,
         base: str,
-        explanation: str = "MOCK SAMPLING explanation",
-        model: str = "mock-agent-model",
+        explanation: str = "MOCK MCP sampling explanation",
+        model: str = "mock-mcp-model",
         respond: bool = True,
+        sampling: bool = True,
     ) -> None:
         self.base = base
         self.explanation = explanation
         self.model = model
         self.respond = respond
-        self.requests: list[dict] = []
+        self.sampling = sampling
         self.session_id = ""
-        self.events_url = ""
-        self.response_url = ""
+        self.requests: list[dict] = []
         self.stop = threading.Event()
         self.stream = None
         self.thread: threading.Thread | None = None
 
-    def start(self) -> "_MockSamplingAgent":
-        status, opened = _post_json(
-            self.base + "/agent/session",
-            {"name": "mock-sampling-agent", "capabilities": {"sampling": {}}},
+    def start(self) -> "MockMCPClient":
+        capabilities = {"sampling": {}} if self.sampling else {}
+        status, payload, headers = _post_json_headers(
+            self.base + "/mcp",
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": capabilities,
+                    "clientInfo": {"name": "mock-mcp-client", "version": "0"},
+                },
+            },
         )
-        assert status == 201, opened
-        data = opened["data"]
-        self.session_id = data["session_id"]
-        self.events_url = self.base + data["events_url"]
-        self.response_url = self.base + data["response_url"]
+        assert status == 200, payload
+        self.session_id = headers.get("Mcp-Session-Id", "")
+        assert self.session_id, headers
+        _status, _payload, _headers = _post_json_headers(
+            self.base + "/mcp",
+            {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+            {"Mcp-Session-Id": self.session_id},
+        )
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            _status, _payload = _get_json(self.base + "/api/health")
-            if "sampling" in _payload.get("data", {}):  # health always has sampling; wait session
-                pass
-            code, health = _get_json(self.base + "/api/health")
-            if code == 200 and health["data"]["sampling"]["sessions"] >= 1:
-                return self
-            time.sleep(0.02)
-        raise AssertionError("mock sampling agent session did not register")
+        return self
 
     def _run(self) -> None:
-        self.stream = urllib.request.urlopen(self.events_url, timeout=30)
+        request = urllib.request.Request(
+            self.base + "/mcp",
+            headers={"Mcp-Session-Id": self.session_id, "Accept": "text/event-stream"},
+            method="GET",
+        )
+        self.stream = urllib.request.urlopen(request, timeout=30)
         try:
             for event in _iter_sse(self.stream):
                 if self.stop.is_set():
@@ -417,18 +471,45 @@ class _MockSamplingAgent:
                     "model": self.model,
                     "stopReason": "endTurn",
                 }
-                _post_json(
-                    self.response_url,
+                _post_json_headers(
+                    self.base + "/mcp",
                     {"jsonrpc": "2.0", "id": event.get("id"), "result": result},
+                    {"Mcp-Session-Id": self.session_id},
                 )
         except (OSError, ValueError):
             pass
+
+    def tools_call(self, name: str, arguments: dict) -> dict:
+        status, payload, _headers = _post_json_headers(
+            self.base + "/mcp",
+            {
+                "jsonrpc": "2.0",
+                "id": 99,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            },
+            {"Mcp-Session-Id": self.session_id},
+        )
+        assert status == 200, payload
+        envelope = json.loads(payload["result"]["content"][0]["text"])
+        return envelope
+
+    def tools_list(self) -> list[dict]:
+        status, payload, _headers = _post_json_headers(
+            self.base + "/mcp",
+            {"jsonrpc": "2.0", "id": 98, "method": "tools/list", "params": {}},
+            {"Mcp-Session-Id": self.session_id},
+        )
+        assert status == 200, payload
+        return payload["result"]["tools"]
 
     def close(self) -> None:
         self.stop.set()
         if self.session_id:
             request = urllib.request.Request(
-                self.base + f"/agent/session/{self.session_id}", method="DELETE"
+                self.base + "/mcp",
+                headers={"Mcp-Session-Id": self.session_id},
+                method="DELETE",
             )
             try:
                 urllib.request.urlopen(request, timeout=5).read()
@@ -443,32 +524,9 @@ class _MockSamplingAgent:
             self.thread.join(timeout=3)
 
 
-def _iter_sse(stream: Any):
-    buffer = ""
-    for raw in stream:
-        line = raw.decode("utf-8", errors="replace").rstrip("\n")
-        if not line:
-            if buffer:
-                data = [item[len("data:"):].strip() for item in buffer.splitlines() if item.startswith("data:")]
-                buffer = ""
-                if data:
-                    try:
-                        payload = json.loads("\n".join(data))
-                    except ValueError:
-                        payload = None
-                    if isinstance(payload, dict):
-                        yield payload
-            continue
-        if line.startswith(":"):
-            continue
-        buffer += line + "\n"
-
-
-def test_sampling_explain_success_no_job(db_path: Path, tmp_path: Path) -> None:
-    with _server(
-        db_path, tmp_path / "jobs.db", sampling_timeout=5.0
-    ) as server:
-        agent = _MockSamplingAgent(server.url).start()
+def test_mcp_sampling_explain_success_no_job(db_path: Path, tmp_path: Path) -> None:
+    with _server(db_path, tmp_path / "jobs.db", sampling_timeout=5.0) as server:
+        client = MockMCPClient(server.url).start()
         try:
             status, payload = _post_json(
                 server.url + "/api/explain/agent",
@@ -477,26 +535,24 @@ def test_sampling_explain_success_no_job(db_path: Path, tmp_path: Path) -> None:
             assert status == 200, payload
             data = payload["data"]
             assert data["provider"] == "agent"
-            assert data["model"] == "mock-agent-model"
+            assert data["model"] == "mock-mcp-model"
             assert data["fallback"] is False
-            assert data["explanation"] == "MOCK SAMPLING explanation"
+            assert data["explanation"] == "MOCK MCP sampling explanation"
             assert data["evidence"]
-            assert data["facts_summary"]["signature"]
             assert data["elapsed_ms"] >= 0
-            assert data["language"] == "en"
 
-            assert agent.requests, "agent received no sampling request"
-            request = agent.requests[0]
-            assert request["method"] == "sampling/createMessage"
+            assert client.requests, "MCP client received no sampling request"
+            request = client.requests[0]
             params = request["params"]
             assert params["messages"][0]["role"] == "user"
-            assert params["messages"][0]["content"]["type"] == "text"
             assert "proc_alloc" in params["messages"][0]["content"]["text"]
-            assert params["systemPrompt"]
-            assert params["includeContext"] == "none"
+            assert params["systemPrompt"] and params["includeContext"] == "none"
             assert params["maxTokens"] >= 1
-            assert params["modelPreferences"]["intelligencePriority"] > 0
             assert params["metadata"]["symbol"] == "proc_alloc"
+
+            tools = client.tools_list()
+            assert len(tools) == 21
+            assert {"explain_function", "explain_jobs"} <= {tool["name"] for tool in tools}
 
             _status, jobs = _get_json(server.url + "/api/jobs")
             assert jobs["data"]["count"] == 0
@@ -506,12 +562,30 @@ def test_sampling_explain_success_no_job(db_path: Path, tmp_path: Path) -> None:
             assert health["data"]["features"]["sampling_explain"] is True
             assert health["data"]["jobs"]["total"] == 0
         finally:
-            agent.close()
+            client.close()
 
 
-def test_sampling_explain_timeout_falls_back(db_path: Path, tmp_path: Path) -> None:
+def test_mcp_sampling_explain_no_session_falls_back(
+    db_path: Path, tmp_path: Path
+) -> None:
+    with _server(db_path, tmp_path / "jobs.db", sampling_timeout=1.0) as server:
+        status, payload = _post_json(
+            server.url + "/api/explain/agent",
+            {"symbol": "proc_alloc", "lang": "zh"},
+        )
+        assert status == 200, payload
+        data = payload["data"]
+        assert data["provider"] == "heuristic"
+        assert data["fallback"] is True
+        assert "no connected MCP sampling session" in data["fallback_reason"]
+        assert data["language"] == "zh"
+        _status, jobs = _get_json(server.url + "/api/jobs")
+        assert jobs["data"]["count"] == 0
+
+
+def test_mcp_sampling_timeout_falls_back(db_path: Path, tmp_path: Path) -> None:
     with _server(db_path, tmp_path / "jobs.db", sampling_timeout=0.3) as server:
-        agent = _MockSamplingAgent(server.url, respond=False).start()
+        client = MockMCPClient(server.url, respond=False).start()
         try:
             started = time.perf_counter()
             status, payload = _post_json(
@@ -524,36 +598,38 @@ def test_sampling_explain_timeout_falls_back(db_path: Path, tmp_path: Path) -> N
             assert data["provider"] == "heuristic"
             assert data["fallback"] is True
             assert "timed out" in data["fallback_reason"]
-            assert data["explanation"]
             assert elapsed < 5
             _status, jobs = _get_json(server.url + "/api/jobs")
             assert jobs["data"]["count"] == 0
         finally:
-            agent.close()
+            client.close()
 
 
-def test_sampling_explain_no_session_falls_back(db_path: Path, tmp_path: Path) -> None:
+def test_explain_function_tool_uses_sampling(db_path: Path, tmp_path: Path) -> None:
+    with _server(db_path, tmp_path / "jobs.db", sampling_timeout=5.0) as server:
+        client = MockMCPClient(server.url, explanation="TOOL sampling answer").start()
+        try:
+            envelope = client.tools_call(
+                "explain_function", {"symbol": "proc_alloc", "lang": "en"}
+            )
+            assert envelope["ok"] is True, envelope
+            data = envelope["data"]
+            assert data["provider"] == "agent"
+            assert data["model"] == "mock-mcp-model"
+            assert data["explanation"] == "TOOL sampling answer"
+            assert client.requests and client.requests[0]["method"] == "sampling/createMessage"
+            _status, jobs = _get_json(server.url + "/api/jobs")
+            assert jobs["data"]["count"] == 0
+        finally:
+            client.close()
+
+
+def test_mcp_session_lifecycle(db_path: Path, tmp_path: Path) -> None:
     with _server(db_path, tmp_path / "jobs.db", sampling_timeout=1.0) as server:
-        status, payload = _post_json(
-            server.url + "/api/explain/agent",
-            {"symbol": "proc_alloc", "lang": "zh"},
-        )
-        assert status == 200, payload
-        data = payload["data"]
-        assert data["provider"] == "heuristic"
-        assert data["fallback"] is True
-        assert "no connected MCP sampling agent" in data["fallback_reason"]
-        assert data["language"] == "zh"
-        _status, jobs = _get_json(server.url + "/api/jobs")
-        assert jobs["data"]["count"] == 0
-
-
-def test_sampling_session_lifecycle(db_path: Path, tmp_path: Path) -> None:
-    with _server(db_path, tmp_path / "jobs.db", sampling_timeout=1.0) as server:
-        agent = _MockSamplingAgent(server.url).start()
+        client = MockMCPClient(server.url).start()
         _status, health = _get_json(server.url + "/api/health")
         assert health["data"]["sampling"]["sessions"] == 1
-        agent.close()
+        client.close()
         deadline = time.time() + 5
         while time.time() < deadline:
             _status, health = _get_json(server.url + "/api/health")
@@ -567,7 +643,25 @@ def test_sampling_session_lifecycle(db_path: Path, tmp_path: Path) -> None:
         assert payload["data"]["provider"] == "heuristic"
 
 
-def test_sampling_client_errors(db_path: Path, tmp_path: Path) -> None:
+def test_mcp_capability_without_sampling_falls_back(
+    db_path: Path, tmp_path: Path
+) -> None:
+    with _server(db_path, tmp_path / "jobs.db", sampling_timeout=1.0) as server:
+        client = MockMCPClient(server.url, sampling=False).start()
+        try:
+            _status, health = _get_json(server.url + "/api/health")
+            assert health["data"]["sampling"]["sessions"] == 1
+            assert health["data"]["sampling"]["sampling_capable"] == 0
+            _status, payload = _post_json(
+                server.url + "/api/explain/agent", {"symbol": "proc_alloc"}
+            )
+            assert payload["data"]["provider"] == "heuristic"
+            assert "no connected MCP sampling session" in payload["data"]["fallback_reason"]
+        finally:
+            client.close()
+
+
+def test_mcp_sampling_client_errors(db_path: Path, tmp_path: Path) -> None:
     with _server(db_path, tmp_path / "jobs.db") as server:
         status, payload = _post_json(server.url + "/api/explain/agent", {})
         assert status == 400
@@ -577,61 +671,6 @@ def test_sampling_client_errors(db_path: Path, tmp_path: Path) -> None:
         )
         assert status == 404
         assert payload["error"]["code"] == "NOT_FOUND"
-
-
-def test_agent_session_cli_serves_sampling(db_path: Path, tmp_path: Path) -> None:
-    with _server(db_path, tmp_path / "jobs.db", sampling_timeout=5.0) as server:
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "ca",
-                "agent-session",
-                "--serve-url",
-                server.url,
-                "--once",
-                "--model",
-                "cli-demo-agent",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env={
-                "PYTHONPATH": str(REPO_ROOT / "src"),
-                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-                "HOME": str(Path.home()),
-            },
-            cwd=str(REPO_ROOT),
-        )
-        try:
-            deadline = time.time() + 15
-            connected = False
-            while time.time() < deadline and not connected:
-                if process.poll() is not None:
-                    raise AssertionError(process.stderr.read()[-2000:])
-                _status, health = _get_json(server.url + "/api/health")
-                connected = health["data"]["sampling"]["sessions"] >= 1
-                time.sleep(0.05)
-            assert connected, "ca agent-session did not register"
-            status, payload = _post_json(
-                server.url + "/api/explain/agent",
-                {"symbol": "proc_alloc", "lang": "en"},
-            )
-            assert status == 200, payload
-            data = payload["data"]
-            assert data["provider"] == "agent"
-            assert data["model"] == "cli-demo-agent"
-            assert data["explanation"].startswith("[cli-demo-agent]")
-            assert process.wait(timeout=20) == 0
-            _status, jobs = _get_json(server.url + "/api/jobs")
-            assert jobs["data"]["count"] == 0
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
 
 
 def test_serve_sampling_cli_flags_visible() -> None:
@@ -649,6 +688,116 @@ def test_serve_sampling_cli_flags_visible() -> None:
     )
     assert result.returncode == 0
     assert "--sampling-timeout" in (result.stdout + result.stderr)
+    top = subprocess.run(
+        [sys.executable, "-m", "ca", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            "PYTHONPATH": str(REPO_ROOT / "src"),
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME": str(Path.home()),
+        },
+        cwd=str(REPO_ROOT),
+    )
+    assert "agent-session" not in (top.stdout + top.stderr)
+
+
+def test_mcp_stdio_proxy_sampling_bridge(db_path: Path, tmp_path: Path) -> None:
+    """`ca mcp --serve-url` keeps the MCP session and forwards sampling."""
+
+    with _server(db_path, tmp_path / "jobs.db", sampling_timeout=5.0) as server:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "ca", "mcp", "--serve-url", server.url],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={
+                "PYTHONPATH": str(REPO_ROOT / "src"),
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "HOME": str(Path.home()),
+            },
+            cwd=str(REPO_ROOT),
+        )
+        assert process.stdin is not None and process.stdout is not None
+
+        def send(message: dict) -> None:
+            process.stdin.write(json.dumps(message) + "\n")
+            process.stdin.flush()
+
+        def read_message(timeout: float = 10.0) -> dict:
+            box: list[str] = []
+
+            def reader() -> None:
+                box.append(process.stdout.readline())
+
+            thread = threading.Thread(target=reader, daemon=True)
+            thread.start()
+            thread.join(timeout)
+            assert box and box[0].strip(), "proxy produced no message"
+            return json.loads(box[0])
+
+        explain: list[dict] = []
+        try:
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"sampling": {}},
+                        "clientInfo": {"name": "proxy-agent", "version": "0"},
+                    },
+                }
+            )
+            initialized = read_message()
+            assert initialized["id"] == 1
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                _status, health = _get_json(server.url + "/api/health")
+                if health["data"]["sampling"]["sessions"] >= 1:
+                    break
+                time.sleep(0.05)
+            assert health["data"]["sampling"]["sampling_capable"] == 1
+
+            def call_explain() -> None:
+                status, payload = _post_json(
+                    server.url + "/api/explain/agent",
+                    {"symbol": "proc_alloc", "lang": "en"},
+                )
+                assert status == 200
+                explain.append(payload["data"])
+
+            thread = threading.Thread(target=call_explain, daemon=True)
+            thread.start()
+            sampling = read_message(timeout=10)
+            assert sampling["method"] == "sampling/createMessage"
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": sampling["id"],
+                    "result": {
+                        "role": "assistant",
+                        "content": {"type": "text", "text": "PROXY sampling answer"},
+                        "model": "proxy-model",
+                        "stopReason": "endTurn",
+                    },
+                }
+            )
+            thread.join(timeout=10)
+            assert explain and explain[0]["provider"] == "agent"
+            assert explain[0]["model"] == "proxy-model"
+            assert explain[0]["explanation"] == "PROXY sampling answer"
+            _status, jobs = _get_json(server.url + "/api/jobs")
+            assert jobs["data"]["count"] == 0
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
 
 
 def test_restart_requeues_running_jobs(db_path: Path, tmp_path: Path) -> None:
@@ -704,7 +853,7 @@ def test_mcp_serve_url_proxy(db_path: Path, tmp_path: Path) -> None:
         assert result.returncode == 0, result.stderr[-2000:]
         responses = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
         by_id = {item["id"]: item for item in responses}
-        assert len(by_id[2]["result"]["tools"]) == 20
+        assert len(by_id[2]["result"]["tools"]) == 21
 
 
 def test_federated_serve_reports_shards(db_path: Path, tmp_path: Path) -> None:

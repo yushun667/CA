@@ -71,10 +71,35 @@ slicing (queries are indexed, so this stays cheap for modest offsets).
 ### Unified backend (`ca serve`)
 
 Instead of opening the database per process, agents can proxy stdio MCP to a
-long-lived backend: `ca mcp --serve-url http://127.0.0.1:8765`. The server
-exposes the same 18 tools over HTTP `/mcp` plus two job tools
-(`explain_jobs`, `submit_explanation`) for the UI/agent cross-client loop; see
-[server.md](server.md).
+long-lived backend: `ca mcp --serve-url http://127.0.0.1:8765`. The backend `/mcp`
+is a standard MCP HTTP server with 18 base query tools + 2 legacy job tools
+(`explain_jobs`, `submit_explanation`) + `explain_function` = 21 tools.
+
+#### Sampling-capable sessions (server-initiated requests)
+
+When the client's `initialize` declares `capabilities.sampling`, the server keeps
+the standard MCP HTTP session (`Mcp-Session-Id`) and may send
+`sampling/createMessage` to the client over the `GET /mcp` SSE stream. The client
+answers by POSTing the JSON-RPC response back to `/mcp` with the same session
+header. Clients that want the server to use their own model (e.g. the Web UI
+"AI explanation") must therefore:
+
+1. send `initialize` with `capabilities: {"sampling": {}}` and keep the returned
+   `Mcp-Session-Id`;
+2. open `GET /mcp` with `Accept: text/event-stream` and the session header;
+3. on `sampling/createMessage`, generate the answer with their model and POST
+   the JSON-RPC result (`CreateMessageResult`: role/content/model/stopReason);
+4. keep the session alive (SSE pings or requests) and `DELETE /mcp` to close.
+
+`tools/call explain_function {symbol,lang}` uses that same channel: the agent
+connects once and asks CA to explain a function through its own model. Without a
+sampling-capable session the server returns the local heuristic instead (HTTP
+200, `fallback:true`); see [server.md](server.md) for the endpoint payloads.
+
+The stdio proxy `ca mcp --serve-url URL` keeps the `Mcp-Session-Id` obtained at
+``initialize`` and forwards server-initiated requests (sampling) to the local
+stdio client, so an agent using the proxy is a full sampling-capable MCP client
+as well.
 
 ### Federated mode (`--db-dir`)
 

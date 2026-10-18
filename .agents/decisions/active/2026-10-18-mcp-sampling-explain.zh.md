@@ -15,13 +15,14 @@ SSE 更新。用户否定了这种交互 explain 流程（排队/claim 增加延
 
 explain 改为**服务端→客户端 MCP sampling 同步调用**：
 
-1. sampling-capable MCP agent 用 `POST /agent/session`（`capabilities.sampling`）
-   与 `GET /agent/session/<id>/events`（SSE）保持长连接；
+1. sampling-capable MCP client 用标准 `/mcp` 会话：`initialize` 带
+   `capabilities.sampling` 返回 `Mcp-Session-Id`，`GET /mcp`（SSE）作为服务端→
+   客户端反向通道；
 2. Web UI 调 `POST /api/explain/agent {symbol,lang}`；
 3. 服务端收集有界函数事实/源码，向最早连接的 sampling session 发送标准 JSON-RPC
    `sampling/createMessage`；
-4. agent 用自己的模型回答，POST 到 `/agent/session/<id>/response`
-   （`CreateMessageResult`）；
+4. client 用自己的模型回答，POST 回 `/mcp`（同会话头，
+   `CreateMessageResult`）；
 5. 服务端在同一 HTTP 响应返回 `provider:"agent"`、agent 的 `model`、explanation 与
    evidence。
 
@@ -35,8 +36,8 @@ job 队列仍供其它任务（`ensure_deep`/`prewarm`/`update` 占位与 legacy
 - agent 已持有模型与凭据；转发 sampling 请求让服务端无需凭据且与 provider 无关。
 - 同步请求/响应去掉队列延迟与“没有 agent 时卡住”的状态；heuristic 回退保证页面
   始终响应。
-- 标准 MCP sampling 让真实 MCP agent 无需自定义 API；`ca agent-session` 只是参考
-  客户端/演示。
+- 标准 MCP sampling 让真实 MCP agent 无需自定义 API；不再提供 agent-session CLI
+  或 demo 客户端。
 - MCP sampling 是服务端发起的请求，普通 HTTP `/mcp` 请求/响应没有服务端→客户端的
   通道，因此需要长连接会话 + SSE 侧通道。
 
@@ -62,6 +63,6 @@ job 队列仍供其它任务（`ensure_deep`/`prewarm`/`update` 占位与 legacy
 ## 验证与风险
 
 `tests/test_server_serve.py` 覆盖 mock sampling 成功（断言 MCP 请求形状）、超时
-回退、无会话回退、会话生命周期、无 job 创建与 `ca agent-session --once`。无会话
+回退、无会话回退、会话生命周期、无 job 创建（标准 MCP client）。无会话
 heuristic 回退在 xv6 上 p50 ≈4ms。风险：不实现 sampling 的 agent 只能看到 heuristic；
 慢 agent 会占用一个 HTTP worker 至超时；会话状态仅进程内（重启后 agent 需重连）。

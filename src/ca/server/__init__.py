@@ -3,9 +3,9 @@
 from ca.server.agent_explain import explain_via_sampling
 from ca.server.app import ServeHTTPServer, make_server, public_job, serve
 from ca.server.jobs import EventBus, JobService
-from ca.server.sampling import (
+from ca.server.mcp_sessions import (
+    McpSessionRegistry,
     SamplingError,
-    SamplingGateway,
     SamplingTimeout,
     SamplingUnavailable,
 )
@@ -15,8 +15,8 @@ __all__ = [
     "EventBus",
     "JOB_MCP_TOOLS",
     "JobService",
+    "McpSessionRegistry",
     "SamplingError",
-    "SamplingGateway",
     "SamplingTimeout",
     "SamplingUnavailable",
     "ServeConfig",

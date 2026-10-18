@@ -18,13 +18,14 @@ must not own model credentials or provider configuration.
 Explain requests are **synchronous server -> client MCP sampling** calls:
 
 1. a sampling-capable MCP agent keeps a long-lived session open with
-   ``POST /agent/session`` (``capabilities.sampling``) and
-   ``GET /agent/session/<id>/events`` (SSE);
+   standard MCP ``/mcp`` sessions: ``initialize`` with
+   ``capabilities.sampling`` returns ``Mcp-Session-Id`` and ``GET /mcp`` (SSE)
+   is the server->client reverse channel;
 2. the Web UI calls ``POST /api/explain/agent {symbol,lang}``;
 3. the server collects bounded function facts/source and sends the standard
    JSON-RPC ``sampling/createMessage`` request to the oldest sampling session;
 4. the agent answers with its own model via
-   ``POST /agent/session/<id>/response`` (``CreateMessageResult``);
+   ``POST /mcp`` with the same session header (``CreateMessageResult``);
 5. the server returns ``provider:"agent"``, the agent's ``model``, explanation and
    evidence in the same HTTP response.
 
@@ -41,7 +42,8 @@ and legacy explain automation via ``ca agent-worker``).
 - Synchronous request/response removes queue latency and the "no agent running"
   stuck state; a heuristic fallback keeps the page responsive.
 - Standard MCP sampling means real MCP agents participate without a custom API;
-  ``ca agent-session`` is only a reference client/demo.
+  no extra agent-session CLI or demo client exists; the connected MCP client is
+  the agent.
 - The long-lived session + SSE side channel is needed because MCP sampling is a
   server-initiated request; plain HTTP ``/mcp`` request/response has no channel
   for server->client messages.
@@ -71,7 +73,8 @@ and legacy explain automation via ``ca agent-worker``).
 
 ``tests/test_server_serve.py`` covers mock sampling success (asserts the MCP
 request shape), timeout fallback, no-session fallback, session lifecycle, no job
-creation, and ``ca agent-session --once``. No-session heuristic fallback measured
+creation with a standard MCP client (initialize capabilities.sampling + SSE +
+response). No-session heuristic fallback measured
 p50 ≈4 ms on xv6. Risks: agents that do not implement sampling see only the
 heuristic; a slow agent consumes an HTTP worker for up to the timeout; session
 state is in-process only (restart requires the agent to reconnect).

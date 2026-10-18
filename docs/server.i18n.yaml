@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: server.md
-  sha256: 2b989bb0093aabf3dffed9997322db28b3d463e944dedd3b3cb318b7846fbe41
+  sha256: 0f9ccf584385ad9c1db881bd926f07c4a736b25ce4f2c422a92af516381fa948
 zh:
   file: server.zh.md
-  sha256: 5d073e347ecd04947c7dd7a2e0aa7cac442af452fa5f4ec42a8e5b5a2eea0388
+  sha256: 6db78e2078acf45607e019d735b6a887b525c2b8f4cbd7bc27a007ceee29e30f
