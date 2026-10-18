@@ -78,7 +78,42 @@ CA 是通用分析器，因此插件围绕**项目**组织，与在 DSH 中打�
 `tasks.maxConcurrent`，1–8，默认 2）、`maxTaskLogBytes`（或 `tasks.maxLogBytes`，
 64 KiB–16 MiB，默认 1 MiB）。
 
+## 从零安装（新用户 / 新服务器）
+
+CA 分析器本身是纯 Python，**不需要编译**；运行依赖（`clang`、`libclang`——后者自带
+原生库、`duckdb`、`pytest`）都是预编译 wheel。后端主机需要的是 **Python >= 3.11**、
+`venv`/`pip`、`rsync`（仅远程安装需要）以及一次网络访问（或已有的 pip 缓存）。
+Ubuntu 22.04 默认 Python 3.10，不够；请安装 `python3.11`，或把 `remote.python` 指向
+已有的 3.11+ 解释器。远程安装器会提前检测，约 0.2 秒内以 `UNSUPPORTED_PYTHON`
+明确失败，而不是等 pip 阶段才报错。
+
+DSH 新用户、本地索引：
+
+1. 克隆 CA 仓库（其中包含本 `dsh/` bundle）。
+2. 通过插件管理器从 `<repo>/dsh` 安装 bundle 并启用。
+3. 新建项目指向已有的 CA 检出/venv/索引；或先引导一次 venv（需要 Python 3.11）：
+   `python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install -e .`
+   （`scripts/bootstrap.sh` 在 macOS/Linux 做同样的事）。editable 安装是有意为之：
+   当前打包没有 package-data，wheel 会遗漏 `schema.sql` 与 UI 静态资源。
+
+新的远程 Linux 服务器：
+
+1. 前置条件：Linux x86_64/aarch64、`python3.11+`（或已有的 3.11 解释器路径）、
+   `python3.11-venv`、`pip`、`rsync`、一次网络访问。
+2. 在项目/后端表单里填 `remote.ssh.host`、`remote.python`（3.11+），以及
+   `remote.installDir`（空目标目录，如 `~/.dsh-ca/install`）或 `remote.repoPath`
+   （已有 CA 检出）。在后端页点 **Install**。
+3. 安装器依次执行 `probe → rsync → venv → pip install -r requirements.txt →
+   pip install -e . → ca version`，幂等并逐步回报；局域网内 pip 缓存已就绪时，
+   实测完整安装约 10 秒。
+
+目前**没有发布开箱即用的一体化安装包或离线 wheel 包**。安装 API 支持
+`offline: true` + `wheelDir`（届时 pip 用 `--no-index --find-links`），但仓库未附带
+wheelhouse，表单也尚未暴露该选项；离线包是下一步工作。插件本身目前从本地目录安装，
+不在 registry 发布。
+
 ## 本地后端
+
 
 1. 设置 `local.db`（联邦 shard 用 `local.dbDir`）；当 CA checkout 与 venv 可被发现
    时 `local.repoRoot`/`local.python` 可留空。

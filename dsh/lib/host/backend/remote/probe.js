@@ -114,6 +114,20 @@ export async function probeRemote(options) {
   const dbBytes = Number(markers.db_bytes) || null;
   const dbDir = markers.db_dir === '1';
   const dbShards = Number(markers.db_shards) || 0;
+  const pythonCandidates = ['313', '312', '311']
+    .map((suffix) => ({
+      path: nonEmptyString(markers[`python${suffix}`]),
+      version: nonEmptyString(markers[`python${suffix}_version`]),
+    }))
+    .filter((candidate) => candidate.path);
+  const versionAtLeast311 = (text) => {
+    const match = /Python (\d+)\.(\d+)/.exec(String(text || ''));
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    return major > 3 || (major === 3 && minor >= 11);
+  };
+  const preferredPython = pythonCandidates.find((candidate) => versionAtLeast311(candidate.version)) || null;
   const pythonUsed = nonEmptyString(markers.python_used);
   const libclangChecked = Boolean(pythonUsed);
   const libclangOk = markers.libclang === 'ok';
@@ -307,6 +321,7 @@ export async function probeRemote(options) {
       version: pythonVersion,
       configured: remote.python || null,
       supported: systemPythonSupported || Boolean(pythonUsed),
+      preferred: preferredPython ? { path: preferredPython.path, version: preferredPython.version } : null,
       venv: pythonUsed || (venvPython ? `${repoPath}/.venv/bin/python` : null),
       caPython: ca?.python || null,
     },

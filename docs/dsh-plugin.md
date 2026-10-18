@@ -86,7 +86,48 @@ Advanced optional overrides are read from the same config object:
 `maxConcurrentTasks` (or `tasks.maxConcurrent`, 1–8, default 2) and
 `maxTaskLogBytes` (or `tasks.maxLogBytes`, 64 KiB–16 MiB, default 1 MiB).
 
+## Installing from zero (new user, new server)
+
+CA is pure Python: **nothing is compiled** for the analyzer itself, and the
+runtime dependencies (`clang`, `libclang` — which ships the native library —,
+`duckdb`, `pytest`) are prebuilt wheels. What the backend host must provide is
+**Python >= 3.11**, `venv`/`pip`, `rsync` (remote installs only) and network
+access once (or a populated pip cache). Ubuntu 22.04 ships Python 3.10 by
+default; install `python3.11` or point `remote.python` at an existing 3.11+
+interpreter. The remote installer detects this up front and fails in ~0.2 s
+with `UNSUPPORTED_PYTHON` instead of failing later inside pip.
+
+New DSH user, local index:
+
+1. Clone the CA repository (it contains this `dsh/` bundle).
+2. Install the bundle from `<repo>/dsh` through the plugin manager and enable it.
+3. Either create a project pointing at an existing CA checkout, venv and index,
+   or bootstrap a venv once (Python 3.11 required):
+   `python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install -e .`
+   (`scripts/bootstrap.sh` does the same on macOS/Linux). Editable install is
+   deliberate: the package currently ships no package-data, so a wheel would
+   miss `schema.sql` and the UI assets.
+
+New remote Linux server:
+
+1. Prerequisites: Linux x86_64/aarch64, `python3.11+` (or an existing 3.11
+   interpreter path), `python3.11-venv`, `pip`, `rsync`, network once.
+2. In the project/backend form set `remote.ssh.host`, `remote.python` (3.11+),
+   and either `remote.installDir` (an empty target such as `~/.dsh-ca/install`)
+   or `remote.repoPath` (an existing CA checkout). Press **Install** on the
+   backend page.
+3. The installer runs `probe → rsync → venv → pip install -r requirements.txt →
+   pip install -e . → ca version`, is idempotent and reports each step; on a
+   LAN host with a warm pip cache a full install takes about 10 s (measured).
+
+There is **no published all-in-one installer or offline wheel bundle yet**. The
+install API accepts `offline: true` plus a `wheelDir` (it then runs pip with
+`--no-index --find-links`), but no wheelhouse is shipped and the form does not
+expose it yet; building that bundle is a separate step. The plugin itself is
+currently installed from a local directory, not from a registry.
+
 ## Local backend
+
 
 1. Set `local.db` (or `local.dbDir` for federated shards); `local.repoRoot` and
    `local.python` are optional when the CA checkout and its venv are discoverable.

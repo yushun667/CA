@@ -28,6 +28,8 @@ import {
 
 const logger = createLogger({ dir: null, ringSize: 200 });
 
+const emptyResult = (extra = {}) => ({ code: 0, stdout: '', stderr: '', ...extra });
+
 function makeCaCheckout(dir) {
   fs.mkdirSync(path.join(dir, 'src', 'ca'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'src', 'ca', '__init__.py'), '');
@@ -317,6 +319,54 @@ test('performRemoteInstall validates offline wheel configuration', async () => {
     assert.equal(report.ok, false);
     assert.equal(report.steps.find((step) => step.id === 'dependencies').status, 'failed');
     assert.match(report.error.message, /wheelDir|离线/);
+  } finally {
+    cleanupDir(local);
+  }
+});
+
+test('fails fast with a clear error when the remote Python is older than 3.11', async () => {
+  const runner = createFakeRunner((call) => {
+    if (call.script?.includes('CA_PROBE:begin')) {
+      return emptyResult({ stdout: probeStdout({ python3_version: 'Python 3.10.12' }) });
+    }
+    return emptyResult({ stdout: 'ok' });
+  });
+  const report = await runInstall({ config: remoteTestConfig(), runner });
+  assert.equal(report.ok, false);
+  assert.equal(report.error.code, 'UNSUPPORTED_PYTHON');
+  assert.equal(report.steps.find((step) => step.id === 'probe').status, 'failed');
+  assert.equal(
+    runner.calls.some((call) => call.command === 'rsync'),
+    false,
+    'must not touch the remote before the interpreter problem is reported',
+  );
+  assert.match(String(report.error.message), /3\.11/);
+});
+
+test('uses a detected python3.11+ candidate when system python3 is too old', async () => {
+  const local = makeCaCheckout(makeTempDir('dshca-local-ca-'));
+  try {
+    const runner = installSuccessRunner({
+      probe: probeNeedInstall({
+        python3_version: 'Python 3.10.12',
+        python311: '/usr/local/bin/python3.11',
+        python311_version: 'Python 3.11.9',
+      }),
+    });
+    const report = await runInstall({
+      config: remoteTestConfig(),
+      runner,
+      options: installOptions(local),
+    });
+    assert.equal(report.ok, true, JSON.stringify(report.error));
+    assert.equal(report.steps.find((step) => step.id === 'venv').status, 'succeeded');
+    const sshScripts = runner.calls
+      .filter((call) => call.command === 'ssh' && call.script)
+      .map((call) => call.script);
+    assert.ok(
+      sshScripts.some((script) => script.includes('/usr/local/bin/python3.11') && script.includes('venv')),
+      'venv must be created from the detected 3.11 interpreter',
+    );
   } finally {
     cleanupDir(local);
   }

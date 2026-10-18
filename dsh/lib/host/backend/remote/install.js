@@ -279,6 +279,29 @@ export async function performRemoteInstall(options) {
       `${probe.disk?.availableText || '?'} 可用`,
   );
 
+  // CA requires Python >= 3.11. Fail before touching the remote when neither a
+  // configured interpreter nor a detected python3.11+ candidate can be used.
+  const configuredInterpreter = nonEmptyString(effective.remote.python);
+  const preferredInterpreter = probe.python?.preferred?.path || null;
+  const systemInterpreterSupported = probe.python?.supported === true;
+  const installInterpreter = configuredInterpreter || preferredInterpreter || probe.python?.system || null;
+  if (!configuredInterpreter && !preferredInterpreter && !systemInterpreterSupported) {
+    const error = new BackendError(
+      'UNSUPPORTED_PYTHON',
+      `远端系统 python3 为 ${probe.python?.version || '未知版本'}，CA 需要 Python >= 3.11；请安装 python3.11+，或设置 remote.python 指向 3.11+ 解释器（例如 /path/to/python3.11）后重试`,
+      {
+        step: 'probe',
+        hints: [
+          'sudo apt install python3.11 python3.11-venv python3.11-dev',
+          '或把 remote.python 指向已有的 3.11+ 解释器/venv',
+        ],
+      },
+    );
+    failStep('probe', error);
+    logger?.error?.(`[remote] ${error.message}`);
+    return finish({ ok: false, error: error.toJSON(), probed: compactProbe(probe) });
+  }
+
   const probedRepo = probe.paths?.repoPath;
   const configuredRepoPath = nonEmptyString(effective.remote.repoPath);
   const configuredInstallDir = nonEmptyString(effective.remote.installDir);
@@ -395,10 +418,7 @@ export async function performRemoteInstall(options) {
     if (reuseRemoteVenv) {
       skipStep('venv', '远端 venv 已存在（幂等跳过）');
     } else {
-      const python =
-        nonEmptyString(effective.remote.python) ||
-        nonEmptyString(probe.python?.system) ||
-        'python3';
+      const python = installInterpreter || 'python3';
       const script = buildRemoteVenvScript({
         repoPath: remoteRepoPath,
         python,
