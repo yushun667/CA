@@ -42,6 +42,7 @@ export const RPC_ENDPOINTS = Object.freeze([
   'backend.restart',
   'backend.probe',
   'backend.install',
+  'backend.installLocal',
   'backend.installStatus',
   'backend.databases',
   'backend.useDatabase',
@@ -75,6 +76,8 @@ const MAX_ID_LENGTH = 128
 const MAX_DB_PATH_LENGTH = 4096
 const MAX_PROJECT_ID_LENGTH = 256
 const SELFTEST_REPORT_MAX_BYTES = 512 * 1024
+const MAX_INSTALL_PATH_LENGTH = 4096
+const MAX_PYTHON_ARG_LENGTH = 1024
 
 /** Stable RPC error carrying a machine-readable code. */
 export class RpcError extends Error {
@@ -200,6 +203,254 @@ function validateDatabasePath(value) {
     fail('INVALID_ARGUMENT', 'payload.path must not contain ".." segments')
   }
   return path
+}
+
+/** Validate one installer field value (mode/offline/wheelhousePath/installDir/python). */
+function normalizeInstallValue(name, value) {
+  if (value === undefined || value === null) return undefined
+  switch (name) {
+    case 'mode': {
+      if (typeof value !== 'string') {
+        fail('INVALID_ARGUMENT', 'payload.mode must be "wheel" or "source"')
+      }
+      const mode = value.trim().toLowerCase()
+      if (mode !== 'wheel' && mode !== 'source') {
+        fail('INVALID_ARGUMENT', 'payload.mode must be "wheel" or "source"')
+      }
+      return mode
+    }
+    case 'offline': {
+      if (typeof value !== 'boolean') fail('INVALID_ARGUMENT', 'payload.offline must be a boolean')
+      return value
+    }
+    case 'wheelhousePath':
+    case 'installDir': {
+      if (typeof value !== 'string') fail('INVALID_ARGUMENT', `payload.${name} must be a string`)
+      const text = value.trim()
+      if (text.length === 0) fail('INVALID_ARGUMENT', `payload.${name} must not be empty`)
+      if (text.length > MAX_INSTALL_PATH_LENGTH) {
+        fail('INVALID_ARGUMENT', `payload.${name} is too long (maximum ${MAX_INSTALL_PATH_LENGTH} characters)`)
+      }
+      if (/[\0\r\n]/.test(text)) {
+        fail('INVALID_ARGUMENT', `payload.${name} must not contain NUL or newline characters`)
+      }
+      if (!path.isAbsolute(text)) {
+        fail('INVALID_ARGUMENT', `payload.${name} must be an absolute path`)
+      }
+      if (text.split(/[\\/]/).includes('..')) {
+        fail('INVALID_ARGUMENT', `payload.${name} must not contain ".." segments`)
+      }
+      return text
+    }
+    case 'python': {
+      if (typeof value !== 'string') fail('INVALID_ARGUMENT', 'payload.python must be a string')
+      const text = value.trim()
+      if (text.length === 0) fail('INVALID_ARGUMENT', 'payload.python must not be empty')
+      if (text.length > MAX_PYTHON_ARG_LENGTH) {
+        fail('INVALID_ARGUMENT', `payload.python is too long (maximum ${MAX_PYTHON_ARG_LENGTH} characters)`)
+      }
+      if (/[\0\r\n]/.test(text)) {
+        fail('INVALID_ARGUMENT', 'payload.python must not contain NUL or newline characters')
+      }
+      return text
+    }
+    default:
+      fail('INTERNAL', `unknown installer option ${name}`)
+  }
+}
+
+/**
+ * Collect installer options from the payload, falling back to a nested legacy
+ * options object. `mode` defaults to `wheel` (source installs are opt-in).
+ */
+function pickInstallerOptions(payload, fallback = {}) {
+  const options = {}
+  for (const name of ['mode', 'offline', 'wheelhousePath', 'installDir', 'python']) {
+    const raw = payload[name] !== undefined ? payload[name] : fallback[name]
+    const normalized = normalizeInstallValue(name, raw)
+    if (normalized !== undefined) options[name] = normalized
+  }
+  if (options.mode === undefined) options.mode = 'wheel'
+  return options
+}
+
+/** Shape one installation scope from a manager report or local tracker. */
+function normalizeInstallScope(primary, fallback) {
+  const source = isPlainObject(primary) ? primary : isPlainObject(fallback) ? fallback : null
+  if (!source) {
+    return {
+      started: false,
+      state: 'idle',
+      status: 'idle',
+      startedAt: null,
+      finishedAt: null,
+      steps: [],
+      logs: [],
+      error: null,
+      result: null,
+    }
+  }
+  const safe = jsonSafe(source) ?? {}
+  const state =
+    typeof safe.state === 'string'
+      ? safe.state
+      : typeof safe.status === 'string'
+        ? safe.status
+        : 'idle'
+  return {
+    ...safe,
+    started: safe.started === true || state !== 'idle',
+    state,
+    status: state,
+    startedAt: Number.isFinite(Number(safe.startedAt)) ? Number(safe.startedAt) : null,
+    finishedAt: Number.isFinite(Number(safe.finishedAt)) ? Number(safe.finishedAt) : null,
+    steps: Array.isArray(safe.steps) ? safe.steps.slice(0, 200) : [],
+    logs: Array.isArray(safe.logs) ? safe.logs.slice(-500) : [],
+    error: isPlainObject(safe.error) ? safe.error : safe.error ?? null,
+    result: safe.result ?? null,
+  }
+}
+
+/** Legacy top-level aliases (old clients read value.status/state/steps/logs). */
+function installScopeAliases(scope) {
+  return {
+    started: scope.started,
+    state: scope.state,
+    status: scope.status,
+    startedAt: scope.startedAt,
+    finishedAt: scope.finishedAt,
+    steps: scope.steps,
+    logs: scope.logs,
+    error: scope.error,
+    result: scope.result,
+  }
+}
+
+/**
+ * Merge manager install status (new `{local,remote}` or legacy remote shape)
+ * with the RPC-side trackers.
+ */
+function mergeInstallStatus(managerStatus, fallback) {
+  const manager = isPlainObject(managerStatus) ? managerStatus : null
+  const mergedShape =
+    manager !== null && (isPlainObject(manager.local) || isPlainObject(manager.remote))
+  const legacyRemote = manager !== null && !mergedShape ? manager : null
+  const local = normalizeInstallScope(manager?.local, fallback?.local)
+  const remote = normalizeInstallScope(manager?.remote ?? legacyRemote, fallback?.remote)
+  // The real manager mirrors the most recently active scope at the top level;
+  // older/merged-only responses fall back to the remote scope (old behavior).
+  const hasTopLevel =
+    manager !== null &&
+    (typeof manager.state === 'string' || Array.isArray(manager.steps) || manager.scope !== undefined)
+  const aggregate = normalizeInstallScope(
+    hasTopLevel ? manager : manager?.remote ?? legacyRemote,
+    fallback?.remote,
+  )
+  return {
+    local,
+    remote,
+    aggregate,
+    scopes: [local, remote],
+  }
+}
+
+/** Project one installation scope onto the compact install-info shape. */
+function installInfoFromScope(scope) {
+  if (!isPlainObject(scope)) return null
+  const state = typeof scope.state === 'string' ? scope.state : 'idle'
+  const result = isPlainObject(scope.result) ? scope.result : {}
+  const pickString = (...values) => {
+    for (const value of values) if (typeof value === 'string' && value.length > 0) return value
+    return null
+  }
+  const rawVersion = scope.version !== undefined ? scope.version : result.version
+  const version =
+    typeof rawVersion === 'string'
+      ? rawVersion
+      : isPlainObject(rawVersion) && typeof rawVersion.version === 'string'
+        ? rawVersion.version
+        : null
+  const installDir = pickString(scope.installDir, result.installDir)
+  const venvDir = pickString(scope.venvDir, result.venvDir)
+  const venvPython = pickString(scope.venvPython, result.venvPython)
+  const caScript = pickString(scope.caScript, result.caScript)
+  const mode = pickString(scope.mode, result.mode)
+  const offline =
+    typeof scope.offline === 'boolean'
+      ? scope.offline
+      : typeof result.offline === 'boolean'
+        ? result.offline
+        : null
+  const installed =
+    typeof scope.installed === 'boolean'
+      ? scope.installed
+      : state === 'succeeded' || installDir !== null
+  const repoPath = pickString(scope.repoPath, result.repoPath)
+  return {
+    installed,
+    state,
+    installDir,
+    venvDir,
+    venvPython,
+    caScript,
+    version,
+    mode,
+    offline,
+    repoPath,
+  }
+}
+
+function normalizeWheelInfo(value) {
+  if (!isPlainObject(value)) return null
+  return {
+    bundled: value.bundled === true,
+    name: typeof value.name === 'string' ? value.name : null,
+    version: typeof value.version === 'string' ? value.version : null,
+    bytes: Number.isFinite(Number(value.bytes)) ? Number(value.bytes) : null,
+    path: typeof value.path === 'string' ? value.path : null,
+  }
+}
+
+function normalizeWheelhouseInfo(value) {
+  if (!isPlainObject(value)) return null
+  const platforms = []
+  if (Array.isArray(value.availablePlatforms)) {
+    for (const item of value.availablePlatforms.slice(0, 32)) {
+      const platform =
+        typeof item === 'string' ? item : isPlainObject(item) ? item.platform : null
+      if (typeof platform === 'string' && platform.length > 0) platforms.push(platform)
+    }
+  }
+  return {
+    availablePlatforms: platforms,
+    defaultPath: typeof value.defaultPath === 'string' ? value.defaultPath : null,
+    defaultPlatform: typeof value.defaultPlatform === 'string' ? value.defaultPlatform : null,
+    defaultExists: value.defaultExists === true,
+    defaultWheelCount: Number.isFinite(Number(value.defaultWheelCount))
+      ? Number(value.defaultWheelCount)
+      : null,
+  }
+}
+
+/** Normalize a manager install summary; null when nothing is available. */
+function normalizeInstallInfo(value) {
+  if (!isPlainObject(value)) return null
+  const safe = jsonSafe(value) ?? {}
+  const local = installInfoFromScope(safe.local)
+  const remote = installInfoFromScope(safe.remote)
+  const wheel = normalizeWheelInfo(safe.wheel)
+  const wheelhouse = normalizeWheelhouseInfo(safe.wheelhouse)
+  if (local === null && remote === null && wheel === null && wheelhouse === null) return null
+  const platform = isPlainObject(safe.platform)
+    ? {
+        os: typeof safe.platform.os === 'string' ? safe.platform.os : null,
+        arch: typeof safe.platform.arch === 'string' ? safe.platform.arch : null,
+        platformId: typeof safe.platform.platformId === 'string' ? safe.platform.platformId : null,
+        label: typeof safe.platform.label === 'string' ? safe.platform.label : null,
+        supported: safe.platform.supported === true,
+      }
+    : null
+  return { platform, local, remote, wheel, wheelhouse }
 }
 
 /**
@@ -467,6 +718,57 @@ function failure(error) {
 function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
   /** @type {{startedAt: number, started: boolean, status: string, ssh?: unknown, error?: unknown, result?: unknown, finishedAt?: number} | null} */
   let installState = null
+  /** @type {Record<string, any> | null} */
+  let localInstallState = null
+
+  /** Read the manager's raw install status (new merged or legacy shape). */
+  async function readManagerInstallStatus() {
+    const readStatus = backendMethod(backend, ['getInstallStatus', 'installStatus'])
+    if (readStatus === null) return null
+    try {
+      return jsonSafe(await readStatus()) ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** Compact install state for backend.get/status; null when unavailable. */
+  async function readInstallInfo() {
+    const summary = backendMethod(backend, ['getInstallSummary', 'installSummary', 'getInstallInfo'])
+    if (summary !== null) {
+      try {
+        const info = normalizeInstallInfo(await summary())
+        if (info !== null) return info
+      } catch {
+        // Fall through to the derived view.
+      }
+    }
+    const status = safeStatus(backend)
+    if (isPlainObject(status.install)) {
+      const info = normalizeInstallInfo(status.install)
+      if (info !== null) return info
+    }
+    try {
+      const managerStatus = await readManagerInstallStatus()
+      // Only derive a compact view when some installer state actually exists;
+      // otherwise `install` is genuinely unavailable and degrades to null.
+      if (managerStatus === null && localInstallState === null && installState === null) {
+        return null
+      }
+      const merged = mergeInstallStatus(managerStatus, {
+        local: localInstallState,
+        remote: installState,
+      })
+      const local = installInfoFromScope(merged.local)
+      const remote = installInfoFromScope(merged.remote)
+      if (local !== null || remote !== null) {
+        return { local, remote, wheel: null, wheelhouse: null }
+      }
+    } catch {
+      // Informational only: never fail status because install info is missing.
+    }
+    return null
+  }
 
   async function currentModel() {
     const descriptors = [explain, optionalService(ctx, 'agentDefaultModel')]
@@ -526,6 +828,7 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
         model: await currentModel(),
         counts: taskCounts(items),
         project: await fetchActiveProject(backend),
+        install: await readInstallInfo(),
       }
     },
 
@@ -569,6 +872,7 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
       return {
         status: safeStatus(backend),
         config: publicConfig(backend.config ?? config) ?? {},
+        install: await readInstallInfo(),
       }
     },
 
@@ -641,23 +945,27 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
     },
 
     async 'backend.install'(payload) {
-      const opts = payload.opts === undefined || payload.opts === null
+      const legacyOpts = payload.opts === undefined || payload.opts === null
         ? {}
         : requirePlainObject(payload.opts, 'payload.opts', MAX_OPTIONS_BYTES)
       const ssh = payload.ssh === undefined || payload.ssh === null
-        ? opts.ssh === undefined || opts.ssh === null
+        ? legacyOpts.ssh === undefined || legacyOpts.ssh === null
           ? undefined
-          : validateSsh(opts.ssh)
+          : validateSsh(legacyOpts.ssh)
         : validateSsh(payload.ssh)
-      // backend-ops exposes both a foreground installer and a background
-      // starter; prefer the latter so the unary RPC returns immediately.
-      const startInstall = backendMethod(backend, ['startRemoteInstall'])
-      const options = { ...jsonSafe(opts) }
+      // Defaults to the bundled-wheel install; `mode:'source'` keeps the old
+      // rsync-based remote install available. Installer options may be passed
+      // at the top level (new contract) or inside `opts` (old payloads).
+      const installerOptions = pickInstallerOptions(payload, legacyOpts)
+      const options = { ...jsonSafe(legacyOpts), ...installerOptions }
       if (ssh !== undefined) options.ssh = ssh
       const noteInstallStart = (result) => {
         installState = {
           started: result?.started !== false,
-          status: result?.running === true ? 'running' : (result?.status ?? (result?.started === false ? 'running' : 'running')),
+          status:
+            result?.running === true
+              ? 'running'
+              : (result?.status ?? (result?.started === false ? 'running' : 'running')),
           startedAt: result?.startedAt ?? Date.now(),
           ssh: ssh === undefined ? undefined : redactSsh(ssh),
           error: null,
@@ -666,12 +974,24 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
         return {
           ...(isPlainObject(result) ? jsonSafe(result) : {}),
           started: result?.started !== false,
+          scope: 'remote',
           status: installState.status,
-          hint: 'Poll backend.installStatus for progress and logs.',
+          mode: options.mode,
+          offline: options.offline === true,
+          hint: 'Poll backend.installStatus (optionally with {"scope":"remote"}) for progress and logs.',
         }
       }
+      // backend-ops exposes both a foreground installer and a background
+      // starter; prefer the latter so the unary RPC returns immediately.
+      const startInstall = backendMethod(backend, ['startRemoteInstall'])
       if (startInstall !== null) {
-        return noteInstallStart(await startInstall(options))
+        let started
+        try {
+          started = await startInstall(options)
+        } catch (error) {
+          throw backendMutationFailure(error)
+        }
+        return noteInstallStart(started)
       }
       const install = backendMethod(backend, ['installRemote', 'install', 'remoteInstall'])
       if (install === null) {
@@ -680,7 +1000,12 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
           'Remote installation is not available in this CA backend build; check the CA backend page for the remote setup state.',
         )
       }
-      const result = install(options)
+      let result
+      try {
+        result = install(options)
+      } catch (error) {
+        throw backendMutationFailure(error)
+      }
       if (result && typeof result.then === 'function') {
         installState = {
           started: true,
@@ -701,32 +1026,121 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
             if (!installState || installState.status !== 'running') return
             installState.status = 'failed'
             installState.finishedAt = Date.now()
-            const payload = failure(error)
-            installState.error = payload.error
+            installState.error = failure(error).error
           },
         )
         return {
           started: true,
+          scope: 'remote',
           status: 'running',
-          hint: 'Poll backend.installStatus for progress.',
+          mode: options.mode,
+          offline: options.offline === true,
+          hint: 'Poll backend.installStatus (optionally with {"scope":"remote"}) for progress.',
         }
       }
       return noteInstallStart(result)
     },
 
-    async 'backend.installStatus'() {
-      const readStatus = backendMethod(backend, ['getInstallStatus', 'installStatus'])
-      if (readStatus !== null) {
-        const status = await readStatus()
-        const safe = jsonSafe(status)
-        // The backend reports `state`; the UI polling contract uses `status`.
-        if (isPlainObject(safe) && safe.status === undefined && typeof safe.state === 'string') {
-          safe.status = safe.state
-        }
-        return safe ?? { started: false, status: 'idle', steps: [], logs: [] }
+    async 'backend.installLocal'(payload) {
+      const legacyOpts = payload.opts === undefined || payload.opts === null
+        ? {}
+        : requirePlainObject(payload.opts, 'payload.opts', MAX_OPTIONS_BYTES)
+      const options = pickInstallerOptions(payload, legacyOpts)
+      const installLocal = backendMethod(backend, ['startLocalInstall', 'installLocal'])
+      if (installLocal === null) {
+        fail(
+          'BACKEND_UNSUPPORTED',
+          'Local backend installation is not available in this CA backend build; check the CA backend page for the local setup state.',
+        )
       }
-      if (installState !== null) return jsonSafe(installState) ?? { started: false, status: 'idle' }
-      return { started: false, status: 'idle', steps: [], logs: [] }
+      let result
+      try {
+        result = installLocal(options)
+      } catch (error) {
+        throw backendMutationFailure(error)
+      }
+      if (result && typeof result.then === 'function') {
+        localInstallState = {
+          started: true,
+          state: 'running',
+          startedAt: Date.now(),
+          steps: [],
+          logs: [],
+          error: null,
+          result: null,
+        }
+        result.then(
+          (finalResult) => {
+            if (!localInstallState || localInstallState.state !== 'running') return
+            const safe = isPlainObject(finalResult) ? jsonSafe(finalResult) ?? {} : {}
+            localInstallState.state = 'succeeded'
+            localInstallState.finishedAt = Date.now()
+            localInstallState.result = safe
+            if (Array.isArray(safe.steps)) localInstallState.steps = safe.steps
+            if (Array.isArray(safe.logs)) localInstallState.logs = safe.logs
+          },
+          (error) => {
+            if (!localInstallState || localInstallState.state !== 'running') return
+            localInstallState.state = 'failed'
+            localInstallState.finishedAt = Date.now()
+            localInstallState.error = failure(error).error
+          },
+        )
+        return {
+          started: true,
+          scope: 'local',
+          status: 'running',
+          mode: options.mode,
+          offline: options.offline === true,
+          hint: 'Poll backend.installStatus with {"scope":"local"} for progress and logs.',
+        }
+      }
+      if (!isPlainObject(result)) {
+        fail('BACKEND_ERROR', 'The CA backend returned an invalid local installation result')
+      }
+      const safe = jsonSafe(result) ?? {}
+      const state = typeof safe.state === 'string' ? safe.state : typeof safe.status === 'string' ? safe.status : 'running'
+      localInstallState = {
+        started: safe.started !== false,
+        state,
+        startedAt: Number.isFinite(Number(safe.startedAt)) ? Number(safe.startedAt) : Date.now(),
+        steps: Array.isArray(safe.steps) ? safe.steps : [],
+        logs: Array.isArray(safe.logs) ? safe.logs : [],
+        error: safe.error ?? null,
+        result: safe,
+      }
+      return {
+        ...safe,
+        started: safe.started !== false,
+        scope: 'local',
+        status: state,
+        mode: safe.mode ?? options.mode,
+        offline: safe.offline ?? options.offline === true,
+        hint: 'Poll backend.installStatus with {"scope":"local"} for progress and logs.',
+      }
+    },
+
+    async 'backend.installStatus'(payload) {
+      const scopeRaw = optionalString(payload, 'scope', { maxLength: 16 })
+      const scope = scopeRaw === undefined ? null : scopeRaw.toLowerCase()
+      if (scope !== null && scope !== 'local' && scope !== 'remote') {
+        fail('INVALID_ARGUMENT', 'payload.scope must be "local" or "remote"')
+      }
+      const managerStatus = await readManagerInstallStatus()
+      const merged = mergeInstallStatus(managerStatus, {
+        local: localInstallState,
+        remote: installState,
+      })
+      const selected =
+        scope === 'local' ? merged.local : scope === 'remote' ? merged.remote : merged.aggregate
+      return {
+        // Legacy top-level aliases so pre-project clients keep working; they
+        // track the requested scope (remote by default, the old behavior).
+        ...installScopeAliases(selected),
+        scope,
+        local: merged.local,
+        remote: merged.remote,
+      }
     },
 
     async 'backend.databases'(payload) {

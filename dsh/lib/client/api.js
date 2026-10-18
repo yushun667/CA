@@ -36,6 +36,7 @@ export const Endpoints = Object.freeze({
   backendProbe: 'backend.probe',
   backendInstall: 'backend.install',
   backendInstallStatus: 'backend.installStatus',
+  backendInstallLocal: 'backend.installLocal',
   tasksStart: 'tasks.start',
   tasksList: 'tasks.list',
   tasksGet: 'tasks.get',
@@ -350,7 +351,18 @@ export function createApi(ctx) {
     restart: (payload, signal) => rpc(Endpoints.backendRestart, payload || {}, signal),
     probe: (payload, signal) => rpc(Endpoints.backendProbe, payload || { target: 'local' }, signal),
     install: (payload, signal) => rpc(Endpoints.backendInstall, payload || {}, signal),
-    installStatus: (signal) => rpc(Endpoints.backendInstallStatus, {}, signal),
+    installLocal: (options, signal) => rpc(Endpoints.backendInstallLocal, options || {}, signal),
+    installStatus: (optionsOrSignal, maybeSignal) => {
+      // Backwards compatible: installStatus(signal) or installStatus({ scope, signal }).
+      const isOptions =
+        optionsOrSignal !== null &&
+        typeof optionsOrSignal === 'object' &&
+        typeof optionsOrSignal.aborted !== 'boolean'
+      const settings = isOptions ? optionsOrSignal : {}
+      const signal = maybeSignal || (isOptions ? settings.signal : optionsOrSignal)
+      const payload = typeof settings.scope === 'string' ? { scope: settings.scope } : {}
+      return rpc(Endpoints.backendInstallStatus, payload, signal)
+    },
   }
 
   const tasks = {

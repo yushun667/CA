@@ -1,16 +1,3 @@
-- 2026-10-17-analysis-stack.md、2026-10-17-analysis-stack.zh.md、2026-10-17-analysis-stack.i18n.yaml
-- 2026-10-17-compile-command-policy.md、2026-10-17-compile-command-policy.zh.md、2026-10-17-compile-command-policy.i18n.yaml
-- 2026-10-17-fts5-symbol-search.md、2026-10-17-fts5-symbol-search.zh.md、2026-10-17-fts5-symbol-search.i18n.yaml
-- 2026-10-17-incremental-indexing.md、2026-10-17-incremental-indexing.zh.md、2026-10-17-incremental-indexing.i18n.yaml
-- 2026-10-17-linux-kernel-corpus.md、2026-10-17-linux-kernel-corpus.zh.md、2026-10-17-linux-kernel-corpus.i18n.yaml
-- 2026-10-17-storage-engine.md、2026-10-17-storage-engine.zh.md、2026-10-17-storage-engine.i18n.yaml
-- 2026-10-18-dsh-plugin.md、2026-10-18-dsh-plugin.zh.md、2026-10-18-dsh-plugin.i18n.yaml
-- 2026-10-18-header-incr.md、2026-10-18-header-incr.zh.md、2026-10-18-header-incr.i18n.yaml
-- 2026-10-18-layered-indexing-and-agent-api.md、2026-10-18-layered-indexing-and-agent-api.zh.md、2026-10-18-layered-indexing-and-agent-api.i18n.yaml
-- 2026-10-18-matched-libclang-backend.md、2026-10-18-matched-libclang-backend.zh.md、2026-10-18-matched-libclang-backend.i18n.yaml
-- 2026-10-18-openharmony-first-strategy.md、2026-10-18-openharmony-first-strategy.zh.md、2026-10-18-openharmony-first-strategy.i18n.yaml
-- 2026-10-18-readonly-web-ui.md、2026-10-18-readonly-web-ui.zh.md、2026-10-18-readonly-web-ui.i18n.yaml
-- 2026-10-18-remove-ai-explain.md、2026-10-18-remove-ai-explain.zh.md、2026-10-18-remove-ai-explain.i18n.yaml
-- 2026-10-18-remove-confidence.md、2026-10-18-remove-confidence.zh.md、2026-10-18-remove-confidence.i18n.yaml
-- 2026-10-18-unified-serve-backend.md、2026-10-18-unified-serve-backend.zh.md、2026-10-18-unified-serve-backend.i18n.yaml
-- 2026-10-18-virtual-dispatch.md、2026-10-18-virtual-dispatch.zh.md、2026-10-18-virtual-dispatch.i18n.yaml
+2026-10-17-analysis-stack.md2026-10-17-analysis-stack.zh.md2026-10-17-analysis-stack.i18n.yaml2026-10-17-compile-command-policy.md2026-10-17-compile-command-policy.zh.md2026-10-17-compile-command-policy.i18n.yaml2026-10-17-fts5-symbol-search.md2026-10-17-fts5-symbol-search.zh.md2026-10-17-fts5-symbol-search.i18n.yaml2026-10-17-incremental-indexing.md2026-10-17-incremental-indexing.zh.md2026-10-17-incremental-indexing.i18n.yaml2026-10-17-linux-kernel-corpus.md2026-10-17-linux-kernel-corpus.zh.md2026-10-17-linux-kernel-corpus.i18n.yaml2026-10-17-storage-engine.md2026-10-17-storage-engine.zh.md2026-10-17-storage-engine.i18n.yaml
+2026-10-18-dsh-plugin.md2026-10-18-dsh-plugin.zh.md2026-10-18-dsh-plugin.i18n.yaml2026-10-18-header-incr.md2026-10-18-header-incr.zh.md2026-10-18-header-incr.i18n.yaml2026-10-18-layered-indexing-and-agent-api.md2026-10-18-layered-indexing-and-agent-api.zh.md2026-10-18-layered-indexing-and-agent-api.i18n.yaml2026-10-18-matched-libclang-backend.md2026-10-18-matched-libclang-backend.zh.md2026-10-18-matched-libclang-backend.i18n.yaml2026-10-18-openharmony-first-strategy.md2026-10-18-openharmony-first-strategy.zh.md2026-10-18-openharmony-first-strategy.i18n.yaml2026-10-18-readonly-web-ui.md2026-10-18-readonly-web-ui.zh.md2026-10-18-readonly-web-ui.i18n.yaml2026-10-18-remove-ai-explain.md2026-10-18-remove-ai-explain.zh.md2026-10-18-remove-ai-explain.i18n.yaml2026-10-18-remove-confidence.md2026-10-18-remove-confidence.zh.md2026-10-18-remove-confidence.i18n.yaml2026-10-18-unified-serve-backend.md2026-10-18-unified-serve-backend.zh.md2026-10-18-unified-serve-backend.i18n.yaml2026-10-18-virtual-dispatch.md2026-10-18-virtual-dispatch.zh.md2026-10-18-virtual-dispatch.i18n.yaml
+2026-10-19-wheel-pkg.md2026-10-19-wheel-pkg.zh.md2026-10-19-wheel-pkg.i18n.yaml

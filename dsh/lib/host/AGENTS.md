@@ -11,7 +11,7 @@ Cordis 插件服务端：组装 backend/tasks/explain 服务，向 DSH 注册 `/
 
 ## 子目录
 
-- [backend/AGENTS.md](backend/AGENTS.md)：本地/远程 CA 后端生命周期与 HTTP 客户端。
+- [backend/AGENTS.md](backend/AGENTS.md)：本地/远程 CA 后端生命周期、项目存储、CA 安装器与 HTTP 客户端。
 - [rpc/AGENTS.md](rpc/AGENTS.md)：`/dsh-ca` 同源 HTTP 通道与端点分发。
 - [tools/AGENTS.md](tools/AGENTS.md)：12 个模型可见工具（含 `ca_project`）与输出格式化。
 - [tasks/AGENTS.md](tasks/AGENTS.md)：CA CLI 长任务队列。

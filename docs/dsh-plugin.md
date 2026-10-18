@@ -1,8 +1,8 @@
 # DSH plugin (`@local/dsh-ca`)
 
-CA also ships as a DeepSeek Harness bundle: the CA
-page inside the Harness Web UI, twelve native `ca_*` tools for the agent, a local or
-remote Linux `ca serve` backend, long indexing tasks and AI explanations. CA itself is
+CA also ships as a DeepSeek Harness bundle: the CA page inside the Harness Web UI,
+twelve native `ca_*` tools for the agent, a self-installed local or remote Linux
+`ca serve` backend, long indexing tasks and AI explanations. CA itself is
 unchanged: the plugin only calls CA's existing read-only HTTP API and CLI, and it does
 not change CA's test baseline (497 passed / 4 skipped at the time of writing).
 
@@ -26,6 +26,9 @@ disable+re-enable the plugin) because the entry module is cached; Client changes
 rebuild of `client.js` plus a page refresh (a stale page keeps the old bundle); changes
 to `dsh/lib/host/bootstrap.js` always need a full Harness restart.
 
+This installs the **plugin** itself; the CA analyzer **backend** is installed
+separately by the plugin's backend installer (next sections).
+
 ## Configuration
 
 Deployment config lives in the Cordis patch row (`dsh/cordis.patch.yml`); edits made in
@@ -48,13 +51,18 @@ the backend page are persisted as a sparse user patch in
 | `local.host` / `local.port` | `127.0.0.1` / `0` | bind address and port; `0` = OS-assigned |
 | `local.maxRestarts` | `3` | bounded crash restarts |
 | `remote.ssh.host` / `user` / `port` / `keyPath` | — | SSH target (alias or `user@host`), port, local private-key path; no passwords |
-| `remote.repoPath` | — | existing CA checkout on the Linux host (preferred) |
-| `remote.installDir` | — | rsync destination when `repoPath` is absent |
+| `remote.repoPath` | — | existing CA checkout on the Linux host (source mode / manual installs) |
+| `remote.installDir` | — | rsync destination and legacy source-mode install target; wheel installs use the installer form's own directory |
 | `remote.python` | auto (`python3`) | remote interpreter |
 | `remote.db` / `remote.dbDir` | — | remote single DB or shard directory |
 | `remote.serveRemotePort` / `remote.localPort` | `0` / `0` | remote serve port and local tunnel port (0 = auto) |
 | `local.env` / `remote.env` | `{}` | extra child-process environment |
 | `log.*` | bounded | plugin log rotation and in-memory ring settings |
+
+The backend installer is configured per request on `#/backend` (`mode: wheel|source`,
+`offline`, `wheelhousePath`, `installDir`, `python`); the last successful install is
+recorded in `$DSH_HOME/plugin-data/dsh-ca/install-state.json` (0600) and surfaced
+through `backend.get.install`.
 
 ### Projects (source root + database + backend location)
 
@@ -86,80 +94,132 @@ Advanced optional overrides are read from the same config object:
 `maxConcurrentTasks` (or `tasks.maxConcurrent`, 1–8, default 2) and
 `maxTaskLogBytes` (or `tasks.maxLogBytes`, 64 KiB–16 MiB, default 1 MiB).
 
-## Installing from zero (new user, new server)
+## Installing the CA backend (local or remote)
 
-CA is pure Python: **nothing is compiled** for the analyzer itself, and the
-runtime dependencies (`clang`, `libclang` — which ships the native library —,
-`duckdb`, `pytest`) are prebuilt wheels. What the backend host must provide is
-**Python >= 3.11**, `venv`/`pip`, `rsync` (remote installs only) and network
-access once (or a populated pip cache). Ubuntu 22.04 ships Python 3.10 by
-default; install `python3.11` or point `remote.python` at an existing 3.11+
-interpreter. The remote installer detects this up front and fails in ~0.2 s
-with `UNSUPPORTED_PYTHON` instead of failing later inside pip.
+CA is pure Python: **nothing is compiled**, and the runtime dependencies
+(`clang`/`libclang`, `duckdb`, `pytest` and transitive wheels) are prebuilt
+wheels. The plugin installs the backend for you from a bundled CA wheel
+(`dsh/backend/wheels/ca_analyzer-<version>-py3-none-any.whl`, about 360 KB)
+plus, for offline machines, a per-platform wheelhouse of dependency wheels.
 
-New DSH user, local index:
+Requirements on every backend host: **Python >= 3.11** with `venv`/`pip`
+(Windows: `py -3.13`/`py -3.12`/`py -3.11`; macOS/Linux: auto-detected
+`python3.13`/`3.12`/`3.11`), and working SSH for remote backends (`scp`
+recommended; the legacy source mode also needs `rsync`). Online installs need
+network access; offline installs need a wheelhouse for the target platform.
 
-1. Clone the CA repository (it contains this `dsh/` bundle).
-2. Install the bundle from `<repo>/dsh` through the plugin manager and enable it.
-3. Either create a project pointing at an existing CA checkout, venv and index,
-   or bootstrap a venv once (Python 3.11 required):
-   `python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install -e .`
-   (`scripts/bootstrap.sh` does the same on macOS/Linux). Editable install is
-   deliberate: the package currently ships no package-data, so a wheel would
-   miss `schema.sql` and the UI assets.
+### Install / repair (backend page)
 
-New remote Linux server:
+Open `#/backend`; both installers are idempotent — a working venv is reused,
+**Install / repair** repairs or recreates a broken one, and steps/logs are
+polled through `backend.installStatus`.
 
-1. Prerequisites: Linux x86_64/aarch64, `python3.11+` (or an existing 3.11
-   interpreter path), `python3.11-venv`, `pip`, `rsync`, network once.
-2. In the project/backend form set `remote.ssh.host`, `remote.python` (3.11+),
-   and either `remote.installDir` (an empty target such as `~/.dsh-ca/install`)
-   or `remote.repoPath` (an existing CA checkout). Press **Install** on the
-   backend page.
-3. The installer runs `probe → rsync → venv → pip install -r requirements.txt →
-   pip install -e . → ca version`, is idempotent and reports each step; on a
-   LAN host with a warm pip cache a full install takes about 10 s (measured).
+- **Local backend installation** (Windows/macOS/Linux): optional install
+  directory (default: the plugin's private `backends/local`) and Python
+  executable, then choose **Online (PyPI)** or **Offline (wheelhouse)**. Steps:
+  environment → wheel → venv → dependencies → verify (`ca version --json`).
+- **Remote installation** (Linux over SSH): choose install method **wheel
+  (recommended)** or **source tree (legacy)**, plus Online/Offline. Wheel
+  steps: probe → Python check → upload CA wheel → upload wheelhouse (offline)
+  → remote venv → pip install → verify. Default remote install directory
+  `~/dsh-ca/backend`; uploads use `scp` when available and otherwise stream
+  over SSH (a wheelhouse directory is streamed as a tar). The remote
+  `ca serve` then runs behind the local SSH tunnel.
 
-There is **no published all-in-one installer or offline wheel bundle yet**. The
-install API accepts `offline: true` plus a `wheelDir` (it then runs pip with
-`--no-index --find-links`), but no wheelhouse is shipped and the form does not
-expose it yet; building that bundle is a separate step. The plugin itself is
-currently installed from a local directory, not from a registry.
+The installer records its last successful run in
+`$DSH_HOME/plugin-data/dsh-ca/install-state.json` (0600) and reports platform,
+venv Python, CA version and install directory through `backend.get.install`;
+after installing, create or activate a project that points at the installed CA.
+
+### Offline installation (air-gapped host)
+
+Build the dependency wheelhouse once on a machine with network:
+
+```sh
+node dsh/scripts/build-wheelhouse.mjs --platform <id> [--tar]
+node dsh/scripts/build-wheelhouse.mjs --list-platforms
+```
+
+Platform ids: `linux-x64`, `linux-arm64`, `macos-arm64`, `macos-x64`,
+`windows-x64`. Output goes to `dsh/artifacts/wheelhouse/<platform>/`
+(dependency wheels + a copy of the CA wheel + `manifest.json`); `--tar` also
+writes `<platform>.tar.gz`. Sizes: about 41 MB for `macos-arm64` and 46 MB for
+`linux-x64`.
+
+For a local offline install, copy the directory to the plugin state default
+`$DSH_HOME/plugin-data/dsh-ca/wheelhouse/<platform>/` or point the form field
+at it; a `.tar.gz` must be extracted first because `pip --find-links` needs a
+directory. For a remote offline install, select the local wheelhouse directory
+in the form and the installer uploads it to the Linux host. Offline pip runs
+with `--no-index --find-links`, so no network is used.
+
+Measured: a macOS arm64 local offline install takes about **1.4 s**; a real
+Linux server offline wheel install takes about **6.4 s**, including the upload
+of a 46 MB wheelhouse.
+
+### Platform support
+
+| Host | Local backend | Remote backend | Notes |
+|---|---|---|---|
+| macOS arm64 / x64 | code path supported; arm64 verified | target must be Linux | primary development host |
+| Linux x64 / aarch64 | code path supported | verified on a real Linux server | `pythonX.Y-venv` needed for venv creation |
+| Windows x64 | code path implemented, not verified on real hardware | target must be Linux | use `py -3.11+`; CA `watch` is unavailable on Windows |
+
+The dependency wheels decide the platform matrix; the remote backend only
+targets Linux.
+
+### Developer fallback (source mode)
+
+The previous flow still works for development: point a project at an existing
+CA checkout/venv/index, or create a venv manually and install editable
+(`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install -e .`;
+`scripts/bootstrap.sh` does the same on macOS/Linux). Selecting **source tree
+(legacy)** as the remote install method keeps the rsync + editable flow
+(requires `rsync` on both sides). Prefer the wheel installer for new
+deployments; source mode is retained for compatibility and debugging.
 
 ## Local backend
 
-
-1. Set `local.db` (or `local.dbDir` for federated shards); `local.repoRoot` and
-   `local.python` are optional when the CA checkout and its venv are discoverable.
-2. Open `#/backend` and start the backend. The Host runs
+1. If CA is not installed on this machine yet, run **Install / repair local backend**
+   on `#/backend` (see above); this creates a private venv and does not touch any
+   system Python.
+2. Create a project on `#/projects` with `backend: local`, the source root and a
+   local database (single DB or shard directory). The backend page's install card can
+   prefill the installed Python for a new project (**Create a local project with this
+   Python**).
+3. Activate the project. The Host maps it onto the backend configuration and runs
    `ca serve --host 127.0.0.1 --port 0 --db <db>`, parses the readiness URL from stderr
    and verifies `GET /api/health`; when `--port 0` cannot be parsed it retries once with
    a locally chosen free port.
-3. Use **Probe local** before starting to see the discovered interpreter, CA version,
-   candidate databases and libclang status.
+4. **Probe local** on `#/backend` reports the discovered interpreter, CA version, CA
+   checkout and libclang status before you start.
 
 The Host owns the process: it stops when the plugin is disposed, crash restarts are
 bounded, and a missing database fails with an actionable error.
 
 ## Remote Linux backend
 
-Use this when DSH runs on macOS but sources and indexes live on a Linux server.
+Use this when DSH runs on macOS/Windows but sources and indexes live on a Linux
+server.
 
 1. Make sure key-based SSH works non-interactively (`ssh -i <key> user@host true`).
-2. In `#/backend` fill the SSH fields, then set either `remote.repoPath` (existing CA
-   checkout on the server) or `remote.installDir` (the plugin rsyncs this checkout
-   there, excluding `.git`, `.venv`, `.tmp`).
-3. Run **Probe remote**: one SSH round trip reports OS, Python/pip, rsync, libclang,
-   path writability and free disk.
-4. Run **Install**: `probe → source → rsync → venv → pip install -r requirements.txt →
-   pip install -e . → ca version --json`. Editable install is mandatory because the
-   project has no package-data: a wheel would miss `schema.sql` and the UI assets. The
-   installation is idempotent and its steps/logs are polled through
-   `backend.installStatus`.
-5. Start: the Host runs `ca serve` on the remote loopback interface and opens a local
+2. On `#/backend`, fill the SSH fields (host/user/port/key path) and run **Install on
+   remote host** with method **wheel (recommended)** and **Online (PyPI)** or
+   **Offline (wheelhouse)**. The installer probes the host, checks Python >= 3.11,
+   uploads the bundled CA wheel (and the wheelhouse when offline), creates
+   `~/dsh-ca/backend/venv` and installs CA, then verifies `ca version --json`. The
+   install directory can be overridden in the form; no rsync or source checkout is
+   required.
+3. Create a project on `#/projects` with `backend: remote`, the source root and
+   database (or shard directory) paths on the server, and the same SSH target.
+   Activate it: the Host configures the backend and runs `ca serve` on the remote
+   loopback interface, opening a local
    `ssh -N -L <localPort>:127.0.0.1:<remotePort>` tunnel; health checks and all queries
    go through that tunnel. Stop terminates the remote process via its PID file, because
    closing the local SSH client alone does not reliably stop it.
+4. **Probe remote** reports OS, Python/pip, libclang, path writability and disk before
+   you install or start. The **source tree (legacy)** method keeps the old rsync +
+   editable flow (requires `rsync` on both sides); prefer wheel mode.
 
 Long remote indexing is run through `#/tasks` or `ca_task`; those execute `ca` on the
 remote host over SSH.
@@ -185,8 +245,9 @@ entry in the `sidebar.panellist` sidebar. Routes:
 - `#/tasks` — long-task list, start, incremental logs and cancel.
 - `#/projects` — create/edit/remove/activate projects (name, backend, source root,
   `db`/`dbDir`, compile database, SSH target). The primary place to manage indexes.
-- `#/backend` — backend status, start/stop/restart, local/remote probe, remote install,
-  editable low-level configuration and a `/api/health` check.
+- `#/backend` — backend status, start/stop/restart, local/remote probe, **Install /
+  repair** for the local backend and **Install on remote host** for Linux (wheel
+  online/offline), editable low-level configuration and a `/api/health` check.
 - Function page → **Explain with AI** panel, see below.
 
 ## Native tools
@@ -235,13 +296,21 @@ rest of the plugin keeps working.
 
 ## Troubleshooting
 
-- **Backend not configured** — set `local.db`/`local.dbDir` (or remote SSH + database
-  fields), then start; `ca_status` returns the actionable hint.
-- **Database/repository not found** — run **Probe local** and use the reported paths, or
-  set `local.repoRoot`/`local.python` explicitly; index a repository first.
-- **Remote install fails** — read the failing step
-  (`probe/source/rsync/venv/dependencies/editable/verify`) and its log; check rsync,
-  Python/venv and disk. Do not replace the editable install with a wheel.
+- **Backend not configured** — install the backend (above), then create and activate a
+  project on `#/projects`; `ca_status` returns the actionable hint.
+- **Database/repository not found** — run **Probe local** on `#/backend`, then use the
+  reported paths in the project form or set the interpreter explicitly; index the
+  repository first.
+- **Install fails** — read the failing step in `backend.installStatus`. Wheel steps are
+  `probe/python/upload-wheel/upload-wheelhouse/venv/pip/verify` (local:
+  `environment/wheel/venv/dependencies/verify`); check SSH/scp, Python >= 3.11 with
+  venv, and disk space. Source mode additionally needs `rsync`.
+- **`UNSUPPORTED_PYTHON`** — install Python 3.11+ (`python3.11-venv` on Debian/Ubuntu,
+  `py -3.11` on Windows) or set the interpreter explicitly in the install form /
+  `remote.python`; Ubuntu 22.04 ships Python 3.10 by default.
+- **Offline install cannot find wheels** — the wheelhouse must be a directory (extract
+  `.tar.gz` first), built for the target platform id with `--platform`, and contain the
+  CA wheel plus all dependency wheels.
 - **Tunnel or health fails** — confirm the remote `ca serve` listens on loopback and SSH
   key forwarding (`-L`) is allowed; a stale remote process is cleaned up through its PID
   file on restart.
@@ -249,10 +318,9 @@ rest of the plugin keeps working.
   the Harness after Host changes, rebuild `client.js` and refresh after Client changes.
 - **AI explanation unavailable** — pick a default model in the Harness, or fall back to
   `ca_symbol`/`ca_facts`/`ca_source` and explain manually.
-
-- **No project selected / migrated project points at the CA checkout** — open `#/projects`,
-  edit `sourceRoot` to the real source tree and pick `db`/`dbDir`, then activate; the
-  migrated project keeps the old target working until you do.
+- **No project selected / migrated project points at the CA checkout** — open
+  `#/projects`, edit `sourceRoot` to the real source tree and pick `db`/`dbDir`, then
+  activate; the migrated project keeps the old target working until you do.
 
 ## Security boundaries
 

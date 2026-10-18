@@ -37,6 +37,8 @@ export function createFakeBackend(options = {}) {
     probeRemote: [],
     startRemoteInstall: [],
     installRemote: [],
+    installLocal: [],
+    startLocalInstall: [],
     listDatabases: [],
     useDatabase: [],
     listProjects: 0,
@@ -49,8 +51,11 @@ export function createFakeBackend(options = {}) {
     options.activeProjectId !== undefined
       ? options.activeProjectId
       : projects.find((project) => project.active === true)?.id ?? null
+  /** @type {Array<{options: any, resolve: (value: any) => void, reject: (error: any) => void}>} */
+  const pendingLocalInstall = []
   const backend = {
     calls,
+    pendingLocalInstall,
     config: options.config ?? {
       backend: 'local',
       db: '/tmp/ca.db',
@@ -105,11 +110,81 @@ export function createFakeBackend(options = {}) {
       calls.startRemoteInstall.push(installOptions)
       return { started: true, startedAt: Date.now() }
     },
+    ...(options.startLocalInstall === true
+      ? {
+          startLocalInstall(installOptions) {
+            calls.startLocalInstall.push(installOptions)
+            return {
+              started: true,
+              running: true,
+              scope: 'local',
+              startedAt: Date.now(),
+            }
+          },
+        }
+      : {}),
+    installLocal(installOptions) {
+      calls.installLocal.push(installOptions)
+      if (options.installLocalMode === 'sync') {
+        return {
+          started: true,
+          state: 'succeeded',
+          mode: installOptions.mode,
+          offline: installOptions.offline === true,
+          installDir: '/opt/ca-local',
+          venvPython: '/opt/ca-local/bin/python',
+          version: '0.1.0',
+          steps: [{ id: 'venv', title: 'create venv', status: 'succeeded' }],
+        }
+      }
+      return new Promise((resolve, reject) => {
+        pendingLocalInstall.push({ options: installOptions, resolve, reject })
+      })
+    },
+    getInstallSummary() {
+      return {
+        platform: {
+          os: 'darwin',
+          arch: 'arm64',
+          platformId: 'macos-arm64',
+          label: 'macOS arm64',
+          supported: true,
+          sep: '/',
+        },
+        local: {
+          scope: 'local',
+          installed: true,
+          installDir: '/opt/ca-local',
+          venvDir: '/opt/ca-local',
+          venvPython: '/opt/ca-local/bin/python',
+          caScript: '/opt/ca-local/bin/ca',
+          version: { version: '0.1.0', schemaVersion: '2' },
+          mode: 'offline',
+          offline: true,
+          state: 'succeeded',
+        },
+        remote: null,
+        wheel: {
+          bundled: true,
+          name: 'ca_analyzer-0.1.0-py3-none-any.whl',
+          version: '0.1.0',
+          bytes: 359899,
+        },
+        wheelhouse: {
+          defaultPath: '/tmp/wheelhouse/macos-arm64',
+          defaultPlatform: 'macos-arm64',
+          defaultExists: true,
+          defaultWheelCount: 9,
+          availablePlatforms: [
+            { platform: 'linux-x64', dir: '/wh/linux-x64', wheelCount: 9, caWheel: 'ca_analyzer.whl' },
+            { platform: 'macos-arm64', dir: '/wh/macos-arm64', wheelCount: 9, caWheel: 'ca_analyzer.whl' },
+          ],
+        },
+      }
+    },
     getInstallStatus() {
       return {
         state: 'running',
-        startedAt: 1700000000000,
-        finishedAt: null,
         steps: [{ id: 'rsync', title: 'copy sources', status: 'running' }],
         logs: ['copying…'],
         error: null,

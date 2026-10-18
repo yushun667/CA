@@ -41,9 +41,10 @@ Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上�
   stats/search/detail/graph、MCP 18 工具、virtual/indirect 候选与 header 增量
   update/watch 全部通过；见 docs/functional-verification.zh.md。
 - DSH 插件 bundle `dsh/`（`@local/dsh-ca`）：在 DeepSeek Harness 内提供 CA 页面 +
-  项目选择器 + 12 个原生 `ca_*` 工具、本地/远程 Linux `ca serve` 生命周期、长任务管理器与 DSH
-  模型驱动的 AI 解释；CA 核心不变、测试基线不受影响（插件有独立 `dsh/test/`
-  node 套件）。
+  项目模型 + 12 个原生 `ca_*` 工具、本地/远程 Linux `ca serve` 生命周期、长任务、
+  DSH 模型驱动的 AI 解释，以及跨平台/离线后端安装器（wheel-complete 包、内置 CA
+  wheel、按平台 wheelhouse；本地 Win/mac/Linux 代码路径，Linux 离线安装已真机验证）；
+  CA 核心不变、测试基线不受影响（插件有独立 `dsh/test/` node 套件）。
 
 ## 延后 / 可选
 

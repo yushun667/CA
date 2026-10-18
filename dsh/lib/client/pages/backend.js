@@ -37,6 +37,21 @@ const BACKEND_CSS = `
 .ca-backend-group-title { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; padding-bottom: 4px; border-bottom: 1px solid var(--dsw-alias-border-l1, #eaeef2); font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-secondary, #57606a); }
 .ca-backend-check { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--dsw-alias-label-primary, #1f2328); cursor: pointer; user-select: none; }
 .ca-backend-check input { width: 14px; height: 14px; accent-color: var(--dsw-alias-state-business-primary, #2f6feb); }
+.ca-backend-radio { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-sm, 6px); width: fit-content; }
+.ca-backend-radio .ca-btn { min-height: 22px; padding: 0 8px; font-size: 11.5px; }
+.ca-backend-radio .ca-btn-active { background: var(--dsw-alias-button-ghost-active-fill, rgba(127, 127, 127, 0.14)); }
+.ca-backend-install-progress { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--dsw-alias-border-l1, #eaeef2); }
+.ca-backend-steps { display: flex; flex-direction: column; gap: 3px; max-height: 240px; overflow: auto; }
+.ca-backend-step { display: flex; align-items: baseline; gap: 8px; font-size: 12px; min-width: 0; }
+.ca-backend-step-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-state-idle-primary, #8b949e); transform: translateY(-1px); }
+.ca-backend-step-dot-info { background: var(--dsw-alias-state-business-primary, #2f6feb); }
+.ca-backend-step-dot-success { background: var(--dsw-alias-state-success-primary, #1a7f37); }
+.ca-backend-step-dot-error { background: var(--dsw-alias-state-error-primary, #d1242f); }
+.ca-backend-step-dot-warn { background: var(--dsw-alias-state-warn-primary, #9a6700); }
+.ca-backend-step-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ca-backend-step-status { font-size: 11px; }
+.ca-backend-step-detail { color: var(--dsw-alias-label-tertiary, #8b949e); font-size: 11px; overflow-wrap: anywhere; }
+.ca-backend-install-log { max-height: 260px; }
 .ca-backend-notice { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-2, rgba(127, 127, 127, 0.05)); font-size: 12.5px; color: var(--dsw-alias-label-secondary, #57606a); }
 .ca-backend-report { max-height: 320px; }
 `
@@ -85,6 +100,7 @@ function configToForm(config) {
     remote_sshPort: asText(ssh.port === undefined || ssh.port === null ? '' : ssh.port),
     remote_sshKeyPath: asText(ssh.keyPath),
     remote_repoPath: asText(remote.repoPath),
+    remote_python: asText(remote.python),
     remote_installDir: asText(remote.installDir),
     remote_db: asText(remote.db),
     remote_dbDir: asText(remote.dbDir),
@@ -127,6 +143,7 @@ function formToPatch(form) {
         keyPath: nullIfEmpty(form.remote_sshKeyPath),
       },
       repoPath: nullIfEmpty(form.remote_repoPath),
+      python: nullIfEmpty(form.remote_python),
       installDir: nullIfEmpty(form.remote_installDir),
       db: nullIfEmpty(form.remote_db),
       dbDir: nullIfEmpty(form.remote_dbDir),
@@ -180,6 +197,20 @@ export function createBackendPage(React, bag) {
     const [health, setHealth] = React.useState(null)
     const [healthError, setHealthError] = React.useState(null)
     const [install, setInstall] = React.useState(null)
+    const [installInfo, setInstallInfo] = React.useState(null)
+    const [localInstall, setLocalInstall] = React.useState(null)
+    const [localInstallBusy, setLocalInstallBusy] = React.useState(false)
+    const [localForm, setLocalForm] = React.useState({
+      installDir: '',
+      python: '',
+      offline: false,
+      wheelhousePath: '',
+    })
+    const [remoteInstallForm, setRemoteInstallForm] = React.useState({
+      mode: 'wheel',
+      offline: false,
+      wheelhousePath: '',
+    })
 
     const mountedRef = React.useRef(true)
     const noticeTimer = React.useRef(null)
@@ -204,6 +235,9 @@ export function createBackendPage(React, bag) {
     function applySnapshot(snapshot) {
       if (!snapshot || typeof snapshot !== 'object') return
       if (snapshot.status) setStatus(snapshot.status)
+      if (Object.prototype.hasOwnProperty.call(snapshot, 'install')) {
+        setInstallInfo(snapshot.install && typeof snapshot.install === 'object' ? snapshot.install : null)
+      }
       if (snapshot.config) {
         setConfig(snapshot.config)
         setForm(configToForm(snapshot.config))
@@ -258,6 +292,218 @@ export function createBackendPage(React, bag) {
       }
     }
 
+    /** Normalize merged/flat/scoped install status into one progress object. */
+    function normalizeInstallStatus(raw, scope) {
+      if (!raw || typeof raw !== 'object') return null
+      let value = raw
+      if (raw.local || raw.remote) {
+        const scoped = raw[scope] && typeof raw[scope] === 'object' ? raw[scope] : null
+        value =
+          scoped ||
+          (raw.state || raw.status || Array.isArray(raw.steps) ? raw : null)
+      }
+      if (!value || typeof value !== 'object') return null
+      const status = value.status || value.state || (value.started === false ? 'idle' : 'running')
+      return Object.assign({}, value, { status })
+    }
+
+    function installStepsOf(progress) {
+      if (!progress || typeof progress !== 'object') return []
+      const list = Array.isArray(progress.steps)
+        ? progress.steps
+        : progress.result && Array.isArray(progress.result.steps)
+          ? progress.result.steps
+          : []
+      return list.map((entry, index) => {
+        if (typeof entry === 'string') return { id: '', title: entry, status: 'info', detail: '' }
+        const value = entry && typeof entry === 'object' ? entry : {}
+        return {
+          id: asText(value.id || ''),
+          title: asText(value.title || value.name || value.step || ''),
+          name: asText(value.id || value.name || value.title || value.step || `step ${index + 1}`),
+          status: asText(value.status || value.state || 'info'),
+          detail: asText(value.detail || value.message || (value.error && value.error.message) || ''),
+        }
+      })
+    }
+
+    function installStepLabel(step) {
+      if (step.id) {
+        const mapped = t(`install.steps.${step.id}`, null, '')
+        const key = `install.steps.${step.id}`
+        if (mapped && mapped !== key) return mapped
+      }
+      return step.title || step.name || step.id || ''
+    }
+
+    function installLogsOf(progress) {
+      if (!progress || typeof progress !== 'object') return []
+      const list = Array.isArray(progress.logs)
+        ? progress.logs
+        : progress.result && Array.isArray(progress.result.logs)
+          ? progress.result.logs
+          : []
+      const lines = []
+      for (const entry of list) {
+        if (typeof entry === 'string') lines.push(entry)
+        else if (entry && typeof entry === 'object') {
+          lines.push(asText(entry.text || entry.line || entry.message || ''))
+        }
+      }
+      const joined = lines.filter((line) => line.length > 0).join('\n')
+      return joined.length > 40000 ? joined.slice(-40000) : joined
+    }
+
+    function hostPlatformLabel(info) {
+      const notBrowser = typeof navigator === 'undefined'
+      const rawPlatform =
+        info && typeof info === 'object'
+          ? info.platform || info.hostPlatform || (info.local && info.local.platform)
+          : null
+      if (rawPlatform && typeof rawPlatform === 'object') {
+        if (typeof rawPlatform.label === 'string' && rawPlatform.label) return rawPlatform.label
+        if (typeof rawPlatform.id === 'string' && rawPlatform.id) return rawPlatform.id
+      }
+      const fromInfo = typeof rawPlatform === 'string' ? rawPlatform : null
+      if (fromInfo) return fromInfo
+      try {
+        if (!notBrowser) {
+          const platform = asText(
+            (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform,
+          )
+          const ua = asText(navigator.userAgent)
+          if (/win/i.test(platform) || /Windows/i.test(ua)) return 'windows'
+          if (/mac/i.test(platform) || /Mac OS X/i.test(ua)) return 'macos'
+          if (/linux/i.test(platform) || /Linux/i.test(ua)) return 'linux'
+        }
+      } catch (_error) {
+        /* platform detection is cosmetic */
+      }
+      return 'unknown'
+    }
+
+    function versionText(value) {
+      if (value === undefined || value === null) return ''
+      if (typeof value === 'string') return value
+      if (typeof value === 'number') return String(value)
+      if (typeof value === 'object') {
+        if (typeof value.version === 'string' && value.version) return value.version
+        if (typeof value.name === 'string' && value.name) return value.name
+      }
+      return ''
+    }
+
+    function installStatusTone(stateName) {
+      if (stateName === 'succeeded') return 'success'
+      if (stateName === 'failed' || stateName === 'error') return 'error'
+      if (stateName === 'running' || stateName === 'started') return 'info'
+      return 'neutral'
+    }
+
+    function renderInstallProgress(progress, emptyLabel) {
+      if (!progress) return null
+      const status = progress.status || progress.state || 'idle'
+      const steps = installStepsOf(progress)
+      const logs = installLogsOf(progress)
+      const hints =
+        progress.error &&
+        progress.error.details &&
+        Array.isArray(progress.error.details.hints)
+          ? progress.error.details.hints.filter((entry) => typeof entry === 'string')
+          : []
+      const result = progress.result && typeof progress.result === 'object' ? progress.result : null
+      const resultVersion = versionText(result && result.version)
+      return h(
+        'div',
+        { className: 'ca-backend-install-progress' },
+        h(
+          'div',
+          { className: 'ca-row' },
+          h(
+            ui.Badge,
+            { tone: installStatusTone(status) },
+            t(`install.status.${status}`, null, t(`backend.installStatus.${status}`, null, String(status))),
+          ),
+          progress.mode ? h(ui.Badge, { tone: 'muted' }, String(progress.mode)) : null,
+          progress.offline === true
+            ? h(ui.Badge, { tone: 'neutral' }, t('backend.modeOffline', null, 'Offline (wheelhouse)'))
+            : null,
+          progress.startedAt
+            ? h('span', { className: 'ca-faint', style: { fontSize: 11.5 } }, formatTimestamp(progress.startedAt))
+            : null,
+        ),
+        steps.length > 0
+          ? h(
+              'div',
+              { className: 'ca-backend-steps' },
+              steps.map((step, index) =>
+                h(
+                  'div',
+                  { key: `${index}-${step.name}`, className: 'ca-backend-step' },
+                  h('span', {
+                    className: `ca-backend-step-dot ca-backend-step-dot-${installStatusTone(step.status)}`,
+                    'aria-hidden': 'true',
+                  }),
+                  h(
+                    'span',
+                    { className: 'ca-backend-step-name' },
+                    installStepLabel(step),
+                  ),
+                  h(
+                    'span',
+                    { className: 'ca-faint ca-backend-step-status' },
+                    t(`install.status.${step.status}`, null, step.status),
+                  ),
+                  step.detail ? h('span', { className: 'ca-backend-step-detail' }, step.detail) : null,
+                ),
+              ),
+            )
+          : null,
+        hints.length > 0
+          ? h(
+              'div',
+              { className: 'ca-backend-notice' },
+              h(ui.Icon, { name: 'info', size: 13 }),
+              h(
+                'span',
+                null,
+                `${t('install.error.hints', null, 'Suggested fixes')}: ${hints.join(' · ')}`,
+              ),
+            )
+          : null,
+        progress.pollError
+          ? h(
+              'div',
+              { className: 'ca-faint', style: { fontSize: 11.5 } },
+              `${t('backend.installPollError', null, 'Polling failed; retrying…')}: ${progress.pollError.message || ''}`,
+            )
+          : null,
+        progress.error
+          ? h(ui.ErrorBox, {
+              title: t('backend.installFailed', null, 'Installation failed.'),
+              error: progress.error,
+            })
+          : null,
+        result
+          ? h(ui.KV, {
+              rows: [
+                { key: 'mode', label: t('backend.installMode', null, 'Install mode'), value: asText(result.mode) || '—' },
+                { key: 'installDir', label: t('backend.installDir', null, 'Install directory'), value: asText(result.installDir) || '—' },
+                { key: 'venvPython', label: t('backend.venvPython', null, 'venv Python'), value: asText(result.venvPython) || '—' },
+                { key: 'version', label: t('backend.caVersion', null, 'CA version'), value: resultVersion || '—' },
+              ],
+            })
+          : null,
+        logs
+          ? h(ui.Pre, { className: 'ca-backend-install-log' }, logs)
+          : h(
+              'div',
+              { className: 'ca-muted', style: { fontSize: 12 } },
+              emptyLabel || t('backend.installNoLogs', null, 'No log output yet.'),
+            ),
+      )
+    }
+
     React.useEffect(() => {
       void load()
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -274,18 +520,19 @@ export function createBackendPage(React, bag) {
     }, [])
 
     // Poll the remote installation state while one is running.
-    const installRunning = Boolean(install && install.status === 'running')
+    const installRunning = Boolean(install && (install.status === 'running' || install.state === 'running'))
     React.useEffect(() => {
       if (!installRunning) return undefined
       let cancelled = false
       const tick = async () => {
         try {
-          const state = await api.backend.installStatus()
+          const raw = await api.backend.installStatus({ scope: 'remote' })
           if (cancelled || !mountedRef.current) return
-          setInstall(state || null)
-          if (state && state.status !== 'running') {
+          const next = normalizeInstallStatus(raw, 'remote')
+          setInstall(next)
+          if (next && next.status !== 'running') {
             showNotice(
-              state.status === 'succeeded'
+              next.status === 'succeeded'
                 ? t('backend.installSucceeded', null, 'Installation finished.')
                 : t('backend.installFailed', null, 'Installation failed.'),
             )
@@ -295,8 +542,9 @@ export function createBackendPage(React, bag) {
           if (cancelled || !mountedRef.current) return
           const apiError = toApiError(error)
           if (apiError.code === 'ABORTED') return
-          setActionError(apiError)
-          setInstall((current) => (current ? Object.assign({}, current, { status: 'failed' }) : current))
+          setInstall((current) =>
+            current ? Object.assign({}, current, { pollError: apiError }) : current,
+          )
         }
       }
       void tick()
@@ -310,6 +558,48 @@ export function createBackendPage(React, bag) {
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [installRunning])
+
+    // Poll the local installation state while one is running.
+    const localInstallRunning = Boolean(
+      localInstall && (localInstall.status === 'running' || localInstall.state === 'running'),
+    )
+    React.useEffect(() => {
+      if (!localInstallRunning) return undefined
+      let cancelled = false
+      const tick = async () => {
+        try {
+          const raw = await api.backend.installStatus({ scope: 'local' })
+          if (cancelled || !mountedRef.current) return
+          const next = normalizeInstallStatus(raw, 'local')
+          setLocalInstall(next)
+          if (next && next.status !== 'running') {
+            showNotice(
+              next.status === 'succeeded'
+                ? t('backend.installDone', null, 'Local backend installed.')
+                : t('backend.installFailed', null, 'Installation failed.'),
+            )
+            void refreshStatus()
+          }
+        } catch (error) {
+          if (cancelled || !mountedRef.current) return
+          const apiError = toApiError(error)
+          if (apiError.code === 'ABORTED') return
+          setLocalInstall((current) =>
+            current ? Object.assign({}, current, { pollError: apiError }) : current,
+          )
+        }
+      }
+      void tick()
+      const timer = window.setInterval(() => {
+        if (typeof document !== 'undefined' && document.hidden) return
+        void tick()
+      }, 1200)
+      return () => {
+        cancelled = true
+        window.clearInterval(timer)
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [localInstallRunning])
 
     // Health probe follows a running backend.
     React.useEffect(() => {
@@ -407,12 +697,42 @@ export function createBackendPage(React, bag) {
     function installRemote() {
       if (!form.remote_sshHost) {
         setActionError(
-          toApiError({ code: 'CONFIG_INVALID', message: t('backend.config.missingSsh', null, 'Set the remote SSH host and database paths before installing or starting.') }),
+          toApiError({
+            code: 'CONFIG_INVALID',
+            message: t(
+              'backend.config.missingSsh',
+              null,
+              'Set the remote SSH host and database paths before installing or starting.',
+            ),
+          }),
+        )
+        return
+      }
+      const mode = remoteInstallForm.mode === 'source' ? 'source' : 'wheel'
+      const offline = Boolean(remoteInstallForm.offline)
+      const wheelhousePath = nullIfEmpty(remoteInstallForm.wheelhousePath)
+      if (offline && !wheelhousePath) {
+        setActionError(
+          toApiError({
+            code: 'CONFIG_INVALID',
+            message: t(
+              'backend.wheelhouseRequired',
+              null,
+              'Choose the local wheelhouse directory to upload for an offline install.',
+            ),
+          }),
         )
         return
       }
       setBusy('install')
       setActionError(null)
+      const installOptions = {
+        mode,
+        offline,
+        wheelhousePath: wheelhousePath || null,
+        installDir: nullIfEmpty(form.remote_installDir),
+        python: nullIfEmpty(form.remote_python),
+      }
       api.backend
         .install({
           ssh: {
@@ -421,20 +741,26 @@ export function createBackendPage(React, bag) {
             port: intOrNull(form.remote_sshPort, 'remote.ssh.port', { min: 1, max: 65535 }).value,
             keyPath: nullIfEmpty(form.remote_sshKeyPath),
           },
-          opts: {
-            repoPath: nullIfEmpty(form.remote_repoPath),
-            installDir: nullIfEmpty(form.remote_installDir),
-          },
+          ...installOptions,
+          opts: Object.assign(
+            { repoPath: nullIfEmpty(form.remote_repoPath) },
+            installOptions,
+          ),
         })
         .then((result) => {
           if (!mountedRef.current) return
-          setInstall({
-            started: true,
-            status: 'running',
-            startedAt: Date.now(),
-            ...(result && typeof result === 'object' ? result : {}),
-          })
-          showNotice(t('backend.installRunning', null, 'Installing CA on the remote host. This can take several minutes.'))
+          setInstall(
+            normalizeInstallStatus(
+              Object.assign(
+                { started: true, status: 'running', startedAt: Date.now(), mode, offline },
+                result && typeof result === 'object' ? result : {},
+              ),
+              'remote',
+            ),
+          )
+          showNotice(
+            t('backend.installRunning', null, 'Installing CA on the remote host. This can take several minutes.'),
+          )
         })
         .catch((error) => {
           if (!mountedRef.current) return
@@ -444,6 +770,52 @@ export function createBackendPage(React, bag) {
         })
         .finally(() => {
           if (mountedRef.current) setBusy('')
+        })
+    }
+
+    function startLocalInstall() {
+      if (localInstallBusy) return
+      setLocalInstallBusy(true)
+      setActionError(null)
+      setLocalInstall({ started: true, status: 'running', startedAt: Date.now(), steps: [], logs: [] })
+      const offline = Boolean(localForm.offline)
+      api.backend
+        .installLocal({
+          mode: 'wheel',
+          installDir: nullIfEmpty(localForm.installDir),
+          python: nullIfEmpty(localForm.python),
+          offline,
+          wheelhousePath: nullIfEmpty(localForm.wheelhousePath),
+        })
+        .then((result) => {
+          if (!mountedRef.current) return
+          if (result && typeof result === 'object') {
+            setLocalInstall((current) =>
+              Object.assign({}, current || {}, result, {
+                status: result.status || result.state || 'running',
+              }),
+            )
+          }
+          showNotice(t('backend.installingLocal', null, 'Installing local backend…'))
+        })
+        .catch((error) => {
+          if (!mountedRef.current) return
+          const apiError = toApiError(error)
+          if (apiError.code === 'ABORTED') return
+          if (apiError.code === 'BACKEND_UNSUPPORTED' || apiError.code === 'UNKNOWN_ENDPOINT') {
+            apiError.message = t(
+              'backend.installUnsupported',
+              null,
+              'This backend build does not support local installation; restart or upgrade the CA plugin.',
+            )
+          }
+          setActionError(apiError)
+          setLocalInstall((current) =>
+            Object.assign({}, current || {}, { status: 'failed', error: apiError }),
+          )
+        })
+        .finally(() => {
+          if (mountedRef.current) setLocalInstallBusy(false)
         })
     }
 
@@ -620,20 +992,6 @@ export function createBackendPage(React, bag) {
               ? t('backend.probeRemote', null, 'Probe remote host')
               : t('backend.probe', null, 'Probe local environment'),
           ),
-          isRemoteForm
-            ? h(
-                ui.Button,
-                {
-                  variant: 'secondary',
-                  disabled: anyBusy || installRunning,
-                  onClick: installRemote,
-                },
-                busy === 'install' || installRunning
-                  ? h(ui.Spinner, { size: 12 })
-                  : h(ui.Icon, { name: 'external', size: 13 }),
-                installRunning ? t('backend.installing', null, 'Installing…') : t('backend.install', null, 'Install on remote host'),
-              )
-            : null,
           h(
             ui.Button,
             { variant: 'ghost', disabled: anyBusy || !running, onClick: () => void checkHealth() },
@@ -735,55 +1093,445 @@ export function createBackendPage(React, bag) {
         )
       : null
 
-    const installCard = install
+    const showLocal = form.backend !== 'remote'
+    const showRemote = form.backend !== 'local'
+
+    const installInfoValue = installInfo && typeof installInfo === 'object' ? installInfo : null
+    const localInstallInfo =
+      installInfoValue && installInfoValue.local && typeof installInfoValue.local === 'object'
+        ? installInfoValue.local
+        : null
+    const wheelInfo =
+      installInfoValue && installInfoValue.wheel && typeof installInfoValue.wheel === 'object'
+        ? installInfoValue.wheel
+        : null
+    const wheelhouseInfo =
+      installInfoValue && installInfoValue.wheelhouse && typeof installInfoValue.wheelhouse === 'object'
+        ? installInfoValue.wheelhouse
+        : null
+    const localResult =
+      localInstall && localInstall.result && typeof localInstall.result === 'object'
+        ? localInstall.result
+        : null
+    const localVenvPython = asText(
+      (localResult && localResult.venvPython) || (localInstallInfo && localInstallInfo.venvPython),
+    )
+    const localVersion = versionText(
+      (localResult && localResult.version) || (localInstallInfo && localInstallInfo.version),
+    )
+    const localInstalledDir = asText(
+      (localResult && localResult.installDir) || (localInstallInfo && localInstallInfo.installDir),
+    )
+    const localInstalledMode = asText(
+      (localResult && localResult.mode) || (localInstallInfo && localInstallInfo.mode),
+    )
+    const localVenvDir = asText(
+      (localResult && localResult.venvDir) || (localInstallInfo && localInstallInfo.venvDir) || '',
+    )
+    const localCaScript = asText(
+      (localResult && localResult.caScript) || (localInstallInfo && localInstallInfo.caScript) || '',
+    )
+    const localPlatform = asText(
+      (localResult && localResult.platform) ||
+        (localInstallInfo && localInstallInfo.platform) ||
+        '',
+    )
+    const localRepoPath = asText((localInstallInfo && localInstallInfo.repoPath) || '')
+    const localRepoCandidate = localRepoPath || localInstalledDir || localVenvDir || ''
+    const localInstalled = Boolean(
+      (localInstallInfo && localInstallInfo.installed) ||
+        localVenvPython ||
+        (localInstall && localInstall.status === 'succeeded'),
+    )
+    const platformLabel = hostPlatformLabel(installInfoValue)
+    const wheelVersion = wheelInfo && wheelInfo.version ? String(wheelInfo.version) : ''
+    const bundledWheel = Boolean(wheelInfo && wheelInfo.bundled)
+    const wheelhouseDefault = wheelhouseInfo && wheelhouseInfo.defaultPath ? String(wheelhouseInfo.defaultPath) : ''
+    const wheelhousePlatforms =
+      wheelhouseInfo && Array.isArray(wheelhouseInfo.availablePlatforms)
+        ? wheelhouseInfo.availablePlatforms.map((entry) => String(entry))
+        : []
+    const wheelhouseBuildHint = t(
+      'backend.wheelhouseBuildHint',
+      null,
+      'Generate it with: node dsh/scripts/build-wheelhouse.mjs --platform <target>',
+    )
+
+    function setLocalField(name, value) {
+      setLocalForm((current) => Object.assign({}, current, { [name]: value }))
+    }
+
+    function setRemoteInstallField(name, value) {
+      setRemoteInstallForm((current) => Object.assign({}, current, { [name]: value }))
+    }
+
+    const localInstallCard = h(
+      ui.Card,
+      {
+        title: t('backend.localInstallTitle', null, 'Local backend installation'),
+        subtitle: t(
+          'backend.localInstallHint',
+          null,
+          'Installs a private CA venv on this machine (Windows, macOS or Linux). Existing installs are reused; repair reinstalls into the same directory.',
+        ),
+        actions: [
+          h(ui.Badge, { key: 'platform', tone: 'neutral' }, `${t('backend.hostPlatform', null, 'Host platform')}: ${platformLabel}`),
+          bundledWheel
+            ? h(
+                ui.Badge,
+                { key: 'wheel', tone: 'info' },
+                t('backend.wheelBundled', { version: wheelVersion || '—' }, `bundled wheel ${wheelVersion || '—'}`),
+              )
+            : null,
+        ],
+      },
+      h(
+        'div',
+        { className: 'ca-col' },
+        h(
+          'div',
+          { className: 'ca-backend-form-grid' },
+          h(
+            ui.Field,
+            {
+              key: 'local-install-dir',
+              label: t('backend.installDir', null, 'Install directory'),
+              hint: t(
+                'backend.installDirHint',
+                null,
+                'Leave empty to use the plugin-managed directory.',
+              ),
+            },
+            h(ui.Input, {
+              value: localForm.installDir,
+              placeholder: localInstalledDir || '/…/plugin-data/dsh-ca/backends/local',
+              ariaLabel: t('backend.installDir', null, 'Install directory'),
+              onChange: (event) => setLocalField('installDir', event.target.value),
+            }),
+          ),
+          h(
+            ui.Field,
+            {
+              key: 'local-python',
+              label: t('backend.python', null, 'Python executable'),
+              hint: t('backend.pythonHint', null, 'Leave empty to auto-detect Python 3.11+.'),
+            },
+            h(ui.Input, {
+              value: localForm.python,
+              placeholder: localVenvPython || 'python3',
+              ariaLabel: t('backend.python', null, 'Python executable'),
+              onChange: (event) => setLocalField('python', event.target.value),
+            }),
+          ),
+          h(
+            ui.Field,
+            { key: 'local-mode', label: t('backend.installMode', null, 'Install mode') },
+            h(
+              'div',
+              {
+                className: 'ca-backend-radio',
+                role: 'radiogroup',
+                'aria-label': t('backend.installMode', null, 'Install mode'),
+              },
+              h(
+                ui.Button,
+                {
+                  variant: 'ghost',
+                  size: 'sm',
+                  active: !localForm.offline,
+                  'aria-pressed': localForm.offline ? 'false' : 'true',
+                  onClick: () => setLocalField('offline', false),
+                },
+                t('backend.modeOnline', null, 'Online (PyPI)'),
+              ),
+              h(
+                ui.Button,
+                {
+                  variant: 'ghost',
+                  size: 'sm',
+                  active: Boolean(localForm.offline),
+                  'aria-pressed': localForm.offline ? 'true' : 'false',
+                  onClick: () => setLocalField('offline', true),
+                },
+                t('backend.modeOffline', null, 'Offline (wheelhouse)'),
+              ),
+            ),
+          ),
+          localForm.offline
+            ? h(
+                ui.Field,
+                {
+                  key: 'local-wheelhouse',
+                  label: t('backend.wheelhousePath', null, 'Wheelhouse directory'),
+                  hint: [
+                    t(
+                      'backend.wheelhouseHint',
+                      null,
+                      'Directory containing the CA wheel and its dependency wheels.',
+                    ),
+                    wheelhouseInfo && wheelhouseInfo.defaultPath
+                      ? `${t('backend.wheelhouseDefault', null, 'default')}: ${wheelhouseInfo.defaultPath}${
+                          wheelhouseInfo.defaultExists === true
+                            ? ` (${t('backend.wheelhouseWheelCount', { count: Number(wheelhouseInfo.defaultWheelCount) || 0 }, `${Number(wheelhouseInfo.defaultWheelCount) || 0} wheels`)})`
+                            : ` (${t('backend.wheelhouseMissing', null, 'not generated yet')})`
+                        }`
+                      : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
+                },
+                h(ui.Input, {
+                  value: localForm.wheelhousePath,
+                  placeholder: wheelhouseDefault || `…/wheelhouse/${platformLabel}`,
+                  ariaLabel: t('backend.wheelhousePath', null, 'Wheelhouse directory'),
+                  onChange: (event) => setLocalField('wheelhousePath', event.target.value),
+                }),
+              )
+            : null,
+        ),
+        localForm.offline ? h('div', { className: 'ca-backend-notice' }, h(ui.Icon, { name: 'info', size: 13 }), h('span', null, wheelhouseBuildHint)) : null,
+        h(
+          'div',
+          { className: 'ca-backend-actions' },
+          h(
+            ui.Button,
+            {
+              variant: 'primary',
+              disabled: localInstallBusy || localInstallRunning,
+              onClick: startLocalInstall,
+            },
+            localInstallBusy || localInstallRunning
+              ? h(ui.Spinner, { size: 12 })
+              : h(ui.Icon, { name: 'external', size: 13 }),
+            localInstallBusy || localInstallRunning
+              ? t('backend.installingLocal', null, 'Installing local backend…')
+              : t('backend.installLocal', null, 'Install / repair local backend'),
+          ),
+          localInstalled ? h(ui.Badge, { tone: 'success' }, t('backend.installCompleted', null, 'installed')) : null,
+          localInstalledMode
+            ? h(
+                ui.Badge,
+                { tone: 'muted' },
+                localInstalledMode === 'offline'
+                  ? t('backend.modeOffline', null, 'Offline (wheelhouse)')
+                  : localInstalledMode === 'existing'
+                    ? t('backend.modeExisting', null, 'existing install')
+                    : t('backend.modeOnline', null, 'Online (PyPI)'),
+              )
+            : null,
+        ),
+        localInstalled
+          ? h(ui.KV, {
+              rows: [
+                { key: 'venv', label: t('backend.venvPython', null, 'venv Python'), value: localVenvPython || '—' },
+                { key: 'version', label: t('backend.caVersion', null, 'CA version'), value: localVersion || '—' },
+                { key: 'dir', label: t('backend.installDir', null, 'Install directory'), value: localInstalledDir || '—' },
+                { key: 'caScript', label: t('backend.caScript', null, 'CA command'), value: localCaScript || '—' },
+                { key: 'platform', label: t('backend.hostPlatform', null, 'Host platform'), value: localPlatform || platformLabel },
+              ],
+            })
+          : null,
+        localInstalled && navigate
+          ? h(
+              'div',
+              { className: 'ca-backend-notice' },
+              h(ui.Icon, { name: 'info', size: 13 }),
+              h('span', null, t('backend.installProjectsHint', null, 'Create or activate a project on the Projects page to use this installation.')),
+              h('span', { className: 'ca-spacer' }),
+              h(
+                ui.Button,
+                { variant: 'ghost', size: 'sm', onClick: () => navigate({ page: 'projects' }) },
+                h(ui.Icon, { name: 'folder', size: 13 }),
+                t('backend.openProjects', null, 'Open projects'),
+              ),
+            )
+          : null,
+        localVenvPython && navigate
+          ? h(
+              'div',
+              { className: 'ca-col', style: { gap: 4 } },
+              h(
+                ui.Button,
+                {
+                  variant: 'secondary',
+                  size: 'sm',
+                  style: { alignSelf: 'flex-start' },
+                  onClick: () =>
+                    navigate({
+                      page: 'projects',
+                      params: {
+                        python: localVenvPython,
+                        ...(localRepoCandidate ? { caRepoPath: localRepoCandidate } : {}),
+                      },
+                    }),
+                },
+                h(ui.Icon, { name: 'folder', size: 13 }),
+                t('backend.usePythonForProject', null, 'Create a local project with this Python'),
+              ),
+              h(
+                'span',
+                { className: 'ca-faint', style: { fontSize: 11.5 } },
+                t(
+                  'backend.usePythonForProjectHint',
+                  null,
+                  'Opens the projects page with the Python field prefilled; nothing is created automatically.',
+                ),
+              ),
+            )
+          : null,
+        renderInstallProgress(localInstall, t('backend.installNoLogs', null, 'No log output yet.')),
+      ),
+    )
+
+    const remoteInstallCard = showRemote
       ? h(
           ui.Card,
           {
             title: t('backend.installTitle', null, 'Remote installation'),
-            actions: h(
-              ui.Badge,
-              {
-                tone:
-                  install.status === 'succeeded'
-                    ? 'success'
-                    : install.status === 'failed'
-                      ? 'error'
-                      : 'warn',
-              },
-              String(install.status || 'idle'),
+            subtitle: t(
+              'backend.remoteInstallHint',
+              null,
+              'Installs CA on the remote Linux host by uploading the bundled wheel (and the wheelhouse for offline installs).',
             ),
+            actions: install
+              ? h(
+                  ui.Badge,
+                  { tone: installStatusTone(install.status || install.state) },
+                  t(`backend.installStatus.${install.status || install.state || 'idle'}`, null, String(install.status || install.state || 'idle')),
+                )
+              : null,
           },
-          h(ui.KV, {
-            rows: [
-              { key: 'ssh', label: 'SSH', value: asText((install.ssh && install.ssh.host) || form.remote_sshHost) || '—' },
-              { key: 'started', label: t('backend.installStartedAt', null, 'Started'), value: formatTimestamp(install.startedAt) },
-              {
-                key: 'elapsed',
-                label: t('backend.installFinishedAt', null, 'Finished'),
-                value: install.finishedAt
-                  ? `${formatTimestamp(install.finishedAt)} (${formatDuration(install.finishedAt - (install.startedAt || install.finishedAt))})`
-                  : '—',
-              },
-            ],
-          }),
-          install.status === 'running'
-            ? h(
-                'p',
-                { className: 'ca-muted', style: { margin: '10px 0 0', fontSize: 12.5 } },
-                t('backend.installRunning', null, 'Installing CA on the remote host. This can take several minutes.'),
-              )
-            : null,
-          install.error
-            ? h(ui.ErrorBox, { title: t('backend.installFailed', null, 'Installation failed.'), error: install.error })
-            : null,
-          install.result
-            ? h(ui.Pre, { className: 'ca-backend-report' }, JSON.stringify(install.result, null, 2))
-            : null,
+          h(
+            'div',
+            { className: 'ca-col' },
+            h(
+              'div',
+              { className: 'ca-backend-form-grid' },
+              h(
+                ui.Field,
+                { key: 'remote-install-mode', label: t('backend.installMethod', null, 'Install method') },
+                h(ui.Select, {
+                  value: remoteInstallForm.mode,
+                  options: [
+                    { value: 'wheel', label: t('backend.modeWheel', null, 'wheel (recommended)') },
+                    { value: 'source', label: t('backend.modeSource', null, 'source tree (legacy)') },
+                  ],
+                  ariaLabel: t('backend.installMethod', null, 'Install method'),
+                  onChange: (value) => setRemoteInstallField('mode', value),
+                }),
+              ),
+              h(
+                ui.Field,
+                { key: 'remote-install-network', label: t('backend.installMode', null, 'Install mode') },
+                h(
+                  'div',
+                  {
+                    className: 'ca-backend-radio',
+                    role: 'radiogroup',
+                    'aria-label': t('backend.installMode', null, 'Install mode'),
+                  },
+                  h(
+                    ui.Button,
+                    {
+                      variant: 'ghost',
+                      size: 'sm',
+                      active: !remoteInstallForm.offline,
+                      'aria-pressed': remoteInstallForm.offline ? 'false' : 'true',
+                      onClick: () => setRemoteInstallField('offline', false),
+                    },
+                    t('backend.modeOnline', null, 'Online (PyPI)'),
+                  ),
+                  h(
+                    ui.Button,
+                    {
+                      variant: 'ghost',
+                      size: 'sm',
+                      active: Boolean(remoteInstallForm.offline),
+                      'aria-pressed': remoteInstallForm.offline ? 'true' : 'false',
+                      onClick: () => setRemoteInstallField('offline', true),
+                    },
+                    t('backend.modeOffline', null, 'Offline (wheelhouse)'),
+                  ),
+                ),
+              ),
+              remoteInstallForm.offline
+                ? h(
+                    ui.Field,
+                    {
+                      key: 'remote-wheelhouse',
+                      label: t('backend.remoteWheelhouse', null, 'Local wheelhouse to upload'),
+                      hint: t(
+                        'backend.remoteWheelhouseHint',
+                        null,
+                        'Directory on this machine; it is uploaded to the remote host for the offline install.',
+                      ),
+                    },
+                    h(ui.Input, {
+                      value: remoteInstallForm.wheelhousePath,
+                      placeholder: wheelhouseDefault || `…/wheelhouse/${platformLabel}`,
+                      ariaLabel: t('backend.remoteWheelhouse', null, 'Local wheelhouse to upload'),
+                      onChange: (event) => setRemoteInstallField('wheelhousePath', event.target.value),
+                    }),
+                  )
+                : null,
+            ),
+            remoteInstallForm.offline
+              ? h('div', { className: 'ca-backend-notice' }, h(ui.Icon, { name: 'info', size: 13 }), h('span', null, wheelhouseBuildHint))
+              : null,
+            wheelhousePlatforms.length > 0 && remoteInstallForm.offline
+              ? h(
+                  'div',
+                  { className: 'ca-faint', style: { fontSize: 11.5 } },
+                  `${t('backend.wheelhousePlatforms', null, 'Available wheelhouses')}: ${wheelhousePlatforms.join(', ')}`,
+                )
+              : null,
+            h(
+              'div',
+              { className: 'ca-backend-actions' },
+              h(
+                ui.Button,
+                {
+                  variant: 'primary',
+                  disabled: anyBusy || installRunning,
+                  onClick: installRemote,
+                },
+                busy === 'install' || installRunning
+                  ? h(ui.Spinner, { size: 12 })
+                  : h(ui.Icon, { name: 'external', size: 13 }),
+                installRunning
+                  ? t('backend.installing', null, 'Installing…')
+                  : t('backend.install', null, 'Install on remote host'),
+              ),
+              h(
+                'span',
+                { className: 'ca-faint', style: { fontSize: 11.5 } },
+                t(
+                  'backend.remoteInstallSSH',
+                  { host: asText(form.remote_sshHost) || '—' },
+                  `SSH: ${asText(form.remote_sshHost) || '—'}`,
+                ),
+              ),
+            ),
+            install && (install.status === 'succeeded' || (install.result && install.result.ok)) && navigate
+              ? h(
+                  'div',
+                  { className: 'ca-backend-notice' },
+                  h(ui.Icon, { name: 'info', size: 13 }),
+                  h('span', null, t('backend.installProjectsHint', null, 'Create or activate a project on the Projects page to use this installation.')),
+                  h('span', { className: 'ca-spacer' }),
+                  h(
+                    ui.Button,
+                    { variant: 'ghost', size: 'sm', onClick: () => navigate({ page: 'projects' }) },
+                    h(ui.Icon, { name: 'folder', size: 13 }),
+                    t('backend.openProjects', null, 'Open projects'),
+                  ),
+                )
+              : null,
+            renderInstallProgress(install, t('backend.installNoLogs', null, 'No log output yet.')),
+          ),
         )
       : null
 
-    const showLocal = form.backend !== 'remote'
-    const showRemote = form.backend !== 'local'
 
     function field(name, label, options) {
       const settings = options && typeof options === 'object' ? options : {}
@@ -888,6 +1636,9 @@ export function createBackendPage(React, bag) {
                 field('remote_repoPath', t('backend.field.repoPath', null, 'Existing CA checkout path (remote)'), {
                   placeholder: '~/CA',
                 }),
+                field('remote_python', t('backend.field.remotePython', null, 'Remote Python interpreter'), {
+                  placeholder: '/usr/bin/python3.11',
+                }),
                 field('remote_installDir', t('backend.field.installDir', null, 'Install directory (remote)'), {
                   placeholder: '~/dsh-ca',
                 }),
@@ -943,10 +1694,11 @@ export function createBackendPage(React, bag) {
         ),
         unconfiguredHint,
         statusCard,
+        localInstallCard,
+        remoteInstallCard,
         projectHintCard,
         healthCard,
         probeCard,
-        installCard,
         configCard,
         h(
           'div',

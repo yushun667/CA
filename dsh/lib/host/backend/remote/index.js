@@ -13,9 +13,9 @@
  */
 
 import { BackendError, normalizeError } from '../errors.js';
+import { createRemoteWheelInstallSteps, performRemoteWheelInstall } from '../installer/remote-linux.js';
 import { listRemoteDatabases, validateRemoteDatabase } from './databases.js';
 import { createRemoteExecutor } from './exec.js';
-import { createInstallSteps, performRemoteInstall } from './install.js';
 import { probeRemote } from './probe.js';
 import { createRemoteServeController } from './serve.js';
 
@@ -27,10 +27,13 @@ function clone(value) {
 
 function freshInstallStatus() {
   return {
+    scope: 'remote',
     state: 'idle',
+    mode: null,
+    offline: null,
     startedAt: null,
     finishedAt: null,
-    steps: createInstallSteps(),
+    steps: createRemoteWheelInstallSteps(),
     logs: [],
     error: null,
     result: null,
@@ -52,6 +55,8 @@ export function createRemoteBackend(options) {
   const executor = createRemoteExecutor({ deps, logger });
   const controller = createRemoteServeController({ config, deps, logger, executor });
 
+  const onInstallComplete =
+    typeof options.onInstallComplete === 'function' ? options.onInstallComplete : null;
   let disposed = false;
   let installStatus = freshInstallStatus();
   /** @type {Promise<any>|null} */
@@ -86,6 +91,8 @@ export function createRemoteBackend(options) {
 
   function finishInstallStatus(report, failure) {
     installStatus.finishedAt = now();
+    installStatus.mode = report?.mode || installStatus.mode;
+    installStatus.offline = report?.offline ?? installStatus.offline;
     if (failure) {
       installStatus.state = 'failed';
       installStatus.error = {
@@ -100,9 +107,17 @@ export function createRemoteBackend(options) {
     installStatus.result = report
       ? {
           ok: report.ok,
+          scope: report.scope || 'remote',
           mode: report.mode || null,
+          offline: report.offline === true,
+          platform: report.platform || null,
           repoPath: report.repoPath || null,
-          venvPath: report.venvPath || null,
+          installDir: report.installDir || null,
+          venvDir: report.venvDir || null,
+          venvPython: report.venvPython || null,
+          caScript: report.caScript || null,
+          wheel: report.wheel || null,
+          wheelhouse: report.wheelhouse || null,
           version: report.version || null,
           skipped: report.skipped === true,
           startedAt: report.startedAt,
@@ -113,6 +128,13 @@ export function createRemoteBackend(options) {
         }
       : null;
     installAbort = null;
+    if (onInstallComplete && installStatus.result) {
+      try {
+        onInstallComplete(clone(installStatus.result), clone(installStatus));
+      } catch {
+        // persistence callbacks must never break install reporting
+      }
+    }
   }
 
   async function runInstall(installOptions = {}) {
@@ -125,9 +147,12 @@ export function createRemoteBackend(options) {
       );
     }
     beginInstallStatus();
-    installPromise = performRemoteInstall({
+    installStatus.mode = installOptions.mode === 'source' ? 'source' : 'wheel';
+    installStatus.offline = installOptions.offline === true;
+    installPromise = performRemoteWheelInstall({
       config,
       executor,
+      deps,
       logger,
       installOptions,
       onEvent: trackInstallEvent,

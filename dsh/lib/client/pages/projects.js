@@ -198,13 +198,30 @@ export function createProjectsPage(React, bag) {
     ui.useStyles(PROJECTS_CSS)
 
     const navigate = props && typeof props.navigate === 'function' ? props.navigate : null
+    // Optional prefill from the backend installer ("create a project with this
+    // Python"); the user still fills the remaining fields and saves manually.
+    const prefillPython =
+      props && props.route && props.route.params && typeof props.route.params.python === 'string'
+        ? props.route.params.python
+        : ''
+    const prefillCaRepoPath =
+      props && props.route && props.route.params && typeof props.route.params.caRepoPath === 'string'
+        ? props.route.params.caRepoPath
+        : ''
 
     const [phase, setPhase] = React.useState('loading')
     const [loadError, setLoadError] = React.useState(null)
     const [list, setList] = React.useState(null) // { projects, activeProjectId }
-    const [formOpen, setFormOpen] = React.useState(false)
+    const [formOpen, setFormOpen] = React.useState(Boolean(prefillPython || prefillCaRepoPath))
     const [editingId, setEditingId] = React.useState('')
-    const [form, setForm] = React.useState(() => Object.assign({}, EMPTY_FORM))
+    const [form, setForm] = React.useState(() =>
+      Object.assign(
+        {},
+        EMPTY_FORM,
+        prefillPython ? { python: prefillPython } : {},
+        prefillCaRepoPath ? { caRepoPath: prefillCaRepoPath } : {},
+      ),
+    )
     const [formErrors, setFormErrors] = React.useState([])
     const [busy, setBusy] = React.useState('')
     const [actionError, setActionError] = React.useState(null)
@@ -678,6 +695,22 @@ export function createProjectsPage(React, bag) {
               t('projects.cancel', null, 'Cancel'),
             ),
           },
+          (prefillPython || prefillCaRepoPath) && !editingId
+            ? h(
+                'div',
+                { className: 'ca-projects-hint' },
+                h(ui.Icon, { name: 'info', size: 13 }),
+                h(
+                  'span',
+                  null,
+                  t(
+                    'projects.prefillPython',
+                    null,
+                    'Python prefilled from the local installer; fill in the remaining fields and save.',
+                  ),
+                ),
+              )
+            : null,
           h(
             'div',
             { className: 'ca-projects-section' },

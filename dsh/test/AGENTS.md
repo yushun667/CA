@@ -9,6 +9,7 @@
 - `client-style.test.mjs`：Client 样式桥回归（`<style data-ca-ui>` 写入 CSS 文本而非引用计数）。
 - `ui-selftest.test.mjs`：页面内 DOM 自测的 adapter/fake 编排测试。
 - `host-modules.test.mjs`：Host 模块可加载与纯函数行为。
+- `installer-*.test.mjs`（`installer-platform/local/remote/manager`）：平台探测、venv 布局、命令/上传策略与安装状态机；`installer.real.test.mjs` 为环境变量门控的真机用例。
 
 ## 子目录
 

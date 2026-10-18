@@ -473,6 +473,7 @@ test('backend.install starts a background install and installStatus polls it', a
   assert.match(started.hint, /backend\.installStatus/)
   assert.deepEqual(context.backend.calls.startRemoteInstall[0], {
     repoPath: '/srv/CA',
+    mode: 'wheel',
     ssh: { host: 'linux-box', user: 'yu' },
   })
 
@@ -506,6 +507,385 @@ test('backend.install falls back to a foreground installer promise', async () =>
   const finished = valueOf(await context.call('backend.installStatus'))
   assert.equal(finished.status, 'succeeded')
   assert.deepEqual(finished.result, { ok: true, version: '0.1.0' })
+})
+
+// --------------------------------------------------------------------------- //
+// installer: local / remote wheel / offline
+// --------------------------------------------------------------------------- //
+
+test('the endpoint list exposes the cross-platform installer endpoints', () => {
+  assert.ok(RPC_ENDPOINTS.includes('backend.installLocal'))
+  assert.ok(RPC_ENDPOINTS.includes('backend.install'))
+  assert.ok(RPC_ENDPOINTS.includes('backend.installStatus'))
+})
+
+test('backend.install defaults to the bundled wheel and validates installer options', async () => {
+  const context = setup()
+  const value = valueOf(
+    await context.call('backend.install', {
+      ssh: 'user@linux-box',
+      opts: { repoPath: '/srv/CA' },
+      offline: true,
+      wheelhousePath: '/wh/linux-x64',
+    }),
+  )
+  assert.equal(value.started, true)
+  assert.equal(value.scope, 'remote')
+  assert.equal(value.mode, 'wheel', 'mode defaults to the bundled wheel')
+  assert.equal(value.offline, true)
+  assert.deepEqual(context.backend.calls.startRemoteInstall[0], {
+    repoPath: '/srv/CA',
+    mode: 'wheel',
+    offline: true,
+    wheelhousePath: '/wh/linux-x64',
+    ssh: 'user@linux-box',
+  })
+
+  await context.call('backend.install', { ssh: 'user@x', mode: 'source' })
+  assert.equal(context.backend.calls.startRemoteInstall[1].mode, 'source')
+
+  // Old payloads may carry the mode inside `opts`; top-level wins.
+  await context.call('backend.install', {
+    ssh: 'user@x',
+    opts: { mode: 'source', installDir: '/opt/ca' },
+  })
+  assert.equal(context.backend.calls.startRemoteInstall[2].mode, 'source')
+  assert.equal(context.backend.calls.startRemoteInstall[2].installDir, '/opt/ca')
+
+  const invalidPayloads = [
+    { ssh: 'user@x', offline: 'yes' },
+    { ssh: 'user@x', mode: 'rsync' },
+    { ssh: 'user@x', wheelhousePath: 'relative/wh' },
+    { ssh: 'user@x', installDir: 'relative/dir' },
+    { ssh: 'user@x', python: '' },
+  ]
+  for (const payload of invalidPayloads) {
+    const response = await context.call('backend.install', payload)
+    assert.equal(response.status, 400, JSON.stringify(payload))
+    assert.equal(errorOf(response).code, 'INVALID_ARGUMENT')
+  }
+  assert.equal(context.backend.calls.startRemoteInstall.length, 3)
+})
+
+test('backend.installLocal starts a background install tracked by installStatus', async () => {
+  const context = setup()
+  const response = await context.call('backend.installLocal', {
+    offline: true,
+    wheelhousePath: '/wh/macos-arm64',
+  })
+  assert.equal(response.status, 200)
+  const value = valueOf(response)
+  assert.equal(value.started, true)
+  assert.equal(value.scope, 'local')
+  assert.equal(value.status, 'running')
+  assert.equal(value.mode, 'wheel')
+  assert.equal(value.offline, true)
+  assert.deepEqual(context.backend.calls.installLocal[0], {
+    mode: 'wheel',
+    offline: true,
+    wheelhousePath: '/wh/macos-arm64',
+  })
+
+  let status = valueOf(await context.call('backend.installStatus', { scope: 'local' }))
+  assert.equal(status.scope, 'local')
+  assert.equal(status.local.state, 'running')
+
+  context.backend.pendingLocalInstall[0].resolve({
+    ok: true,
+    installDir: '/opt/ca-local',
+    venvPython: '/opt/ca-local/bin/python',
+    version: '0.1.0',
+    mode: 'wheel',
+    steps: [{ id: 'venv', status: 'succeeded' }],
+    logs: ['created venv'],
+  })
+  await tick(5)
+  status = valueOf(await context.call('backend.installStatus', { scope: 'local' }))
+  assert.equal(status.local.state, 'succeeded')
+  assert.equal(status.local.result.installDir, '/opt/ca-local')
+  assert.equal(status.local.steps[0].id, 'venv')
+  assert.equal(status.status, 'succeeded', 'legacy aliases follow the requested scope')
+})
+
+test('backend.installLocal accepts a synchronous step snapshot', async () => {
+  const backend = createFakeBackend({ installLocalMode: 'sync' })
+  const context = setup({ backend })
+  const value = valueOf(await context.call('backend.installLocal', { python: 'python3.12' }))
+  assert.equal(value.scope, 'local')
+  assert.equal(value.status, 'succeeded')
+  assert.equal(value.steps[0].id, 'venv')
+  assert.deepEqual(backend.calls.installLocal[0], {
+    mode: 'wheel',
+    python: 'python3.12',
+  })
+  const status = valueOf(await context.call('backend.installStatus'))
+  assert.equal(status.local.state, 'succeeded')
+  assert.equal(status.local.result.installDir, '/opt/ca-local')
+})
+
+test('backend.installLocal prefers the background starter and merges manager status', async () => {
+  const backend = createFakeBackend({ startLocalInstall: true })
+  backend.getInstallStatus = () => ({
+    local: {
+      scope: 'local',
+      state: 'running',
+      mode: 'wheel',
+      offline: false,
+      startedAt: 1700000000000,
+      steps: [{ id: 'environment', status: 'running' }],
+      logs: [],
+      error: null,
+      result: null,
+    },
+    remote: { scope: 'remote', state: 'idle', steps: [], logs: [], error: null, result: null },
+    state: 'running',
+    scope: 'local',
+    steps: [{ id: 'environment', status: 'running' }],
+    logs: [],
+    error: null,
+    result: null,
+    startedAt: 1700000000000,
+    finishedAt: null,
+  })
+  const context = setup({ backend })
+  const value = valueOf(await context.call('backend.installLocal', { offline: false }))
+  assert.equal(value.started, true)
+  assert.equal(value.scope, 'local')
+  assert.equal(value.status, 'running')
+  assert.deepEqual(value.startedAt !== undefined, true)
+  assert.equal(backend.calls.startLocalInstall.length, 1)
+  assert.equal(backend.calls.installLocal.length, 0, 'background starter is preferred')
+  assert.deepEqual(backend.calls.startLocalInstall[0], { mode: 'wheel', offline: false })
+
+  const status = valueOf(await context.call('backend.installStatus'))
+  assert.equal(status.local.state, 'running')
+  assert.equal(status.status, 'running', 'aggregate aliases follow the manager top-level mirror')
+  assert.deepEqual(status.steps, [{ id: 'environment', status: 'running' }])
+})
+
+test('backend.installLocal validates options and reports unsupported backends', async () => {
+  const context = setup()
+  const invalidPayloads = [
+    { offline: 'yes' },
+    { offline: 1 },
+    { mode: 'rsync' },
+    { wheelhousePath: 'relative/wh' },
+    { installDir: 'relative/dir' },
+    { python: '' },
+    { python: 42 },
+  ]
+  for (const payload of invalidPayloads) {
+    const response = await context.call('backend.installLocal', payload)
+    assert.equal(response.status, 400, JSON.stringify(payload))
+    assert.equal(errorOf(response).code, 'INVALID_ARGUMENT')
+  }
+  assert.equal(context.backend.calls.installLocal.length, 0)
+
+  const backend = createFakeBackend()
+  delete backend.installLocal
+  const unsupported = setup({ backend })
+  assert.equal(
+    errorOf(await unsupported.call('backend.installLocal', {})).code,
+    'BACKEND_UNSUPPORTED',
+  )
+})
+
+test('backend.installLocal normalizes installer failures', async () => {
+  const missingPython = createFakeBackend()
+  missingPython.installLocal = () => {
+    throw new BackendError('PYTHON_NOT_FOUND', 'Python >= 3.11 is required')
+  }
+  const missing = setup({ backend: missingPython })
+  const missingResponse = await missing.call('backend.installLocal', {})
+  assert.equal(missingResponse.status, 200)
+  const missingError = errorOf(missingResponse)
+  assert.equal(missingError.code, 'BACKEND_ERROR')
+  assert.equal(missingError.details.backendCode, 'PYTHON_NOT_FOUND')
+
+  const invalid = createFakeBackend()
+  invalid.installLocal = () => {
+    throw new BackendError('INVALID_ARGUMENT', 'wheelhouse is not a directory')
+  }
+  const invalidContext = setup({ backend: invalid })
+  const invalidResponse = await invalidContext.call('backend.installLocal', {})
+  assert.equal(invalidResponse.status, 400)
+  assert.equal(errorOf(invalidResponse).code, 'INVALID_ARGUMENT')
+})
+
+test('installStatus merges local/remote scopes and keeps legacy aliases', async () => {
+  const backend = createFakeBackend()
+  backend.getInstallStatus = () => ({
+    local: {
+      state: 'succeeded',
+      steps: [{ id: 'venv', status: 'succeeded' }],
+      logs: ['created venv'],
+      result: { installDir: '/opt/ca', venvPython: '/opt/ca/bin/python', version: '0.1.0', mode: 'wheel' },
+      error: null,
+    },
+    remote: { state: 'running', steps: [], logs: [], error: null },
+  })
+  const context = setup({ backend })
+  const merged = valueOf(await context.call('backend.installStatus'))
+  assert.equal(merged.local.state, 'succeeded')
+  assert.equal(merged.remote.state, 'running')
+  assert.equal(merged.status, 'running', 'legacy aliases track the remote installer by default')
+  assert.equal(merged.state, 'running')
+
+  const local = valueOf(await context.call('backend.installStatus', { scope: 'local' }))
+  assert.equal(local.scope, 'local')
+  assert.equal(local.status, 'succeeded')
+  assert.equal(local.local.result.installDir, '/opt/ca')
+  assert.equal(local.remote.state, 'running')
+
+  assert.equal(
+    errorOf(await context.call('backend.installStatus', { scope: 'all' })).code,
+    'INVALID_ARGUMENT',
+  )
+})
+
+test('installStatus keeps working with a legacy manager response', async () => {
+  const backend = createFakeBackend()
+  backend.getInstallStatus = () => ({
+    state: 'succeeded',
+    steps: [{ id: 'upload', status: 'ok' }],
+    logs: ['done'],
+    result: { installDir: '/srv/ca' },
+  })
+  const context = setup({ backend })
+  const value = valueOf(await context.call('backend.installStatus'))
+  assert.equal(value.status, 'succeeded', 'legacy top-level status preserved')
+  assert.equal(value.state, 'succeeded')
+  assert.equal(value.steps[0].id, 'upload')
+  assert.equal(value.remote.state, 'succeeded')
+  assert.equal(value.local.state, 'idle')
+})
+
+test('installStatus follows the manager top-level scope mirror when present', async () => {
+  const backend = createFakeBackend()
+  backend.getInstallStatus = () => ({
+    local: { scope: 'local', state: 'succeeded', steps: [{ id: 'verify', status: 'succeeded' }], logs: [], error: null, result: null },
+    remote: { scope: 'remote', state: 'idle', steps: [], logs: [], error: null, result: null },
+    state: 'succeeded',
+    scope: 'local',
+    steps: [{ id: 'verify', status: 'succeeded' }],
+    logs: [],
+    error: null,
+    result: null,
+    startedAt: 1700000000000,
+    finishedAt: 1700000000100,
+  })
+  const context = setup({ backend })
+  const value = valueOf(await context.call('backend.installStatus'))
+  assert.equal(value.status, 'succeeded', 'legacy aliases follow the last active scope')
+  assert.equal(value.state, 'succeeded')
+  assert.equal(value.steps[0].id, 'verify')
+  assert.equal(value.local.state, 'succeeded')
+  assert.equal(value.remote.state, 'idle')
+
+  const remote = valueOf(await context.call('backend.installStatus', { scope: 'remote' }))
+  assert.equal(remote.status, 'idle')
+  assert.equal(remote.scope, 'remote')
+})
+
+test('backend.get and status expose compact install info', async () => {
+  const context = setup()
+  const got = valueOf(await context.call('backend.get'))
+  assert.equal(got.install.platform.platformId, 'macos-arm64')
+  assert.equal(got.install.platform.supported, true)
+  assert.equal(got.install.local.installed, true)
+  assert.equal(got.install.local.installDir, '/opt/ca-local')
+  assert.equal(got.install.local.venvPython, '/opt/ca-local/bin/python')
+  assert.equal(got.install.local.version, '0.1.0')
+  assert.equal(got.install.local.mode, 'offline')
+  assert.equal(got.install.local.offline, true)
+  assert.equal(got.install.local.venvDir, '/opt/ca-local')
+  assert.equal(got.install.local.caScript, '/opt/ca-local/bin/ca')
+  assert.equal(got.install.wheel.bundled, true)
+  assert.equal(got.install.wheel.name, 'ca_analyzer-0.1.0-py3-none-any.whl')
+  assert.equal(got.install.wheel.version, '0.1.0')
+  assert.equal(got.install.wheel.bytes, 359899)
+  assert.deepEqual(got.install.wheelhouse.availablePlatforms, ['linux-x64', 'macos-arm64'])
+  assert.equal(got.install.wheelhouse.defaultPath, '/tmp/wheelhouse/macos-arm64')
+  assert.equal(got.install.wheelhouse.defaultPlatform, 'macos-arm64')
+  assert.equal(got.install.wheelhouse.defaultExists, true)
+  assert.equal(got.install.wheelhouse.defaultWheelCount, 9)
+  assert.equal(got.install.remote, null)
+
+  const status = valueOf(await context.call('status'))
+  assert.equal(status.install.local.version, '0.1.0')
+})
+
+test('backend.get/status install info degrades to null when unavailable', async () => {
+  const backend = createFakeBackend()
+  delete backend.getInstallSummary
+  delete backend.getInstallStatus
+  const context = setup({ backend })
+  assert.equal(valueOf(await context.call('backend.get')).install, null)
+  assert.equal(valueOf(await context.call('status')).install, null)
+})
+
+test('install summary trusts the explicit installed flag over default paths', async () => {
+  const backend = createFakeBackend()
+  backend.getInstallSummary = () => ({
+    platform: {
+      os: 'win32',
+      arch: 'x64',
+      platformId: 'windows-x64',
+      label: 'Windows x64',
+      supported: true,
+      sep: '\\',
+    },
+    local: {
+      scope: 'local',
+      installed: false,
+      installDir: 'C:/Users/ca/locals',
+      venvDir: 'C:/Users/ca/locals/venv',
+      venvPython: 'C:/Users/ca/locals/venv/Scripts/python.exe',
+      caScript: 'C:/Users/ca/locals/venv/Scripts/ca.exe',
+      version: null,
+      mode: null,
+      offline: null,
+      state: 'idle',
+    },
+    remote: null,
+    wheel: { bundled: false, name: null, version: null, bytes: 0 },
+    wheelhouse: {
+      defaultPath: 'C:/Users/ca/wheelhouse/windows-x64',
+      defaultPlatform: 'windows-x64',
+      defaultExists: false,
+      defaultWheelCount: 0,
+      availablePlatforms: [],
+    },
+  })
+  const context = setup({ backend })
+  const got = valueOf(await context.call('backend.get'))
+  assert.equal(got.install.platform.platformId, 'windows-x64')
+  assert.equal(got.install.local.installed, false, 'default install dirs must not imply an install')
+  assert.equal(got.install.local.venvPython, 'C:/Users/ca/locals/venv/Scripts/python.exe')
+  assert.equal(got.install.local.caScript, 'C:/Users/ca/locals/venv/Scripts/ca.exe')
+  assert.equal(got.install.wheel.bundled, false)
+  assert.deepEqual(got.install.wheelhouse.availablePlatforms, [])
+})
+
+test('install info can come from manager.getStatus().install', async () => {
+  const backend = createFakeBackend()
+  delete backend.getInstallSummary
+  delete backend.getInstallStatus
+  const baseStatus = backend.getStatus()
+  backend.setStatus({
+    ...baseStatus,
+    install: {
+      local: { installed: true, installDir: '/from-status', venvPython: null, version: null, mode: 'wheel' },
+      remote: null,
+      wheel: { bundled: true, version: '0.1.0' },
+      wheelhouse: { availablePlatforms: ['windows-x64'], defaultPath: null },
+    },
+  })
+  const context = setup({ backend })
+  const got = valueOf(await context.call('backend.get'))
+  assert.equal(got.install.local.installDir, '/from-status')
+  assert.deepEqual(got.install.wheelhouse.availablePlatforms, ['windows-x64'])
+  assert.equal(got.install.wheelhouse.defaultPath, null)
 })
 
 // --------------------------------------------------------------------------- //
@@ -1153,6 +1533,7 @@ test('the route handler never throws, for any endpoint or body shape', async () 
     'status',
     'ca.request',
     'backend.get',
+    'backend.installLocal',
     'backend.databases',
     'backend.useDatabase',
     'projects.list',

@@ -4,7 +4,8 @@
 
 ## 关键文件
 
-- `manager.js`：单一入口；解析设置、路由 local/remote、统一 status/log 事件流。
+- `manager.js`：单一入口；解析设置、路由 local/remote、项目存储与安装状态、统一 status/log 事件流。
+- `projects.js`：项目定义校验/迁移/映射为后端配置（产品主模型，契约见 `../../CONTRACT.md`）。
 - `local.js`：本地 `ca serve` 启动/就绪/健康检查/崩溃重启/停止。
 - `discover.js`：CA 仓库、Python 解释器、DB 发现与探测报告。
 - `http.js`：CA `/api/*` 客户端（超时/取消）；`process.js`：子进程与行解码；`log.js`：环形+文件日志。
@@ -12,7 +13,8 @@
 
 ## 子目录
 
-- [remote/AGENTS.md](remote/AGENTS.md)：远程 Linux 后端（probe/install/serve+SSH 隧道/远程执行）。
+- [installer/AGENTS.md](installer/AGENTS.md)：本地/远程 Linux 的 CA wheel 安装器与离线 wheelhouse。
+- [remote/AGENTS.md](remote/AGENTS.md)：远程 Linux 后端（probe/legacy source install/serve+SSH 隧道/远程执行）。
 
 ## 局部规则
 

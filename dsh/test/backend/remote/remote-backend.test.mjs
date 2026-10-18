@@ -110,9 +110,9 @@ test('remote backend installs, tracks install status and exposes the result', as
     const { backend } = setupBackend({ config });
     try {
       assert.equal(backend.getInstallStatus().state, 'idle');
-      const report = await backend.install({ localRepo: checkout, timeoutMs: 5000 });
+      const report = await backend.install({ mode: 'source', localRepo: checkout, timeoutMs: 5000 });
       assert.equal(report.ok, true);
-      assert.equal(report.mode, 'rsync');
+      assert.equal(report.mode, 'source', 'legacy source flow is reported as mode=source');
       assert.equal(report.version.version, '0.1.0');
       const status = backend.getInstallStatus();
       assert.equal(status.state, 'succeeded');
@@ -146,9 +146,9 @@ test('remote backend startInstall returns immediately and can be polled', async 
     });
     const { backend } = setupBackend({ config });
     try {
-      const first = backend.startInstall({ localRepo: checkout, timeoutMs: 5000 });
+      const first = backend.startInstall({ mode: 'source', localRepo: checkout, timeoutMs: 5000 });
       assert.equal(first.started, true);
-      const second = backend.startInstall({ localRepo: checkout });
+      const second = backend.startInstall({ mode: 'source', localRepo: checkout });
       assert.equal(second.started, false);
       assert.equal(second.running, true);
       await waitFor(() => backend.getInstallStatus().state !== 'running', {
@@ -183,7 +183,7 @@ test('remote backend install failures are thrown and recorded in install status'
     const { backend } = setupBackend({ config, runner: fullRunner({ failPip: true }) });
     try {
       await assert.rejects(
-        backend.install({ localRepo: checkout, timeoutMs: 5000 }),
+        backend.install({ mode: 'source', localRepo: checkout, timeoutMs: 5000 }),
         (error) => error instanceof BackendError && error.code === 'INSTALL_STEP_FAILED',
       );
       const status = backend.getInstallStatus();
@@ -264,6 +264,7 @@ test('manager wires the remote backend: probe, install, start, request, status',
     assert.equal(typeof probe.ok, 'boolean');
 
     const install = await manager.installRemote({
+      mode: 'source',
       localRepo: checkout,
       repoPath: null,
       installDir: '/home/yu/ca-install',
@@ -314,6 +315,7 @@ test('manager installRemote accepts an ssh override when config has no host', as
       (error) => error.code === 'BACKEND_NOT_CONFIGURED',
     );
     const report = await manager.installRemote({
+      mode: 'source',
       ssh: 'yu@linux-box',
       localRepo: checkout,
       repoPath: null,

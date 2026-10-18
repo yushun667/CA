@@ -7,6 +7,7 @@ DSH 插件包 `@local/dsh-ca` 的模块边界与接口。改接口先改本文�
 - 包根 `dsh/`：Host 入口 `lib/host/bootstrap.js`（稳定的小入口，静态 `inject`），实现体 `lib/host/impl.js` 经 cache-busted 动态 import 加载（编辑 impl 或其后模块后重激活即可生效；改 bootstrap/inject 需重启宿主）；Client 产物 `client.js` 由 `scripts/build-client.mjs` 从 `lib/client/index.js` 生成（勿手改）。
 - Host 行在 `cordis.patch.yml`；Client 由 `dsh.client` 字段 + `exports["./client"]` 自动挂载。
 - 安装只由 Lead 执行：`plugin_manager install_bundle`，target=`/Users/yu/Documents/hobby/CA/dsh`。成员不得安装/改 profile/Git 提交。
+- `backend/wheels/`：内置 CA wheel（`ca_analyzer-<version>-py3-none-any.whl`，由 `pyproject.toml` package-data 构建，含 `schema.sql` 与 UI 静态资源）；离线依赖 wheelhouse 由 `scripts/build-wheelhouse.mjs` 生成到 `artifacts/wheelhouse/<platform>/`（gitignored，不随包提交）。
 - Host 代码只用 Node 内置模块；Client 源码只 import 相对路径与 `react`。禁止 npm 依赖、CSS import、动态 import、顶层 await。
 
 ## Host 组装（Lead 维护 lib/host/bootstrap.js → impl.js）
@@ -30,7 +31,7 @@ registerPrompt(ctx, config)
 - `start(opts?)/stop()/restart()`；`request(path,{method='GET',query,body,timeoutMs=30000}) -> CA envelope {ok,data|error}`（传输错误抛 `BackendError`）；`execCa(spec,{onStdout,onStderr,signal}) -> {exitCode,signal}`
 - `probeLocal()`、`onChange(fn)`、`dispose()`；`config` 解析后的设置。`BackendError{code,message,details}`。
 - `listDatabases(options?) / useDatabase({kind,path})`：低层数据库扫描/切换（内部辅助，不是产品主流程）。
-- 本地：`ca serve --db/--db-dir --port 0 ...`，就绪判定 = stderr URL 行 + `/api/health`。远程：probe → rsync 源码 + venv + `pip install -e .` → 远端 `ca serve` + SSH 隧道；`execCa` 经 ssh。设置持久化 `$DSH_HOME/plugin-data/dsh-ca/settings.json`。
+- 本地：`ca serve --db/--db-dir --port 0 ...`，就绪判定 = stderr URL 行 + `/api/health`。远程：probe → Python 检查 → 上传内置 CA wheel（离线再加 wheelhouse）→ venv → `pip install` → 远端 `ca serve` + SSH 隧道；`execCa` 经 ssh。legacy source 模式保留 rsync + editable 安装。安装器接口见下节。设置持久化 `$DSH_HOME/plugin-data/dsh-ca/settings.json`。
 
 ## Project model（backend-ops；产品主模型）
 
@@ -53,6 +54,17 @@ Manager 方法：`listProjects()`、`saveProject(input)`、`deleteProject(id)`�
 
 - `ctx.agentDefaultModel.currentSelection()` 取 provider/model，`ctx.llm.stream(...)` 聚合 text-delta；先经 `backend.request` 收 detail/source/callers/callees/graph(±cfg) 且有界；错误归一化。
 
+
+## Installer（backend-ops；本地/远程 CA 安装）
+
+`lib/host/backend/installer/`：`platform.js`（平台 id、Python >= 3.11 探测、venv 布局、内置 wheel 与 wheelhouse 解析、平台修复提示）、`local.js`（本地 wheel 安装）、`remote-linux.js`（远程 Linux wheel 安装，含 scp/ssh 上传回退）。只依赖 Node 内置模块且可注入 `runProcess`/fs，测试不启动真实 Python/pip。
+
+- 前置：`MIN_PYTHON={major:3,minor:11}`；本地用 `py -3.13|-3.12|-3.11`（Windows）或 `python3.13|3.12|3.11|python3`（macOS/Linux）探测；平台 id：`macos-arm64|macos-x64|linux-x64|linux-arm64|windows-x64`。
+- Manager 方法：`installLocal(options) -> report`、`startLocalInstall(options) -> {started,running,scope:'local',startedAt}`、`installRemote(options)`、`startRemoteInstall(options)`、`getInstallStatus() -> {local,remote,state,scope,steps,logs,...}`（RPC 侧合并为 `{local,remote,aggregate}`）、`getInstallSummary() -> {platform,local,remote,wheel,wheelhouse}`；最近成功安装持久化到 `$DSH_HOME/plugin-data/dsh-ca/install-state.json`（0600，重启后仍可展示）。
+- 选项：`mode:'wheel'|'source'`（本地只支持 `wheel`）、`offline:boolean`、`wheelhousePath:string|null`（本地目录；远程离线时为待上传的本地目录/`.tar.gz`）、`installDir:string|null`（本地默认 `<stateDir>/backends/local`；远程默认 `~/dsh-ca/backend`）、`python:string|null`、`ssh?`（远程覆盖）、source 模式还有 `repoPath`/`force`。
+- 行为：幂等（已有可用 venv 复用 `skipped`，损坏则重建/修复）；在线 `pip` 从 PyPI 取依赖，离线 `pip --no-index --find-links <wheelhouse>`；不编译、不写 DSH profile。步骤 id：本地 `environment|wheel|venv|dependencies|verify`；远程 wheel `probe|python|upload-wheel|upload-wheelhouse|venv|pip|verify`；失败归一为带 `code` 的 `BackendError`（如 `UNSUPPORTED_PYTHON`、`INSTALL_STEP_FAILED`、`ALREADY_RUNNING`）。
+- 上传策略：远程优先 `scp`（wheelhouse 用 `scp -r`），不可用时 wheel 走 `ssh stdin`、wheelhouse 走本地 `tar -czf -` 流式解包；不得在仓库/设置中保存凭据。
+
 ## Client↔Host 通道（host-tools；**HTTP web 路由**，非 connection.rpc）
 
 - 结论：`ctx.connection.rpc.handle` 在 plain-JS 插件中会激活失败（`cannot get property "webServer" without inject`），**不要使用**。改用 DSH 原生 `ctx.webServer.register` 注册同源 HTTP 路由。
@@ -61,7 +73,8 @@ Manager 方法：`listProjects()`、`saveProject(input)`、`deleteProject(id)`�
   - 鉴权：先 `const rejection = ctx.connection.requestRejection(req)`，非空则回 401/403；非 POST 回 405；路径不匹配 404。
   - 响应：`content-type: application/json`，`{ok:true,value}` / `{ok:false,error:{code,message,details}}`；业务错误 HTTP 200，参数错误 400，body 过大 413。
 - Client：`fetch('/dsh-ca/<endpoint>', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(payload||{}), signal, credentials:'same-origin' })`，解包同一 envelope。
-- 端点：`ping`；`status`（含 `project` 字段）；`ca.request{method,path,query,body}`（仅 `/api/` 前缀）；`backend.get|configure|start|stop|restart|probe|install`；`projects.list|save|remove|activate`；`tasks.start|list|get|logs|cancel`；`explain`。
+- 端点：`ping`；`status`（含 `project` 字段）；`ca.request{method,path,query,body}`（仅 `/api/` 前缀）；`backend.get|configure|start|stop|restart|probe|install|installLocal|installStatus|databases|useDatabase`；`projects.list|save|remove|activate`；`ui.selftest.pending|report`；`tasks.start|list|get|logs|cancel`；`explain`。
+  - `backend.get.install`：安装摘要（platform/local/remote/wheel/wheelhouse）；`backend.installLocal` 启动本地安装；`backend.install` 启动远程安装，payload 支持 `ssh?`、`mode`、`offline`、`wheelhousePath`、`installDir`、`python`（旧 `opts` 仍兼容）；`backend.installStatus{scope:'local'|'remote'}` 返回合并进度（步骤/日志/错误）。
   - `projects.save` 仅创建/更新项目定义；`projects.activate` 切换活动项目并重启后端（失败回滚）。
   - `backend.databases|useDatabase` 保留为低层辅助，不作为产品主流程。
 - Handler 不得抛未捕获异常；参数与大小校验。
@@ -95,7 +108,7 @@ Manager 方法：`listProjects()`、`saveProject(input)`、`deleteProject(id)`�
 
 | 路径 | 所有 |
 |---|---|
-| package.json, cordis.patch.yml, lib/host/index.js, lib/client/index.js, client.js, scripts/build-client.mjs, locale/, icon.svg, AGENTS.md, CONTRACT.md | Lead |
+| package.json, cordis.patch.yml, lib/host/index.js, lib/client/index.js, client.js, scripts/build-client.mjs, scripts/build-wheelhouse.mjs, backend/wheels/, locale/, icon.svg, AGENTS.md, CONTRACT.md | Lead |
 | lib/host/config.js, lib/host/backend/**, test/backend/** | backend-ops |
 | lib/host/rpc/**, lib/host/tools/**, lib/host/tasks/**, lib/host/prompt.js, test/rpc/**, test/tools/** | host-tools |
 | lib/host/explain/**, lib/client/views/explain/**, test/explain/** | ai-explain |

@@ -1,8 +1,8 @@
 # DSH 插件（`@local/dsh-ca`）
 
-CA 同时以 [DeepSeek Harness](https://github.com/deepseek-ai) bundle 形式提供：在
-Harness Web UI 内嵌完整 CA 页面、给 agent 的 12 个原生 `ca_*` 工具、本地或远程
-Linux `ca serve` 后端、长索引任务与 AI 解释。CA 本体不变：插件只调用 CA 既有的
+CA 同时以 DeepSeek Harness bundle 形式提供：在 Harness Web UI 内嵌完整 CA 页面、给
+agent 的 12 个原生 `ca_*` 工具、自安装的本地或远程 Linux `ca serve` 后端、长索引任务
+与 AI 解释。CA 本体不变：插件只调用 CA 既有的
 只读 HTTP API 与 CLI，也不改变 CA 的测试基线（写作时为 497 passed / 4 skipped）。
 
 ## 安装（本地目录 bundle）
@@ -22,6 +22,8 @@ bundle 位于仓库根目录 `dsh/`，不发布到任何 registry。
 重载规则：Host 改动（`dsh/lib/host/**`）需要重启 Harness（或禁用后重新启用插件），
 因为入口模块会被缓存；Client 改动需要重建 `client.js` 并刷新页面（旧页面仍持有旧
 bundle）；改 `dsh/lib/host/bootstrap.js` 必须完整重启 Harness。
+
+这里安装的是**插件**本身；CA 分析器**后端**由插件的后端安装器单独安装（见下文）。
 
 ## 配置
 
@@ -44,13 +46,18 @@ bundle）；改 `dsh/lib/host/bootstrap.js` 必须完整重启 Harness。
 | `local.host` / `local.port` | `127.0.0.1` / `0` | 绑定地址与端口；`0` = 系统分配 |
 | `local.maxRestarts` | `3` | 崩溃重启次数上限 |
 | `remote.ssh.host` / `user` / `port` / `keyPath` | — | SSH 目标（alias 或 `user@host`）、端口、本地私钥路径；不支持密码 |
-| `remote.repoPath` | — | Linux 主机上已有的 CA checkout（优先） |
-| `remote.installDir` | — | 没有 `repoPath` 时的 rsync 目标目录 |
+| `remote.repoPath` | — | Linux 主机上已有的 CA checkout（source 模式/手工安装） |
+| `remote.installDir` | — | rsync 目标与 legacy source 模式的安装目录；wheel 安装使用安装表单里的独立目录 |
 | `remote.python` | 自动（`python3`） | 远端解释器 |
 | `remote.db` / `remote.dbDir` | — | 远端单库或 shard 目录 |
 | `remote.serveRemotePort` / `remote.localPort` | `0` / `0` | 远端 serve 端口与本地隧道端口（0 = 自动） |
 | `local.env` / `remote.env` | `{}` | 子进程附加环境变量 |
 | `log.*` | 有界 | 插件自身日志轮转与内存环形缓冲设置 |
+
+后端安装器在各次 `#/backend` 请求中配置（`mode: wheel|source`、`offline`、
+`wheelhousePath`、`installDir`、`python`）；最近一次成功安装记录在
+`$DSH_HOME/plugin-data/dsh-ca/install-state.json`（0600），并通过
+`backend.get.install` 暴露。
 
 ### 项目（源码根 + 数据库 + 后端位置）
 
@@ -78,69 +85,116 @@ CA 是通用分析器，因此插件围绕**项目**组织，与在 DSH 中打�
 `tasks.maxConcurrent`，1–8，默认 2）、`maxTaskLogBytes`（或 `tasks.maxLogBytes`，
 64 KiB–16 MiB，默认 1 MiB）。
 
-## 从零安装（新用户 / 新服务器）
+## 安装 CA 后端（本地或远程）
 
-CA 分析器本身是纯 Python，**不需要编译**；运行依赖（`clang`、`libclang`——后者自带
-原生库、`duckdb`、`pytest`）都是预编译 wheel。后端主机需要的是 **Python >= 3.11**、
-`venv`/`pip`、`rsync`（仅远程安装需要）以及一次网络访问（或已有的 pip 缓存）。
-Ubuntu 22.04 默认 Python 3.10，不够；请安装 `python3.11`，或把 `remote.python` 指向
-已有的 3.11+ 解释器。远程安装器会提前检测，约 0.2 秒内以 `UNSUPPORTED_PYTHON`
-明确失败，而不是等 pip 阶段才报错。
+CA 是纯 Python，**不需要编译**；运行依赖（`clang`/`libclang`、`duckdb`、`pytest`
+及其传递依赖）都是预编译 wheel。插件用内置的 CA wheel
+（`dsh/backend/wheels/ca_analyzer-<version>-py3-none-any.whl`，约 360 KB）为
+你安装后端；离线机器再由按平台生成的 wheelhouse 提供依赖 wheel。
 
-DSH 新用户、本地索引：
+后端主机要求：**Python >= 3.11** 且带 `venv`/`pip`（Windows 用
+`py -3.13`/`py -3.12`/`py -3.11`；macOS/Linux 自动探测
+`python3.13`/`3.12`/`3.11`）；远程后端需要可用的 SSH（推荐 `scp`，legacy
+source 模式还需要 `rsync`）。在线安装需要网络；离线安装需要目标平台的 wheelhouse。
 
-1. 克隆 CA 仓库（其中包含本 `dsh/` bundle）。
-2. 通过插件管理器从 `<repo>/dsh` 安装 bundle 并启用。
-3. 新建项目指向已有的 CA 检出/venv/索引；或先引导一次 venv（需要 Python 3.11）：
-   `python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install -e .`
-   （`scripts/bootstrap.sh` 在 macOS/Linux 做同样的事）。editable 安装是有意为之：
-   当前打包没有 package-data，wheel 会遗漏 `schema.sql` 与 UI 静态资源。
+### 安装 / 修复（后端页）
 
-新的远程 Linux 服务器：
+打开 `#/backend`；两个安装器都是幂等的——已有可用 venv 会复用，
+**Install / repair** 会修复或重建损坏的 venv，步骤/日志经
+`backend.installStatus` 轮询。
 
-1. 前置条件：Linux x86_64/aarch64、`python3.11+`（或已有的 3.11 解释器路径）、
-   `python3.11-venv`、`pip`、`rsync`、一次网络访问。
-2. 在项目/后端表单里填 `remote.ssh.host`、`remote.python`（3.11+），以及
-   `remote.installDir`（空目标目录，如 `~/.dsh-ca/install`）或 `remote.repoPath`
-   （已有 CA 检出）。在后端页点 **Install**。
-3. 安装器依次执行 `probe → rsync → venv → pip install -r requirements.txt →
-   pip install -e . → ca version`，幂等并逐步回报；局域网内 pip 缓存已就绪时，
-   实测完整安装约 10 秒。
+- **本地后端安装**（Windows/macOS/Linux）：可选安装目录（默认插件的私有
+  `backends/local`）与 Python 解释器，然后选择 **Online (PyPI)** 或
+  **Offline (wheelhouse)**。步骤：environment → wheel → venv →
+  dependencies → verify（`ca version --json`）。
+- **远程安装**（Linux over SSH）：选择安装方式 **wheel（推荐）** 或
+  **source tree (legacy)**，以及 Online/Offline。wheel 步骤：probe →
+  Python check → 上传 CA wheel →（离线）上传 wheelhouse → 远端 venv →
+  pip install → verify。默认远端安装目录 `~/dsh-ca/backend`；上传优先用
+  `scp`，否则通过 SSH 流式传输（wheelhouse 目录以 tar 流上传）。随后远端
+  `ca serve` 在本地 SSH 隧道后面运行。
 
-目前**没有发布开箱即用的一体化安装包或离线 wheel 包**。安装 API 支持
-`offline: true` + `wheelDir`（届时 pip 用 `--no-index --find-links`），但仓库未附带
-wheelhouse，表单也尚未暴露该选项；离线包是下一步工作。插件本身目前从本地目录安装，
-不在 registry 发布。
+安装器把最近一次成功安装记录在
+`$DSH_HOME/plugin-data/dsh-ca/install-state.json`（0600），并通过
+`backend.get.install` 报告平台、venv Python、CA 版本与安装目录；安装完成后创建或
+激活指向该安装的 project。
+
+### 离线安装（隔离网络主机）
+
+在有网络的机器上构建一次依赖 wheelhouse：
+
+```sh
+node dsh/scripts/build-wheelhouse.mjs --platform <id> [--tar]
+node dsh/scripts/build-wheelhouse.mjs --list-platforms
+```
+
+平台 id：`linux-x64`、`linux-arm64`、`macos-arm64`、`macos-x64`、
+`windows-x64`。输出到 `dsh/artifacts/wheelhouse/<platform>/`（依赖 wheel +
+CA wheel 副本 + `manifest.json`）；`--tar` 还会写出 `<platform>.tar.gz`。体积：
+`macos-arm64` 约 41 MB，`linux-x64` 约 46 MB。
+
+本地离线安装：把目录复制到插件状态目录默认位置
+`$DSH_HOME/plugin-data/dsh-ca/wheelhouse/<platform>/`，或在表单里指向该目录；
+`.tar.gz` 必须先解压，因为 `pip --find-links` 需要目录。远程离线安装：在表单里
+选择本地 wheelhouse 目录，安装器会上传到 Linux 主机。离线 pip 使用
+`--no-index --find-links`，不访问网络。
+
+实测：macOS arm64 本地离线安装约 **1.4 s**；真实 Linux 服务器离线 wheel 安装
+约 **6.4 s**（包含 46 MB wheelhouse 的上传）。
+
+### 平台支持
+
+| 主机 | 本地后端 | 远程后端 | 说明 |
+|---|---|---|---|
+| macOS arm64 / x64 | 代码路径支持；arm64 已真机验证 | 目标必须是 Linux | 主要开发主机 |
+| Linux x64 / aarch64 | 代码路径支持 | 已在真实 Linux 服务器验证 | 创建 venv 需要 `pythonX.Y-venv` |
+| Windows x64 | 代码路径已实现、未真机验证 | 目标必须是 Linux | 用 `py -3.11+`；CA `watch` 在 Windows 不可用 |
+
+依赖 wheel 决定平台矩阵；远程后端只支持 Linux。
+
+### 开发者回退（source 模式）
+
+旧流程仍可用于开发：project 指向已有的 CA checkout/venv/索引，或手工创建 venv
+并 editable 安装
+（`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install -e .`；
+`scripts/bootstrap.sh` 在 macOS/Linux 做同样的事）。远程安装方式选择
+**source tree (legacy)** 会保留 rsync + editable 流程（两端都需要 `rsync`）。
+新部署优先用 wheel 安装器；source 模式仅为兼容与调试保留。
 
 ## 本地后端
 
-
-1. 设置 `local.db`（联邦 shard 用 `local.dbDir`）；当 CA checkout 与 venv 可被发现
-   时 `local.repoRoot`/`local.python` 可留空。
-2. 打开 `#/backend` 启动后端。Host 运行
+1. 如果本机还没有 CA，先在 `#/backend` 运行 **Install / repair local backend**
+   （见上）；它创建私有 venv，不触碰系统 Python。
+2. 在 `#/projects` 新建 project：`backend: local`、源码根与本地数据库（单库或
+   shard 目录）。后端页安装卡可用 **Create a local project with this Python**
+   为新 project 预填解释器。
+3. 激活 project。Host 把它映射为后端配置并运行
    `ca serve --host 127.0.0.1 --port 0 --db <db>`，从 stderr 解析就绪 URL 并校验
    `GET /api/health`；`--port 0` 无法解析时用本地临时空闲端口重试一次。
-3. 启动前可用 **Probe local** 查看发现的解释器、CA 版本、候选数据库与 libclang 状态。
+4. 启动前可用 **Probe local** 查看发现的解释器、CA 版本、CA checkout 与 libclang
+   状态。
 
 进程由 Host 持有：插件释放时停止，崩溃重启有次数上限，数据库缺失会返回可操作的错误。
 
 ## 远程 Linux 后端
 
-适用于 DSH 在 macOS、源码与索引在 Linux 服务器的场景。
+适用于 DSH 在 macOS/Windows、源码与索引在 Linux 服务器的场景。
 
 1. 确认基于密钥的 SSH 可非交互执行（`ssh -i <key> user@host true`）。
-2. 在 `#/backend` 填写 SSH 字段，然后设置 `remote.repoPath`（服务器上已有 CA
-   checkout）或 `remote.installDir`（插件把本仓库 rsync 到该目录，排除 `.git`、
-   `.venv`、`.tmp`）。
-3. 运行 **Probe remote**：一次 SSH 往返报告 OS、Python/pip、rsync、libclang、路径
-   可写性与磁盘空间。
-4. 运行 **Install**：`probe → source → rsync → venv → pip install -r requirements.txt
-   → pip install -e . → ca version --json`。editable 安装是强制的：项目没有
-   package-data，wheel 会丢 `schema.sql` 与 UI 静态资源。安装是幂等的，步骤/日志经
-   `backend.installStatus` 轮询。
-5. 启动：Host 在远端 loopback 上运行 `ca serve`，并打开本地
+2. 在 `#/backend` 填写 SSH 字段（host/user/port/key path），用
+   **Install on remote host**、方式 **wheel（推荐）**，并选择 **Online (PyPI)** 或
+   **Offline (wheelhouse)**。安装器探测主机、校验 Python >= 3.11、上传内置 CA
+   wheel（离线时再上传 wheelhouse）、创建 `~/dsh-ca/backend/venv` 并安装 CA，
+   最后用 `ca version --json` 校验。安装目录可在表单覆盖；不需要 rsync 或源码
+   checkout。
+3. 在 `#/projects` 新建 project：`backend: remote`、服务器上的源码根与数据库
+   （或 shard 目录）路径、同一 SSH 目标。激活它：Host 配置后端并在远端 loopback
+   上运行 `ca serve`，同时打开本地
    `ssh -N -L <localPort>:127.0.0.1:<remotePort>` 隧道；健康检查与所有查询都走该
    隧道。停止时通过远端 PID 文件终止进程，因为只关本地 SSH 客户端并不能可靠停掉它。
+4. 安装/启动前可运行 **Probe remote**：报告 OS、Python/pip、libclang、路径可写性
+   与磁盘。**source tree (legacy)** 方式保留旧的 rsync + editable 流程（两端都需要
+   `rsync`）；优先用 wheel 模式。
 
 远程长索引通过 `#/tasks` 或 `ca_task` 执行，它们经 SSH 在远端运行 `ca`。
 
@@ -160,7 +214,8 @@ wheelhouse，表单也尚未暴露该选项；离线包是下一步工作。插�
 - `#/tasks` — 长任务列表、启动、增量日志与取消。
 - `#/projects` — 创建/编辑/删除/激活项目（名称、后端、源码根、`db`/`dbDir`、
   compile database、SSH 目标）。管理索引的主要入口。
-- `#/backend` — 后端状态、启动/停止/重启、本地/远程探测、远程安装、底层可编辑配置与
+- `#/backend` — 后端状态、启动/停止/重启、本地/远程探测、本地 **Install /
+  repair** 与远程 **Install on remote host**（wheel 在线/离线）、底层可编辑配置与
   `/api/health` 检查。
 - 函数页 → **Explain with AI** 面板，见下文。
 
@@ -205,20 +260,25 @@ resources、findings），并要求模型只依据这些证据、按请求语言
 
 ## 故障排查
 
-- **后端未配置** — 设置 `local.db`/`local.dbDir`（或远程 SSH + 数据库字段）后启动；
+- **后端未配置** — 先按上文安装后端，再在 `#/projects` 创建并激活 project；
   `ca_status` 会给出可操作的提示。
-- **数据库/仓库未找到** — 运行 **Probe local** 使用报告中的路径，或显式设置
-  `local.repoRoot`/`local.python`；先为仓库建立索引。
-- **远程安装失败** — 查看失败步骤
-  （`probe/source/rsync/venv/dependencies/editable/verify`）与日志；检查 rsync、
-  Python/venv 与磁盘。不要用 wheel 替换 editable 安装。
+- **数据库/仓库未找到** — 在 `#/backend` 运行 **Probe local**，把报告中的路径填进
+  project 表单或显式设置解释器；先为仓库建立索引。
+- **安装失败** — 在 `backend.installStatus` 查看失败步骤。wheel 步骤为
+  `probe/python/upload-wheel/upload-wheelhouse/venv/pip/verify`（本地为
+  `environment/wheel/venv/dependencies/verify`）；检查 SSH/scp、Python >= 3.11 +
+  venv、磁盘空间；离线 wheelhouse 必须与目标平台匹配。source 模式还需要 `rsync`。
+- **`UNSUPPORTED_PYTHON`** — 安装 Python 3.11+（Debian/Ubuntu 装
+  `python3.11-venv`，Windows 用 `py -3.11`），或在安装表单/`remote.python` 显式
+  指定解释器；Ubuntu 22.04 默认 Python 3.10。
+- **离线安装找不到 wheel** — wheelhouse 必须是目录（`.tar.gz` 先解压）、用
+  `--platform` 按目标平台生成，且包含 CA wheel 与全部依赖 wheel。
 - **隧道或健康检查失败** — 确认远端 `ca serve` 监听 loopback 且 SSH key 允许 `-L`
   转发；重启时残留的远端进程会按其 PID 文件清理。
 - **页面或工具缺失** — 重跑核验脚本并重新启用 bundle；Host 改动后重启 Harness，
   Client 改动后重建 `client.js` 并刷新页面。
 - **AI 解释不可用** — 在 Harness 中选择默认模型，或改用
   `ca_symbol`/`ca_facts`/`ca_source` 手工分析。
-
 - **未选择项目 / 迁移项目指向 CA 检出目录** — 打开 `#/projects`，把 `sourceRoot`
   改成真实源码树并选择 `db`/`dbDir`，然后激活；在你修改前迁移项目仍按旧目标工作。
 
