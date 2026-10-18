@@ -4,6 +4,47 @@ CA 读取仓库的**真实编译参数**，用 Clang 解析每个翻译单元，
 
 Status: **阶段 2 工程化已交付（2026-10-17）**。阶段 1 流水线已在 xv6-riscv（真实 RISC-V 交叉编译数据库）与 FreeRTOS-Kernel（真实 CMake 编译数据库）上完成端到端验证；阶段 2 增加增量重建（`--incremental`）、可安装的 `ca` 控制台命令、CI 门禁（pytest + 精度 F1 ≥ 0.9）与内核规模语料基准。精度与性能基线记录在 `benchmarks/results/`。
 
+## 安装
+
+CA 需要 **Python >= 3.11**；不需要编译——CA 是纯 Python，运行依赖
+（`clang`/`libclang`、`duckdb`、`pytest`）都是预编译 wheel。CLI 支持 macOS/Linux；
+DSH 插件还支持通过 SSH 使用远程 Linux 后端。DSH 桌面用户不需要手动准备 Python：
+插件会安装私有后端（见下）。
+
+### 作为 DeepSeek Harness 插件安装（推荐）
+
+1. 安装 DeepSeek Harness（桌面版或 `dsh web`），打开插件管理器。
+2. 从本仓库的 `dsh/` 目录安装 bundle（Plugins → 从本地目录安装 →
+   `<repo>/dsh`），然后启用 `@local/dsh-ca`。
+3. 从侧栏打开 CA 面板并添加项目：
+   - **本机**：点 **选择目录…**，选一个源码目录。插件会安装私有 CA venv，
+     在 `$DSH_HOME/plugin-data/dsh-ca/data/<name>/index.db` 建索引库、启动
+     `ca serve` 并激活项目。
+   - **远程 Linux**：选 **远程服务器**，填用户名、主机/IP、端口（22），选择密码
+     或密钥/免密，点 **连接**，浏览服务器并选择源码目录。插件会在服务器
+     `~/dsh-ca/backend` 安装后端、在 `~/.dsh-ca/data/<name>/index.db` 建库、
+     通过 SSH 隧道启动 `ca serve` 并激活项目。
+4. 在任务页运行 **index** 任务（agent 工具：`ca_task`）。新项目初始是空索引，
+   索引完成前查询没有结果。
+5. 默认在线安装（PyPI）。离线主机用
+   `node dsh/scripts/build-wheelhouse.mjs --platform <linux-x64|linux-arm64|macos-arm64|macos-x64|windows-x64> [--tar]`
+   生成对应平台的 wheelhouse，放到
+   `$DSH_HOME/plugin-data/dsh-ca/wheelhouse/<platform>/`（或把路径传给安装器），
+   插件会自动使用。产品 UI 没有后端配置页——后端生命周期全自动。密码只在临时
+   askpass helper 中使用，不持久化，DSH 重启后需重输；Windows 宿主请用密钥/agent。
+
+完整插件说明见 [docs/dsh-plugin.zh.md](docs/dsh-plugin.zh.md)。
+
+### CLI / 开发安装
+
+```sh
+scripts/bootstrap.sh        # .venv + 固定依赖 + editable CA + libclang 检查
+.venv/bin/ca version
+```
+
+`scripts/bootstrap.sh` 需要 Python 3.11+ 与网络（或已就绪的 pip 缓存）。索引与查询
+命令见 [docs/usage.zh.md](docs/usage.zh.md)。
+
 ## 流水线
 
 ```text
@@ -99,8 +140,8 @@ SVG 调用图、回调注册事实与统计）。默认绑定 `127.0.0.1:8766`�
 
 `dsh/` 把 CA 打包为 DeepSeek Harness bundle（`@local/dsh-ca`）：在 Harness Web UI
 内提供完整 CA 页面、给 agent 的 12 个原生 `ca_*` 工具、本地或远程 Linux `ca serve`
-后端、长索引任务，以及由会话模型驱动的 AI 解释（CA 本身保持无 LLM）。项目把一份源码根、一个数据库（或 shard 目录）与一个后端位置绑定，用户在 CA
-面板里手动创建。插件是纯增量：
+后端、长索引任务，以及由会话模型驱动的 AI 解释（CA 本身保持无 LLM）。项目把一份源码根、一个数据库（或 shard 目录）与一个后端位置绑定；用户只需在本机
+选目录，或登录服务器后选一个目录，后端安装与准备全自动。插件是纯增量：
 CLI、`ca ui`、`ca mcp` 与 MCP 协议均不变，插件代码也不改变 CA 的测试基线。通过
 Harness plugin manager 从本地 `dsh/` 目录安装；安装、配置、远程后端、UI 页面、工具、
 故障排查与安全边界见 [docs/dsh-plugin.zh.md](docs/dsh-plugin.zh.md)。

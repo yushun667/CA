@@ -13,6 +13,56 @@ re-indexing (`--incremental`), an installable `ca` console script, a CI gate
 (pytest + accuracy F1 ≥ 0.9) and a kernel-scale corpus benchmark. Accuracy and
 performance baselines are recorded under `benchmarks/results/`.
 
+## Installation
+
+CA needs **Python >= 3.11**; nothing is compiled — CA is pure Python and the
+runtime dependencies (`clang`/`libclang`, `duckdb`, `pytest`) are prebuilt
+wheels. The CLI works on macOS/Linux; the DSH plugin also supports a Linux
+remote backend selected over SSH. A DSH desktop user does not need a manual
+Python setup: the plugin installs a private backend for you (see below).
+
+### As a DeepSeek Harness plugin (recommended)
+
+1. Install DeepSeek Harness (desktop app or `dsh web`) and open its plugin
+   manager.
+2. Install the bundle from this repository's `dsh/` directory
+   (Plugins → install from local directory → `<repo>/dsh`), then enable
+   `@local/dsh-ca`.
+3. Open the CA panel from the sidebar and add a project:
+   - **Local**: choose **Choose directory…**, pick a source tree. The plugin
+     installs a private CA venv, creates the SQLite index under
+     `$DSH_HOME/plugin-data/dsh-ca/data/<name>/index.db`, starts `ca serve` and
+     activates the project.
+   - **Remote Linux**: choose **Remote server**, enter username, host/IP, port
+     (22), and a password or a key/agent (免密), press **Connect**, browse the
+     server and choose the source directory. The plugin installs the backend in
+     `~/dsh-ca/backend` on the server, creates
+     `~/.dsh-ca/data/<name>/index.db`, starts `ca serve` behind an SSH tunnel and
+     activates the project.
+4. Run an **index** task on the Tasks page (agent tool: `ca_task`). A freshly
+   created project starts with an empty index; queries return nothing until
+   indexing finishes.
+5. Installations are online (PyPI) by default. For an air-gapped host, build a
+   per-platform wheelhouse with
+   `node dsh/scripts/build-wheelhouse.mjs --platform <linux-x64|linux-arm64|macos-arm64|macos-x64|windows-x64> [--tar]`
+   and place it under `$DSH_HOME/plugin-data/dsh-ca/wheelhouse/<platform>/` (or
+   pass the path to the installer); the plugin uses it automatically. No
+   backend configuration page exists — backend lifecycle is automatic. Passwords
+   are transient (askpass helper), never persisted, so they are re-entered after
+   a restart; Windows hosts should use key/agent authentication.
+
+See [docs/dsh-plugin.md](docs/dsh-plugin.md) for the full plugin guide.
+
+### CLI / development install
+
+```sh
+scripts/bootstrap.sh        # .venv + pinned deps + editable CA + libclang check
+.venv/bin/ca version
+```
+
+`scripts/bootstrap.sh` requires Python 3.11+ and network access (or a populated
+pip cache). See [docs/usage.md](docs/usage.md) for indexing and query commands.
+
 ## Pipeline
 
 ```text
