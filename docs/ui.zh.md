@@ -58,24 +58,13 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
 - `GET /api/ui`（本地实现）返回 `{mode:"remote", serve_url, features}`；旧的内嵌
   server 返回 `{mode:"embedded"}`。
 - 查询端点（`/api/search`、`/api/function`、`/api/graph`、`/api/cfg`、
-  `/api/source`、`/api/explain` 等）原样代理；非白名单 POST 返回
+  `/api/source` 等）原样代理；非白名单 POST 返回
   `405 READ_ONLY`；查询代理超时 30s。后端不可达时 UI 返回统一错误信封
   `502 SERVE_UNAVAILABLE`。
 - `GET /events` 仍可经代理**流式透传**（不缓冲、heartbeat、`Last-Event-ID` 重放），
-  供其它 job 类型/未来客户端使用；解释标签不再订阅它。
+  供其它 job 类型/未来客户端使用。
 - 顶栏连接徽章显示 连接中/已连接/重连中/已断开，由 `/api/ui` 与 API 请求成功/失败
   推导；点击徽章可手动重试连接。前端不再使用 EventSource。
-- **AI 解释改为同步**：打开解释分区时发送
-  `POST /api/explain/agent {symbol, lang}` 并等待结果（前端 60s 超时，保留
-  loading/error/重试/复制）。后端通过 MCP `sampling/createMessage` 向已连接的
-  MCP agent 反向请求回答；解释**不创建 job/queue/claim**。agent 回答时 provider
-  徽章显示 `agent` 与 sampling agent 的模型名；没有连接 agent 或请求失败时，后端
-  返回 HTTP 200 的 `heuristic` 解释、`fallback:true` 与 `fallback_reason`（例如
-  `no connected MCP sampling agent session` 或超时），UI 显示本地规则徽章与回退
-  说明。UI 通过 `/api/health` 的 `features.sampling_explain` 判断端点能力；旧版
-  serve 无该端点时回退 `GET /api/explain`（服务端 heuristic fallback），功能不中断。
-  已连接的 sampling agent 与待处理请求可在 `/api/health` 的
-  `sampling:{sessions,sampling_capable,pending_requests,timeout_seconds}` 查看。
 - 全程只读，UI 代理不会写索引。远程 `--serve-url` 建议仅用回环或可信隧道；本里程碑
   后端无认证。
 
@@ -85,7 +74,7 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
 分享某个函数：
 
 - `#/fn/<名字或 id>/<tab>` —— 函数页，并展开指定的手风琴分区（`overview`、
-  `branches`、`returns`、`resources`、`findings`、`explain`）；省略 `/<tab>`
+  `branches`、`returns`、`resources`、`findings`）；省略 `/<tab>`
   表示所有分区折叠
 - `#/stats` —— 数据库统计
 - `#/callbacks` —— 跨 TU 回调注册事实
@@ -99,7 +88,7 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
 - **函数页布局** —— 顶部是当前打开函数的**完整源码**（行号、只读、语法高亮、
   可折叠/滚动，带 `file:line`、shard 与函数行范围高亮），操作调用图时**固定不变**。
   下方左侧是**可折叠手风琴侧栏**，列出 `overview`、`branches`、`returns`、
-  `resources`、`findings`、`explain` 并带计数徽章：点击标签会在**侧栏内
+  `resources`、`findings` 并带计数徽章：点击标签会在**侧栏内
   就地展开**该分区内容（再次点击或点击其他标签收起），内容在侧栏内滚动，折叠状态记在
   `localStorage`。**调用图常驻中间列**（方向/深度/重建控件始终可用）。**右侧面板
   只显示所选调用图节点的源码**（未选中时显示提示），tab 内容与 CFG 不再显示在右侧。
@@ -112,10 +101,6 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
 - **概览** —— 签名、返回类型、file:line 范围、linkage、USR/id/TU id 与参数；用徽章
   区分 `deep facts` 与 `deep facts pending`（base/L0 数据库在运行 `ca ensure-deep`
   之前只有符号和调用事实）。
-- **AI 解释** —— 对当前打开函数按需生成只读解释：用途、关键分支与错误路径、资源
-  获取/释放、调用关系、findings 风险与阅读建议。打开该分区时懒加载，跟随 UI 语言，
-  可刷新、可复制；provider 徽章默认显示“本地规则”，配置 LLM 后端时显示模型名
-  （见 [AI 解释后端](#ai-解释后端)）。
 - **调用图** —— SVG 遍历（方向 `both`/正向/反向，深度 1–6），直接边实线，候选回调
   边虚线并标注 kind 与 confidence，环为红色。**单击**节点（或按 Enter）会在
   **右侧面板**显示该函数的**完整源码**，不离开页面：行号、`file:line` 头部、
@@ -158,29 +143,6 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
 - 宽度小于 1100px 时禁用拖拽，三块区域改为上下堆叠（侧栏变为整宽抽屉），保证触屏
   可用。
 
-## AI 解释后端
-
-`GET /api/explain?symbol=<名字或 id>&lang=en|zh` 只读，响应形状固定：
-`{symbol, function, provider, model, llm_configured, language, explanation,
-facts_summary, cached, fallback_reason, elapsed_ms}`。
-
-- **默认：本地规则解释。** 未配置 LLM 时不会发起任何网络请求，解释完全由索引事实
-  生成，并在 UI 中标注 `provider: "heuristic"` / “本地规则”，不会伪装成 AI 生成。
-- **可选 OpenAI 兼容 LLM。** 在启动 `ca ui` 前配置环境变量：
-
-  | 变量 | 含义 |
-  |---|---|
-  | `CA_LLM_BASE_URL` | OpenAI 兼容 API 的 base URL，例如 `http://127.0.0.1:8000/v1`（服务会 POST 到 `<base>/chat/completions`） |
-  | `CA_LLM_API_KEY` | Bearer token（本地服务可省略） |
-  | `CA_LLM_MODEL` | 请求中使用的模型名 |
-  | `CA_LLM_TIMEOUT` | 请求超时秒数（默认 30，上限 120） |
-
-  提示词包含函数元信息、索引事实与最多 400 行源码，并要求模型用 UI 语言回答、不得编造
-  事实。超时、HTTP 或解析错误时回退本地规则解释，仍返回 HTTP 200 并附带
-  `fallback_reason`；服务启动时不会联网（配置在每个请求读取）。
-- **隐私。** 配置 LLM 后，所选函数的源码与索引事实会发送到该服务；不设置 `CA_LLM_*`
-  则全部保持在本地。该端点只读取索引与源码树，绝不写数据库。
-
 ## 语言
 
 界面支持中英双语；数据本身不做翻译——函数名、文件路径、签名、代码片段与原始字段值
@@ -213,8 +175,6 @@ facts_summary, cached, fallback_reason, elapsed_ms}`。
 | `GET /api/callbacks` | `path`（前缀）、`field`、`module`、`kind`、`limit`、`offset` | 注册事实（目标、evidence、confidence） |
 | `GET /api/source` | `symbol`（必填）、`context`（0–10，默认 3） | 只读源码窗口：`{symbol, function{id,name,qualified_name,kind,file,line,end_line,signature}, file, language, start, end, total_lines, function_start, function_end, context, truncated, lines[{line,text}], shard, path, repo_root}` |
 | `GET /api/cfg` | `symbol`（必填） | 只读控制流图：`{symbol, function{id,name,qualified_name,kind,file,line,end_line}, deep_ready, shard, federated, blocks[], edges[], branches[], truncated, stats}`；blocks 含 `index/kind/terminator/line/end_line/statement_count`、分支标注（`condition`、`branch_kind`、`true_block`、`false_block`）与 `is_entry`/`is_exit`；edges 含展示用 `label`（分支边为 `true`/`false`） |
-| `GET /api/explain` | `symbol`（必填）、`lang=en\|zh` | 只读函数解释：`{symbol, function, provider, model, llm_configured, language, explanation, facts_summary, cached, fallback_reason, elapsed_ms}`（默认本地规则，可选配置 LLM） |
-| `POST /api/explain/agent` | JSON body `{symbol, lang}`（也支持 GET query 或 `/api/explain?mode=agent` 别名） | 远程模式同步 agent 解释：`{symbol, function, provider, model, language, explanation, evidence?, fallback, fallback_reason?, elapsed_ms, facts_summary?}`；后端经 MCP `sampling/createMessage` 询问已连接 agent，provider 为 `agent` 并带其模型名；无 agent/失败 → HTTP 200 `provider:"heuristic"`、`fallback:true`、`fallback_reason`；未知符号 404；旧 serve → UI 回退 `GET /api/explain` |
 | `GET /api/branches`、`/api/assignments`、`/api/returns`、`/api/resources` | `symbol`（必填） | 按函数的事实行（附加的便捷端点） |
 
 `/api/cfg` 通过常规详情查询解析函数，返回其 CFG 块/边以及解码后的分支行（联邦模式

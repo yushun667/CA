@@ -66,7 +66,6 @@
 
   const HISTORY_KEY = "ca.ui.fnHistory";
   const HISTORY_LIMIT = 50;
-  const EXPLAIN_TIMEOUT_MS = 60000;
 
   function readStoredHistory() {
     try {
@@ -156,15 +155,11 @@
     cfgLoading: false,
     cfgError: "",
     cfgZoom: 1,
-    explain: null,
-    explainLoading: false,
-    explainError: "",
     sidebarCollapsed: readStoredFlag(SIDEBAR_KEY),
     layout: readStoredLayout(),
     // ca serve thin-client mode: embedded (--db) vs remote (--serve-url).
     mode: "embedded",
     serveUrl: "",
-    features: { jobs: false, sse: false },
     connection: "embedded",
   };
 
@@ -307,31 +302,16 @@
   }
 
   // ------------------------------------------------------------------- api
-  async function api(path, options = {}) {
-    const timeoutMs = Number(options.timeoutMs) || 0;
-    const controller =
-      timeoutMs && typeof AbortController !== "undefined"
-        ? new AbortController()
-        : null;
-    const timer = controller
-      ? window.setTimeout(() => controller.abort(), timeoutMs)
-      : null;
+  async function api(path) {
     let response;
     try {
       response = await fetch(path, {
         headers: { Accept: "application/json" },
-        signal: controller ? controller.signal : undefined,
       });
     } catch (error) {
-      if (timer) window.clearTimeout(timer);
       markConnection(false, 0);
-      const message =
-        error && error.name === "AbortError"
-          ? t("error.timeout")
-          : error.message;
-      throw new Error(t("error.unreachable", { message }));
+      throw new Error(t("error.unreachable", { message: error.message }));
     }
-    if (timer) window.clearTimeout(timer);
     markConnection(true, response.status);
     let payload = null;
     try {
@@ -351,67 +331,16 @@
     return payload.data;
   }
 
-  async function apiPost(path, payload, options = {}) {
-    const timeoutMs = Number(options.timeoutMs) || 0;
-    const controller =
-      timeoutMs && typeof AbortController !== "undefined"
-        ? new AbortController()
-        : null;
-    const timer = controller
-      ? window.setTimeout(() => controller.abort(), timeoutMs)
-      : null;
-    let response;
-    try {
-      response = await fetch(path, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload || {}),
-        signal: controller ? controller.signal : undefined,
-      });
-    } catch (error) {
-      if (timer) window.clearTimeout(timer);
-      markConnection(false, 0);
-      const message =
-        error && error.name === "AbortError"
-          ? t("error.timeout")
-          : error.message;
-      throw new Error(t("error.unreachable", { message }));
-    }
-    if (timer) window.clearTimeout(timer);
-    markConnection(true, response.status);
-    let body = null;
-    try {
-      body = await response.json();
-    } catch (_error) {
-      body = null;
-    }
-    if (!body || body.ok !== true) {
-      const detail =
-        body && body.error
-          ? `${body.error.code}: ${body.error.message}`
-          : `HTTP ${response.status}`;
-      const wrapped = new Error(detail);
-      wrapped.status = response.status;
-      throw wrapped;
-    }
-    return body.data;
-  }
-
   // ------------------------------------------------- remote mode / event stream
   async function loadUiMode() {
     try {
       const info = await api("/api/ui");
       state.mode = info.mode === "remote" ? "remote" : "embedded";
       state.serveUrl = info.serve_url || "";
-      state.features = info.features || { jobs: false, sse: false };
     } catch (_error) {
       // Older embedded UI servers do not expose /api/ui.
       state.mode = "embedded";
       state.serveUrl = "";
-      state.features = { jobs: false, sse: false };
     }
     if (state.mode === "embedded") {
       state.connection = "embedded";
@@ -464,25 +393,6 @@
     element.className = `conn-badge ${state.connection}`;
     element.textContent = t(keys[state.connection] || "conn.connecting");
     element.title = `${state.serveUrl || ""} · ${t("conn.retry")}`;
-  }
-
-
-  function normalizeExplainResult(result, job) {
-    const payload = result || {};
-    const kind = payload.provider || "agent";
-    return {
-      symbol: (job && (job.symbol || (job.payload || {}).symbol)) || "",
-      provider: kind,
-      model: payload.model || (kind === "agent" ? "mcp-agent" : ""),
-      language: payload.language || currentLanguage(),
-      explanation: payload.explanation || payload.summary || "",
-      evidence: Array.isArray(payload.evidence) ? payload.evidence : [],
-      fallback: Boolean(payload.fallback),
-      facts_summary: payload.facts_summary || null,
-      fallback_reason: payload.fallback_reason || "",
-      elapsed_ms: Number(payload.elapsed_ms) || 0,
-      cached: Boolean(payload.cached),
-    };
   }
 
 
@@ -668,9 +578,6 @@
       state.cfgLoading = false;
       state.cfgError = "";
       state.cfgZoom = 1;
-      state.explain = null;
-      state.explainLoading = false;
-      state.explainError = "";
       state.tab = tab;
       state.route = "function";
       if (!options.hash) {
@@ -719,7 +626,6 @@
     "returns",
     "resources",
     "findings",
-    "explain",
   ];
 
   function normalizeTab(tab) {
@@ -749,7 +655,6 @@
       ["returns", t("tab.returns"), (detail.returns || []).length],
       ["resources", t("tab.resources"), (detail.resource_ops || []).length],
       ["findings", t("tab.findings"), (detail.findings || []).length],
-      ["explain", t("tab.explain"), null],
     ];
     const accordionHtml = tabs
       .map(([id, label, count]) => {
@@ -863,9 +768,6 @@
     const body = document.getElementById(`accordion-body-${state.tab}`);
     if (!body) return;
     switch (state.tab) {
-      case "explain":
-        renderExplainSection(body);
-        break;
       case "branches":
         renderCfgSection(body);
         break;
@@ -1165,160 +1067,6 @@
   }
 
   // ----------------------------------------------------------------- graph
-  function currentLanguage() {
-    if (window.CA_I18N && typeof window.CA_I18N.getLanguage === "function") {
-      return window.CA_I18N.getLanguage();
-    }
-    return "en";
-  }
-
-  async function fetchExplain(symbol, language) {
-    const query = `symbol=${encodeURIComponent(
-      symbol
-    )}&lang=${encodeURIComponent(language)}`;
-    const features = state.features || {};
-    const agentEndpointKnownMissing = features.sampling_explain === false;
-    if (state.mode === "remote" && !agentEndpointKnownMissing) {
-      try {
-        return await apiPost(
-          "/api/explain/agent",
-          { symbol, lang: language },
-          { timeoutMs: EXPLAIN_TIMEOUT_MS }
-        );
-      } catch (error) {
-        const status = error && error.status;
-        // Old serve builds without the endpoint report 404/405/501 and do not
-        // advertise features.sampling_explain; a 404 on a sampling-capable
-        // serve is a real error (e.g. unknown symbol) and must be surfaced.
-        const oldServe =
-          features.sampling_explain === undefined &&
-          (status === 404 || status === 405 || status === 501);
-        if (!oldServe && status !== 405 && status !== 501) throw error;
-      }
-    }
-    return api(`/api/explain?${query}`, { timeoutMs: EXPLAIN_TIMEOUT_MS });
-  }
-
-  async function loadExplain(force = false) {
-    const symbol = state.selectedSymbol;
-    if (!symbol || state.explainLoading) return;
-    const language = currentLanguage();
-    state.explainLoading = true;
-    state.explainError = "";
-    if (force || (state.explain && state.explain.language !== language)) {
-      state.explain = null;
-    }
-    renderAccordionContent();
-    try {
-      const data = await fetchExplain(symbol, language);
-      if (state.selectedSymbol !== symbol) return;
-      state.explain = normalizeExplainResult(data, { symbol });
-    } catch (error) {
-      if (state.selectedSymbol !== symbol) return;
-      state.explainError = friendlyError(error);
-    } finally {
-      if (state.selectedSymbol === symbol) {
-        state.explainLoading = false;
-        if (state.tab === "explain") renderAccordionContent();
-      }
-    }
-  }
-
-  function renderExplainSection(panel) {
-    const title = `<h3>${escapeHtml(t("tab.explain"))}</h3>`;
-    if (state.explainError) {
-      panel.innerHTML = `<section class="section"><div class="section-head">${title}</div><div class="graph-empty">${escapeHtml(
-        `${t("explain.error")}: ${state.explainError}`
-      )}</div><div class="source-actions"><button type="button" class="ghost" id="explain-refresh">${escapeHtml(
-        t("explain.refresh")
-      )}</button><button type="button" class="ghost" id="explain-retry">${escapeHtml(
-        t("explain.retry")
-      )}</button></div></section>`;
-      return;
-    }
-    const data = state.explain;
-    const language = currentLanguage();
-    if (state.explainLoading || !data || data.language !== language) {
-      panel.innerHTML = `<section class="section"><div class="section-head">${title}<span class="note">${escapeHtml(
-        t("explain.loading")
-      )}</span></div><div class="view-loading">${escapeHtml(
-        t("explain.loading")
-      )}</div></section>`;
-      if (!state.explainLoading) loadExplain();
-      return;
-    }
-    const providerKind = data.provider || "agent";
-    const providerLabel =
-      providerKind === "llm"
-        ? data.model || t("explain.ai")
-        : providerKind === "agent"
-        ? data.model || t("explain.agent")
-        : t("explain.heuristic");
-    const providerBadge = badge(
-      providerLabel,
-      providerKind === "heuristic" ? "warning" : "definition"
-    );
-    const evidence =
-      Array.isArray(data.evidence) && data.evidence.length
-        ? `<div class="explain-evidence"><strong>${escapeHtml(
-            t("explain.evidence")
-          )}</strong><ul>${data.evidence
-            .slice(0, 10)
-            .map((item) => `<li>${escapeHtml(String(item))}</li>`)
-            .join("")}</ul></div>`
-        : "";
-    const facts = data.facts_summary || {};
-    const meta = t("explain.meta", {
-      provider: providerLabel,
-      ms: Math.round(Number(data.elapsed_ms) || 0),
-    });
-    const fallback = data.fallback_reason
-      ? `<p class="empty">${escapeHtml(
-          t("explain.fallback", { message: data.fallback_reason })
-        )}</p>`
-      : "";
-    const disclaimer =
-      providerKind === "heuristic"
-        ? `<p class="empty">${escapeHtml(t("explain.disclaimer"))}</p>`
-        : "";
-    const sourceInfo = facts.source || {};
-    const sourceNote = sourceInfo.available
-      ? `${sourceInfo.file}:${sourceInfo.line} · ${sourceInfo.line_count} ${t(
-          "explain.sourceLines"
-        )}`
-      : t("explain.sourceUnavailable");
-    panel.innerHTML = `<section class="section">
-      <div class="section-head">${title}<div class="explain-actions">${providerBadge}<button type="button" class="ghost" id="explain-refresh">${escapeHtml(
-        t("explain.refresh")
-      )}</button><button type="button" class="ghost" id="explain-copy">${escapeHtml(
-        t("explain.copy")
-      )}</button></div></div>
-      <div class="explain-meta">${escapeHtml(meta)} · ${escapeHtml(sourceNote)}</div>
-      ${fallback}${disclaimer}${evidence}
-      <pre class="explain-body">${escapeHtml(data.explanation || "")}</pre>
-    </section>`;
-  }
-
-  async function copyExplain() {
-    if (!state.explain || !state.explain.explanation) return;
-    const text = state.explain.explanation;
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const helper = document.createElement("textarea");
-        helper.value = text;
-        document.body.appendChild(helper);
-        helper.select();
-        document.execCommand("copy");
-        document.body.removeChild(helper);
-      }
-      setStatus(t("explain.copied"), "ok");
-    } catch (error) {
-      setStatus(friendlyError(error), "error");
-    }
-  }
-
   function renderGraphSurface() {
     const container = document.getElementById("fn-graph");
     if (!container) return;
@@ -2831,9 +2579,6 @@
   async function loadHealth() {
     try {
       const health = await api("/api/health");
-      if (health && health.features && typeof health.features === "object") {
-        state.features = { ...state.features, ...health.features };
-      }
       if (health && health.db_ok === undefined) {
         health.db_ok = (health.status || "ok") === "ok";
       }
@@ -2914,17 +2659,6 @@
     }
     if (event.target.closest("#conn-status")) {
       retryConnection();
-      return;
-    }
-    if (
-      event.target.closest("#explain-refresh") ||
-      event.target.closest("#explain-retry")
-    ) {
-      loadExplain(true);
-      return;
-    }
-    if (event.target.closest("#explain-copy")) {
-      copyExplain();
       return;
     }
     if (event.target.closest("#source-collapse")) {
@@ -3168,26 +2902,11 @@
 
   // Small read-only hooks so tests can exercise the jump history without a DOM.
   window.CA_UI_TEST = {
-    normalizeExplainResult,
-    fetchExplain,
-    setTestMode: (mode) => {
-      state.mode = mode === "remote" ? "remote" : "embedded";
-    },
-    setTestFeatures: (features) => {
-      state.features = { ...state.features, ...(features || {}) };
-    },
     pushFunctionHistory,
     popFunctionHistory,
     clearFunctionHistory,
     historyLength: () => functionHistory.length,
     historyEntries: () => functionHistory.map((entry) => ({ ...entry })),
-    explainState: () => ({
-      mode: state.mode,
-      connection: state.connection,
-      explain: state.explain ? { ...state.explain } : null,
-      explainError: state.explainError,
-      explainLoading: state.explainLoading,
-    }),
   };
 
   if (document.readyState === "loading") {

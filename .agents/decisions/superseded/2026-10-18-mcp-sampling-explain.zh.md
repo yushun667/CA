@@ -1,7 +1,10 @@
 # 决策：用 MCP sampling 做同步 explain（无后端 LLM、无 job 队列）
 
-Status: active
+Status: superseded
 Date: 2026-10-18
+
+Superseded by: [2026-10-18-remove-ai-explain.zh.md](../active/2026-10-18-remove-ai-explain.zh.md)
+（功能已整体移除，不再保留 sampling/explain 路径）。
 
 ## 背景
 

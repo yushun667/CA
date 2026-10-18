@@ -72,7 +72,7 @@ def test_state_database_open_creates_v5_tables(tmp_path) -> None:
     # reopen keeps existing state (idempotent schema)
     queue = JobQueue.open(path)
     try:
-        job_id = queue.create_job("explain", {"symbol": "x"})
+        job_id = queue.create_job("batch", {"symbol": "x"})
         assert queue.get_job(job_id)["status"] == "queued"
     finally:
         queue.close()
@@ -82,8 +82,8 @@ def test_sqlite_store_state_database_without_finalize(tmp_path) -> None:
     store = SqliteStore(tmp_path / "state.db")
     store.open()
     try:
-        job_id = store.create_job("explain", {"symbol": "proc_alloc"})
-        assert store.get_job(job_id)["kind"] == "explain"
+        job_id = store.create_job("batch", {"symbol": "proc_alloc"})
+        assert store.get_job(job_id)["kind"] == "batch"
         claimed = store.claim_job(claimed_by="worker-1", lease_seconds=30)
         assert claimed is not None and claimed["id"] == job_id
         assert store.complete_job(job_id, {"text": "ok"}, claimed_by="worker-1")
@@ -96,7 +96,7 @@ def test_sqlite_store_state_database_without_finalize(tmp_path) -> None:
 
 
 def test_create_get_list(queue) -> None:
-    first = queue.create_job("explain", {"symbol": "alpha", "nested": [1, 2]})
+    first = queue.create_job("batch", {"symbol": "alpha", "nested": [1, 2]})
     second = queue.create_job("ensure_deep", None)
     explicit = queue.create_job("update", {"files": ["a.c"]}, job_id="job:custom")
     assert {first, second, explicit} == {job["id"] for job in queue.list_jobs(limit=10)}
@@ -113,7 +113,7 @@ def test_create_get_list(queue) -> None:
     assert queue.get_job(second)["payload"] == {}
     assert queue.get_job("job:missing") is None
 
-    listed = queue.list_jobs(kind="explain")
+    listed = queue.list_jobs(kind="batch")
     assert [row["id"] for row in listed] == [first]
     assert [row["id"] for row in queue.list_jobs(status="queued", limit=10)] == [
         first,
@@ -127,12 +127,12 @@ def test_create_get_list(queue) -> None:
     with pytest.raises(ValueError):
         queue.create_job("")
     with pytest.raises(ValueError):
-        queue.create_job("explain", job_id=first)
+        queue.create_job("batch", job_id=first)
 
 
 def test_claim_is_atomic_and_ordered(queue) -> None:
-    first = queue.create_job("explain", {"n": 1})
-    second = queue.create_job("explain", {"n": 2})
+    first = queue.create_job("batch", {"n": 1})
+    second = queue.create_job("batch", {"n": 2})
     claimed = queue.claim_job(claimed_by="w1", lease_seconds=30)
     assert claimed is not None
     assert claimed["id"] == first  # oldest first
@@ -146,16 +146,16 @@ def test_claim_is_atomic_and_ordered(queue) -> None:
     assert queue.claim_job(claimed_by="w3", lease_seconds=30) is None
     # Kind filter only claims matching jobs.
     third = queue.create_job("update", {})
-    queue.create_job("explain", {})
+    queue.create_job("batch", {})
     filtered = queue.claim_job("update", claimed_by="w4", lease_seconds=30)
     assert filtered is not None and filtered["id"] == third
-    assert queue.claim_job(claimed_by="w5", lease_seconds=30)["kind"] == "explain"
+    assert queue.claim_job(claimed_by="w5", lease_seconds=30)["kind"] == "batch"
     with pytest.raises(ValueError):
         queue.claim_job(claimed_by="w6", lease_seconds=0)
 
 
 def test_complete_fail_ownership_and_idempotency(queue) -> None:
-    job_id = queue.create_job("explain", {"symbol": "x"})
+    job_id = queue.create_job("batch", {"symbol": "x"})
     claimed = queue.claim_job(claimed_by="w1", lease_seconds=30)
     assert claimed is not None
     assert queue.complete_job(job_id, {"answer": 42}, claimed_by="other") is False
@@ -168,7 +168,7 @@ def test_complete_fail_ownership_and_idempotency(queue) -> None:
     assert queue.complete_job(job_id, {}, claimed_by="w1") is False
     assert queue.fail_job(job_id, "late") is False  # not running anymore
 
-    failing = queue.create_job("explain", {})
+    failing = queue.create_job("batch", {})
     assert queue.claim_job(claimed_by="w1", lease_seconds=30)["id"] == failing
     assert queue.fail_job(failing, "boom", claimed_by="w2") is False
     assert queue.fail_job(failing, "boom", claimed_by="w1") is True
@@ -203,7 +203,7 @@ def test_requeue_and_attempts(queue) -> None:
 
 
 def test_expired_lease_is_requeued_and_recovered(queue) -> None:
-    job_id = queue.create_job("explain", {})
+    job_id = queue.create_job("batch", {})
     claimed = queue.claim_job(claimed_by="dead-worker", lease_seconds=30)
     assert claimed is not None
     # Simulate the worker dying: lease expires in the past.
@@ -231,7 +231,7 @@ def test_expired_lease_is_requeued_and_recovered(queue) -> None:
 
 
 def test_renew_lease(queue) -> None:
-    job_id = queue.create_job("explain", {})
+    job_id = queue.create_job("batch", {})
     claimed = queue.claim_job(claimed_by="w1", lease_seconds=5)
     assert claimed is not None
     assert queue.renew_job_lease(job_id, claimed_by="w2", lease_seconds=30) is False
@@ -243,8 +243,8 @@ def test_renew_lease(queue) -> None:
 
 
 def test_event_replay_for_sse(queue) -> None:
-    first = queue.create_job("explain", {"n": 1})
-    second = queue.create_job("explain", {"n": 2})
+    first = queue.create_job("batch", {"n": 1})
+    second = queue.create_job("batch", {"n": 2})
     claimed = queue.claim_job(claimed_by="w1", lease_seconds=30)
     queue.complete_job(first, {"ok": True}, claimed_by="w1")
     assert claimed is not None and claimed["id"] == first
@@ -277,7 +277,7 @@ def test_event_replay_for_sse(queue) -> None:
 
 def test_prune_events(queue) -> None:
     for index in range(20):
-        queue.create_job("explain", {"n": index})
+        queue.create_job("batch", {"n": index})
     assert queue.latest_job_event_id() == 20
     deleted = queue.prune_job_events(keep_last=5)
     assert deleted == 15
@@ -288,15 +288,15 @@ def test_prune_events(queue) -> None:
 
 
 def test_stats_by_kind_and_status(queue) -> None:
-    queue.create_job("explain", {})
-    queue.create_job("explain", {})
+    queue.create_job("batch", {})
+    queue.create_job("batch", {})
     queue.create_job("prewarm", {})
-    claimed = queue.claim_job("explain", claimed_by="w", lease_seconds=30)
+    claimed = queue.claim_job("batch", claimed_by="w", lease_seconds=30)
     queue.fail_job(claimed["id"], "err", claimed_by="w")
     stats = queue.job_stats()
     assert stats["total"] == 3
     assert stats["by_status"] == {"queued": 2, "running": 0, "done": 0, "failed": 1}
-    assert stats["by_kind"] == {"explain": 2, "prewarm": 1}
+    assert stats["by_kind"] == {"batch": 2, "prewarm": 1}
     assert queue.count_jobs() == 3
     assert queue.count_jobs(kind="prewarm") == 1
     assert queue.count_jobs(status="failed") == 1
@@ -305,7 +305,7 @@ def test_stats_by_kind_and_status(queue) -> None:
 def test_concurrent_claims_have_single_winner(tmp_path) -> None:
     state_path = tmp_path / "state.db"
     setup = JobQueue.open(state_path)
-    job_ids = {setup.create_job("explain", {"n": index}) for index in range(40)}
+    job_ids = {setup.create_job("batch", {"n": index}) for index in range(40)}
     setup.close()
 
     claimed_ids: list[str] = []
@@ -350,7 +350,7 @@ def test_old_database_upgrade_in_place(tmp_path) -> None:
     db_path = tmp_path / "upgraded.db"
     store = SqliteStore(db_path)
     store.open()
-    store.create_job("explain", {"symbol": "x"})
+    store.create_job("batch", {"symbol": "x"})
     store.close()
     # Simulate a v4 (pre-jobs) store database.
     connection = sqlite3.connect(db_path)
@@ -374,7 +374,7 @@ def test_old_database_upgrade_in_place(tmp_path) -> None:
         assert {"idx_jobs_status_created", "idx_job_events_job"} <= indexes
         meta = dict(reopened.connection.execute("SELECT key, value FROM meta"))
         assert meta["store_schema_version"] == "5"
-        job_id = reopened.create_job("explain", {"symbol": "after-upgrade"})
+        job_id = reopened.create_job("batch", {"symbol": "after-upgrade"})
         assert reopened.claim_job(claimed_by="w", lease_seconds=30)["id"] == job_id
         assert reopened.complete_job(job_id, {"ok": True}, claimed_by="w") is True
         reopened.finalize()  # idempotent on the upgraded database
@@ -386,7 +386,7 @@ def test_jobs_join_outer_store_transaction(tmp_path) -> None:
     store.open()
     try:
         store.begin()
-        job_id = store.create_job("explain", {"symbol": "tx"})
+        job_id = store.create_job("batch", {"symbol": "tx"})
         store.commit()
         assert store.get_job(job_id)["status"] == "queued"
         assert store.stats()["tables"]["jobs"] == 1

@@ -15,6 +15,6 @@
 - 2026-10-18-readonly-web-ui.md、2026-10-18-readonly-web-ui.zh.md、2026-10-18-readonly-web-ui.i18n.yaml
 
 - 2026-10-18-unified-serve-backend.md、2026-10-18-unified-serve-backend.zh.md、2026-10-18-unified-serve-backend.i18n.yaml
-新增/修改决策追加一行；完全取代的移至 `../superseded/` 并更新链接。
+- 2026-10-18-remove-ai-explain.md、2026-10-18-remove-ai-explain.zh.md、2026-10-18-remove-ai-explain.i18n.yaml
 
-- 2026-10-18-mcp-sampling-explain.md、2026-10-18-mcp-sampling-explain.zh.md、2026-10-18-mcp-sampling-explain.i18n.yaml
+新增/修改决策追加一行；完全取代的移至 `../superseded/` 并更新链接。

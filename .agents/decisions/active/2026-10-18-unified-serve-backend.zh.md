@@ -48,7 +48,7 @@ job 使用 storage 的 `JobQueue`（原子 claim/lease、重启恢复、单调 `
 
 ## 验证与风险
 
-explain job 后来由 [2026-10-18-mcp-sampling-explain.zh.md](2026-10-18-mcp-sampling-explain.zh.md)
+explain job 后来由 [2026-10-18-remove-ai-explain.zh.md](2026-10-18-remove-ai-explain.zh.md)
 细化为同步 MCP sampling（无 job/claim）；jobs 保留给其它任务。
 
 第一里程碑由 `tests/test_server_serve.py`（HTTP 查询、MCP `/mcp`、explain 跨客户端

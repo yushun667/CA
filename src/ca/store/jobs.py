@@ -1,6 +1,6 @@
 """Persistent job queue and event log for the unified CA backend.
 
-The ``ca serve`` backend runs analysis tasks (``explain``, ``ensure_deep``,
+The ``ca serve`` backend runs generic background analysis tasks (``ensure_deep``,
 ``prewarm``, ``update``, ...) as durable *jobs* shared by the HTTP API, the MCP
 endpoint and the Web UI. Jobs and their state transitions are persisted in
 SQLite so a client can disconnect/reconnect, an agent can claim work over MCP,

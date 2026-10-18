@@ -60,7 +60,7 @@ monotonic `job_events` ids) so the service remains the single writer.
 ## Validation and risks
 
 Explain jobs were later refined by
-[2026-10-18-mcp-sampling-explain.md](2026-10-18-mcp-sampling-explain.md): interactive
+[2026-10-18-remove-ai-explain.md](2026-10-18-remove-ai-explain.md): interactive
 UI explain is synchronous MCP sampling (no job/claim); jobs remain for other tasks.
 
 First milestone validated by `tests/test_server_serve.py` (HTTP queries, MCP

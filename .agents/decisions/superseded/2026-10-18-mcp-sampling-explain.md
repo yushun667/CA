@@ -1,7 +1,10 @@
 # Decision: synchronous explain via MCP sampling (no backend LLM, no job queue)
 
-Status: active
+Status: superseded
 Date: 2026-10-18
+
+Superseded by: [2026-10-18-remove-ai-explain.md](../active/2026-10-18-remove-ai-explain.md)
+(the feature was removed entirely; no sampling/explain path remains).
 
 ## Context
 

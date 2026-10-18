@@ -27,8 +27,6 @@ from __future__ import annotations
 
 import json
 import sys
-import threading
-import time
 from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -822,15 +820,7 @@ def _normalize_serve_url(url: str) -> str:
 
 
 def run_stdio_proxy(serve_url: str) -> int:
-    """Bridge a stdio MCP client to a standard ``ca serve`` MCP HTTP session.
-
-    The proxy keeps the ``Mcp-Session-Id`` returned by ``initialize`` and forwards
-    requests/results with that header.  Server-initiated requests (notably
-    ``sampling/createMessage``) arrive on the backend ``GET /mcp`` SSE stream and
-    are written to stdout so the local stdio client can answer them; the client's
-    JSON-RPC response is forwarded back to ``/mcp``.  This makes a stdio agent a
-    full sampling-capable MCP client of the backend.
-    """
+    """Forward stdio JSON-RPC lines to a ``ca serve`` backend's stateless ``/mcp``."""
 
     import urllib.error
     import urllib.request
@@ -840,29 +830,28 @@ def run_stdio_proxy(serve_url: str) -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    base = endpoint[: -len("/mcp")] if endpoint.endswith("/mcp") else endpoint
-    session_id: dict[str, str] = {"value": ""}
-    output_lock = threading.Lock()
-
-    def _emit(message: dict[str, Any]) -> None:
-        with output_lock:
-            print(json.dumps(message, ensure_ascii=False), flush=True)
-
-    def _post(message: dict[str, Any]) -> None:
-        headers = {"Content-Type": "application/json"}
-        if session_id["value"]:
-            headers["Mcp-Session-Id"] = session_id["value"]
+    for line in sys.stdin:
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            message = json.loads(text)
+        except json.JSONDecodeError:
+            print(
+                json.dumps(
+                    {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
+                ),
+                flush=True,
+            )
+            continue
         request = urllib.request.Request(
             endpoint,
             data=json.dumps(message).encode("utf-8"),
-            headers=headers,
+            headers={"Content-Type": "application/json"},
             method="POST",
         )
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
-                new_session = response.headers.get("Mcp-Session-Id")
-                if new_session:
-                    session_id["value"] = new_session
                 body = response.read()
         except urllib.error.HTTPError as exc:
             body = exc.read() or json.dumps(
@@ -872,7 +861,7 @@ def run_stdio_proxy(serve_url: str) -> int:
                     "error": {"code": -32603, "message": f"backend HTTP {exc.code}"},
                 }
             ).encode("utf-8")
-        except Exception as exc:
+        except Exception as exc:  # backend unreachable
             body = json.dumps(
                 {
                     "jsonrpc": "2.0",
@@ -882,94 +871,19 @@ def run_stdio_proxy(serve_url: str) -> int:
             ).encode("utf-8")
         payload = body.decode("utf-8", errors="replace").strip()
         if not payload:
-            return  # notification/response accepted with HTTP 202
+            continue
         try:
             decoded = json.loads(payload)
         except json.JSONDecodeError:
-            decoded = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32700, "message": "invalid backend response"},
-            }
-        for item in decoded if isinstance(decoded, list) else [decoded]:
-            _emit(item)
-
-    def _stream_server_requests() -> None:
-        """Forward backend->client JSON-RPC requests (sampling) to stdout."""
-
-        waited = 0.0
-        while not session_id["value"] and waited < 30:
-            time.sleep(0.05)
-            waited += 0.05
-        if not session_id["value"]:
-            return
-        headers = {
-            "Mcp-Session-Id": session_id["value"],
-            "Accept": "text/event-stream",
-        }
-        request = urllib.request.Request(base + "/mcp", headers=headers, method="GET")
-        try:
-            with urllib.request.urlopen(request, timeout=3600) as stream:
-                buffer = ""
-                for raw in stream:
-                    line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                    if not line:
-                        if buffer:
-                            data = [
-                                part[len("data:"):].strip()
-                                for part in buffer.splitlines()
-                                if part.startswith("data:")
-                            ]
-                            buffer = ""
-                            if data:
-                                try:
-                                    payload = json.loads("\n".join(data))
-                                except json.JSONDecodeError:
-                                    payload = None
-                                if isinstance(payload, dict) and payload.get("method"):
-                                    _emit(payload)
-                        continue
-                    if line.startswith(":"):
-                        continue
-                    buffer += line + "\n"
-        except (OSError, ValueError):
-            pass
-
-    stream_thread = threading.Thread(target=_stream_server_requests, daemon=True)
-    initialized = False
-    try:
-        for line in sys.stdin:
-            text = line.strip()
-            if not text:
-                continue
-            try:
-                message = json.loads(text)
-            except json.JSONDecodeError:
-                _emit({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
-                continue
-            # A client JSON-RPC response to a server request (e.g. sampling).
-            is_response = (
-                isinstance(message, dict)
-                and message.get("method") is None
-                and ("result" in message or "error" in message)
-                and "id" in message
+            print(
+                json.dumps(
+                    {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "invalid backend response"}}
+                ),
+                flush=True,
             )
-            if is_response:
-                _post(message)
-                continue
-            method = message.get("method") if isinstance(message, dict) else None
-            if method == "initialize":
-                initialized = True
-                _post(message)
-                if session_id["value"] and not stream_thread.is_alive():
-                    stream_thread.start()
-                elif not session_id["value"]:
-                    stream_thread.start()
-                continue
-            _post(message)
-    finally:
-        if stream_thread.is_alive():
-            pass  # daemon thread exits with the process
+            continue
+        for item in decoded if isinstance(decoded, list) else [decoded]:
+            print(json.dumps(item, ensure_ascii=False), flush=True)
     return 0
 
 

@@ -64,31 +64,15 @@ forwards queries and events to a long-lived [`ca serve`](server.md) process:
 - `GET /api/ui` (local) reports `{mode:"remote", serve_url, features}`; older
   embedded servers return `{mode:"embedded"}`.
 - Query endpoints (`/api/search`, `/api/function`, `/api/graph`, `/api/cfg`,
-  `/api/source`, `/api/explain`, …) are proxied verbatim; non-whitelisted POSTs
+  `/api/source`, …) are proxied verbatim; non-whitelisted POSTs
   return `405 READ_ONLY`, and a query timeout is 30 s. If the backend is down,
   the UI answers `502 SERVE_UNAVAILABLE` with the standard error envelope.
 - `GET /events` remains available through the proxy (no buffering, heartbeat,
-  `Last-Event-ID` replay) for other job types/future clients, but the explain tab
-  no longer subscribes to it.
+  `Last-Event-ID` replay) for other job types/future clients.
 - A connection badge in the top bar shows `connecting / connected / reconnecting
   / disconnected`, derived from `/api/ui` and the success/failure of API
   requests; clicking the badge retries the connection. There is no EventSource in
   the UI.
-- **AI explanation is synchronous**: opening the explain section sends
-  `POST /api/explain/agent {symbol, lang}` and waits for the answer (60 s client
-  timeout, loading/error/retry/copy). The backend answers by asking a connected
-  MCP agent through MCP `sampling/createMessage`; no job, queue or claim is
-  created for explain. The provider badge shows `agent` with the sampling
-  agent's model name when it answered; if no agent is connected or the request
-  fails, the backend returns HTTP 200 with a `heuristic` explanation,
-  `fallback:true` and a `fallback_reason` (for example
-  `no connected MCP sampling agent session` or a timeout), which the UI renders
-  as the local-heuristic badge plus the fallback note. The UI learns endpoint
-  support from `features.sampling_explain` in `/api/health`; against an older
-  serve build without the sync endpoint it falls back to `GET /api/explain`
-  (server-side heuristic fallback), so the section still works. Connected
-  sampling agents and pending requests are visible in `/api/health`
-  (`sampling: {sessions, sampling_capable, pending_requests, timeout_seconds}`).
 - Everything stays read-only; the UI proxy cannot write to the index. Remote
   `--serve-url` values should be loopback or a trusted tunnel; the backend has no
   authentication in this milestone.
@@ -100,8 +84,8 @@ pane; navigation state lives in the URL hash, so a function can be bookmarked or
 shared:
 
 - `#/fn/<name-or-id>/<tab>` — function page with the given accordion section
-  expanded (`overview`, `branches`, `returns`, `resources`, `findings`,
-  `explain`); omit `/<tab>` to keep all sections collapsed
+  expanded (`overview`, `branches`, `returns`, `resources`, `findings`);
+  omit `/<tab>` to keep all sections collapsed
 - `#/stats` — database statistics
 - `#/callbacks` — cross-TU callback registrations
 
@@ -119,7 +103,7 @@ What you can inspect:
   scrollable, with `file:line`, shard and the function line range highlighted).
   It stays fixed when you interact with the call graph. Below it, a collapsible
   **accordion sidebar** on the left lists `overview`, `branches`, `returns`,
-  `resources`, `findings` and `explain` with count badges: clicking a
+  `resources` and `findings` with count badges: clicking a
   label expands that section's content **inside the sidebar** (click again or
   click another label to collapse it); the sidebar content scrolls and the
   collapse state is remembered in `localStorage`. The **call graph is always
@@ -138,13 +122,6 @@ What you can inspect:
 - **Overview** — signature, return type, file:line range, linkage, USR/id/TU ids
   and parameters; badge for `deep facts` vs `deep facts pending` (base/L0
   databases only carry symbols and calls until `ca ensure-deep` runs).
-- **AI explanation** — an on-demand, read-only summary of the opened function:
-  purpose, key branches and error paths, resource acquire/release, call
-  relationships, risks from findings and reading suggestions. It is generated
-  lazily when the section is opened, follows the UI language, and can be
-  refreshed or copied. A provider badge shows `local heuristic` by default, or
-  the configured model name when an LLM backend is used (see
-  [AI explanation backend](#ai-explanation-backend)).
 - **Call graph** — SVG traversal (direction `both`/forward/reverse, depth 1–6),
   direct edges solid, candidate callback edges dashed and labelled with kind and
   confidence, cycles red. **Single-clicking** a node (or pressing Enter on it)
@@ -203,37 +180,6 @@ page three splitter handles resize the workspace:
 - Below 1100 px the splitters are disabled and the three areas stack (the
   sidebar becomes a full-width drawer) so touch layouts stay usable.
 
-## AI explanation backend
-
-`GET /api/explain?symbol=<name-or-id>&lang=en|zh` is read-only and always
-returns the same response shape: `{symbol, function, provider, model,
-llm_configured, language, explanation, facts_summary, cached, fallback_reason,
-elapsed_ms}`.
-
-- **Default: local heuristic.** No LLM is configured, no network request is
-  made, and the explanation is generated from the indexed facts only. It is
-  clearly labelled `provider: "heuristic"` / `local heuristic` in the UI and is
-  never presented as AI-generated.
-- **Optional OpenAI-compatible LLM.** Configure the server environment before
-  starting `ca ui`:
-
-  | Variable | Meaning |
-  |---|---|
-  | `CA_LLM_BASE_URL` | Base URL of an OpenAI-compatible API, e.g. `http://127.0.0.1:8000/v1` (the server posts to `<base>/chat/completions`) |
-  | `CA_LLM_API_KEY` | Bearer token (optional for local servers) |
-  | `CA_LLM_MODEL` | Model name sent in the request |
-  | `CA_LLM_TIMEOUT` | Request timeout in seconds (default 30, capped at 120) |
-
-  The prompt contains the function metadata, indexed facts and up to 400 source
-  lines, and instructs the model to answer in the UI language without inventing
-  facts. On timeout, HTTP or parse errors the API falls back to the local
-  heuristic, keeps HTTP 200, and reports `fallback_reason`; the server never
-  contacts the LLM at startup (settings are read per request).
-- **Privacy.** If you configure an LLM, the selected function's source code and
-  indexed facts are sent to that service. Leave `CA_LLM_*` unset to keep
-  everything local. The explanation endpoint only reads the index and source
-  tree; it never writes to the database.
-
 ## Language
 
 The UI is bilingual (English / Simplified Chinese); data itself is never
@@ -270,8 +216,6 @@ All endpoints return the same envelope and are `GET`-only:
 | `GET /api/callbacks` | `path` (prefix), `field`, `module`, `kind`, `limit`, `offset` | registration facts (target, evidence, confidence) |
 | `GET /api/source` | `symbol` (required), `context` (0–10, default 3) | read-only source window: `{symbol, function{id,name,qualified_name,kind,file,line,end_line,signature}, file, language, start, end, total_lines, function_start, function_end, context, truncated, lines[{line,text}], shard, path, repo_root}` |
 | `GET /api/cfg` | `symbol` (required) | read-only control-flow graph: `{symbol, function{id,name,qualified_name,kind,file,line,end_line}, deep_ready, shard, federated, blocks[], edges[], branches[], truncated, stats}`; blocks carry `index/kind/terminator/line/end_line/statement_count`, branch annotations (`condition`, `branch_kind`, `true_block`, `false_block`) and `is_entry`/`is_exit`; edges carry a display `label` (`true`/`false` for branch edges) |
-| `GET /api/explain` | `symbol` (required), `lang=en\|zh` | read-only function explanation: `{symbol, function, provider, model, llm_configured, language, explanation, facts_summary, cached, fallback_reason, elapsed_ms}` (heuristic by default, optional configured LLM) |
-| `POST /api/explain/agent` | JSON body `{symbol, lang}` (GET query or `/api/explain?mode=agent` alias also accepted) | synchronous agent explanation (remote mode): `{symbol, function, provider, model, language, explanation, evidence?, fallback, fallback_reason?, elapsed_ms, facts_summary?}`; the backend asks a connected MCP agent via `sampling/createMessage`, provider `agent` + its model name; no agent/failure → HTTP 200 `provider:"heuristic"`, `fallback:true`, `fallback_reason`; unknown symbol 404; older serve → UI falls back to `GET /api/explain` |
 | `GET /api/branches`, `/api/assignments`, `/api/returns`, `/api/resources` | `symbol` (required) | per-function fact rows (additive convenience endpoints) |
 
 `/api/cfg` resolves the function through the normal detail query and returns its

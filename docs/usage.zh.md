@@ -259,10 +259,10 @@ SQLite 表：`meta`、`tus`、`functions`、`params`、`types`、`fields`、`cal
 ## 统一后端服务（`ca serve`）
 
 `ca serve --db DB`（或 `--db-dir DIR`）为两个客户端提供同一常驻后端：浏览器用
-`/api/*` + `/events`（SSE），agent 用 `/mcp` 或
-`ca mcp --serve-url http://127.0.0.1:8765`。服务还持有持久 job 队列
-（创建/领取/完成，`explain` 跨客户端闭环），写在独立状态库中，索引 shard 保持只读。
-端点、job/SSE 语义、安全与限制见 [server.zh.md](server.zh.md)。
+`/api/*` + `/events`（SSE），agent 用无状态 `/mcp` 或
+`ca mcp --serve-url http://127.0.0.1:8765`。服务还持有持久通用 job 队列
+（创建/领取/完成），写在独立状态库中，索引 shard 保持只读。不内置 AI 解释功能。
+端点、通用 job/SSE 语义、安全与限制见 [server.zh.md](server.zh.md)。
 
 ## Agent 接入：MCP、调用图、增量更新
 

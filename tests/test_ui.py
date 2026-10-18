@@ -544,7 +544,6 @@ class FakeServeHandler(BaseHTTPRequestHandler):
                             "jobs": True,
                             "sse": True,
                             "mcp": True,
-                            "sampling_explain": True,
                         },
                     },
                 },
@@ -564,25 +563,6 @@ class FakeServeHandler(BaseHTTPRequestHandler):
             self._send_json(
                 404,
                 {"ok": False, "error": {"code": "NOT_FOUND", "message": "nope"}},
-            )
-        elif path == "/api/explain":
-            self._send_json(
-                200,
-                {
-                    "ok": True,
-                    "data": {
-                        "symbol": "kfree",
-                        "provider": "heuristic",
-                        "model": "",
-                        "language": "en",
-                        "explanation": "fallback heuristic explanation",
-                        "evidence": [],
-                        "fallback_reason": "agent endpoint missing",
-                        "fallback": True,
-                        "elapsed_ms": 3,
-                        "facts_summary": {},
-                    },
-                },
             )
         elif path == "/events":
             self.send_response(200)
@@ -617,27 +597,6 @@ class FakeServeHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             parsed = {}
         self.server.received.append((self.path, parsed))  # type: ignore[attr-defined]
-        if self.path == "/api/explain/agent":
-            self._send_json(
-                200,
-                {
-                    "ok": True,
-                    "data": {
-                        "symbol": parsed.get("symbol", "kfree"),
-                        "function": {"name": parsed.get("symbol", "kfree")},
-                        "provider": "agent",
-                        "model": "fake-agent",
-                        "language": parsed.get("lang", "en"),
-                        "explanation": "agent sync explanation",
-                        "evidence": ["kernel/kalloc.c"],
-                        "fallback_reason": "",
-                        "fallback": False,
-                        "elapsed_ms": 12,
-                        "facts_summary": {"branch_count": 0},
-                    },
-                },
-            )
-            return
         self._send_json(
             200,
             {
@@ -645,7 +604,7 @@ class FakeServeHandler(BaseHTTPRequestHandler):
                 "data": {
                     "job": {
                         "id": "job-new",
-                        "kind": "explain",
+                        "kind": "ensure_deep",
                         "status": "queued",
                     }
                 },
@@ -983,6 +942,23 @@ def test_fact_endpoints(client: UiClient) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def test_ai_explanation_removed_from_static_assets() -> None:
+    """The Web UI no longer shows or calls the removed AI explanation feature."""
+
+    script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    i18n = (STATIC_DIR / "i18n.js").read_text(encoding="utf-8")
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    style = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
+    assert "explain" not in script.lower()
+    assert "/api/explain" not in script
+    assert "EventSource" not in script
+    assert "tab.explain" not in i18n
+    assert "explain." not in i18n
+    assert "error.timeout" not in i18n
+    assert "#explain-" not in html
+    assert ".explain" not in style
+
+
 def test_static_single_page_has_no_external_assets(client: UiClient) -> None:
     status, headers, body = client.get("/")
     assert status == 200
@@ -1018,26 +994,15 @@ def test_static_single_page_has_no_external_assets(client: UiClient) -> None:
     assert "accordion-body" in script
     assert "search-dropdown" in script
     assert "source.nodeHint" in script
-    # Remote mode: thin client + synchronous agent explanation.
+    # Remote mode: thin client + connection badge (AI explain was removed).
     assert "/api/ui" in script
-    assert "/api/explain/agent" in script
-    assert "/api/explain?" in script
-    assert "AbortController" in script
     assert "loadUiMode" in script
-    assert "fetchExplain" in script
-    assert "sampling_explain" in script
     assert "retryConnection" in script
-    assert "explain.agent" in script
-    # explain no longer uses jobs/SSE/claim in the UI.
+    assert "/api/explain" not in script
+    assert "tab.explain" not in script
+    assert "renderExplainSection" not in script
     assert "EventSource" not in script
-    assert "explainJob" not in script
-    assert "scheduleJobPoll" not in script
-    assert "handleSseEvent" not in script
-    # AI explanation tab replaced the duplicated callers/callees tabs.
-    assert "tab.explain" in script
-    assert "renderExplainSection" in script
-    assert "/api/explain?" in script
-    assert "explain.heuristic" in script
+    # Duplicated callers/callees tabs and the AI explanation tab are gone.
     assert '["callers"' not in script
     assert '["callees"' not in script
     # v8: draggable three-area layout persisted in localStorage.
@@ -1592,243 +1557,6 @@ console.log(JSON.stringify(html));
     assert all("<script" not in line for line in html)
 
 
-def test_sync_explain_fetch_fallback_and_provider() -> None:
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("node is not available to execute the UI explain hooks")
-    script = """
-const appPath = %s;
-const storage = new Map();
-const memory = {
-  getItem: (key) => (storage.has(key) ? storage.get(key) : null),
-  setItem: (key, value) => storage.set(key, String(value)),
-};
-global.window = {
-  sessionStorage: memory,
-  localStorage: memory,
-  location: { hash: "", search: "" },
-  history: { replaceState() {}, pushState() {} },
-  addEventListener() {},
-  setTimeout: () => 0,
-  clearTimeout() {},
-};
-global.document = {
-  readyState: "loading",
-  addEventListener() {},
-  querySelectorAll: () => [],
-  getElementById: () => null,
-  documentElement: { lang: "en" },
-  title: "",
-  body: {},
-};
-Object.defineProperty(globalThis, "navigator", {
-  value: { languages: ["en"], language: "en" },
-  configurable: true,
-});
-window.CA_I18N = { t: (key) => key, getLanguage: () => "en" };
-require(appPath);
-const hooks = window.CA_UI_TEST;
-
-(async () => {
-  const result = {
-    fallbackCalls: [],
-    agentCalls: [],
-    embeddedCalls: [],
-    noAgentCalls: [],
-  };
-
-  // 1) remote mode, old serve: agent endpoint 404 -> fall back to GET /api/explain
-  hooks.setTestMode("remote");
-  global.fetch = async (url, options = {}) => {
-    result.fallbackCalls.push({
-      url: String(url),
-      method: options.method || "GET",
-    });
-    if (String(url).includes("/api/explain/agent")) {
-      return {
-        status: 404,
-        json: async () => ({
-          ok: false,
-          error: { code: "NOT_FOUND", message: "no agent endpoint" },
-        }),
-      };
-    }
-    return {
-      status: 200,
-      json: async () => ({
-        ok: true,
-        data: {
-          provider: "heuristic",
-          model: "",
-          language: "en",
-          explanation: "fallback heuristic",
-          evidence: [],
-          fallback_reason: "agent endpoint missing",
-          elapsed_ms: 3,
-          facts_summary: {},
-        },
-      }),
-    };
-  };
-  const fallback = await hooks.fetchExplain("kfree", "en");
-
-  // 2) remote mode, agent endpoint available
-  global.fetch = async (url, options = {}) => {
-    result.agentCalls.push({
-      url: String(url),
-      method: options.method || "GET",
-    });
-    return {
-      status: 200,
-      json: async () => ({
-        ok: true,
-        data: {
-          provider: "agent",
-          model: "fake-agent",
-          language: "zh",
-          explanation: "agent sync explanation",
-          evidence: ["kernel/kalloc.c"],
-          fallback_reason: "",
-          elapsed_ms: 9,
-          facts_summary: {},
-        },
-      }),
-    };
-  };
-  const agent = await hooks.fetchExplain("kfree", "zh");
-
-  // 3) embedded mode always uses GET /api/explain
-  hooks.setTestMode("embedded");
-  global.fetch = async (url, options = {}) => {
-    result.embeddedCalls.push({
-      url: String(url),
-      method: options.method || "GET",
-    });
-    return {
-      status: 200,
-      json: async () => ({
-        ok: true,
-        data: {
-          provider: "heuristic",
-          model: "",
-          language: "en",
-          explanation: "embedded heuristic",
-          elapsed_ms: 1,
-        },
-      }),
-    };
-  };
-  const embedded = await hooks.fetchExplain("kfree", "en");
-
-  // 4) capability says the old serve has no agent endpoint: GET directly.
-  hooks.setTestMode("remote");
-  hooks.setTestFeatures({ sampling_explain: false });
-  global.fetch = async (url, options = {}) => {
-    result.noAgentCalls.push({
-      url: String(url),
-      method: options.method || "GET",
-    });
-    return {
-      status: 200,
-      json: async () => ({
-        ok: true,
-        data: {
-          provider: "heuristic",
-          model: "",
-          language: "en",
-          explanation: "no agent endpoint",
-          fallback: true,
-          elapsed_ms: 2,
-        },
-      }),
-    };
-  };
-  const noAgent = await hooks.fetchExplain("kfree", "en");
-
-  // 5) sampling-capable serve + unknown symbol (POST 404) must not fall back.
-  hooks.setTestFeatures({ sampling_explain: true });
-  result.unknownCalls = [];
-  global.fetch = async (url, options = {}) => {
-    result.unknownCalls.push({
-      url: String(url),
-      method: options.method || "GET",
-    });
-    return {
-      status: 404,
-      json: async () => ({
-        ok: false,
-        error: { code: "NOT_FOUND", message: "no function matching 'nope'" },
-      }),
-    };
-  };
-  let unknownError = "";
-  try {
-    await hooks.fetchExplain("nope", "en");
-  } catch (error) {
-    unknownError = error.message;
-  }
-
-  const normalized = hooks.normalizeExplainResult(agent, { symbol: "kfree" });
-  result.fallback = fallback;
-  result.agent = agent;
-  result.embedded = embedded;
-  result.noAgent = noAgent;
-  result.unknownError = unknownError;
-  result.normalized = normalized;
-  console.log(JSON.stringify(result));
-})();
-"""
-    script = script % json.dumps(str(STATIC_DIR / "app.js"))
-    result = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, timeout=60
-    )
-    assert result.returncode == 0, result.stderr
-    data = json.loads(result.stdout)
-
-    fallback_calls = data["fallbackCalls"]
-    assert len(fallback_calls) == 2
-    assert fallback_calls[0]["method"] == "POST"
-    assert "/api/explain/agent" in fallback_calls[0]["url"]
-    assert fallback_calls[1]["method"] == "GET"
-    assert "/api/explain?" in fallback_calls[1]["url"]
-    assert data["fallback"]["provider"] == "heuristic"
-    assert data["fallback"]["fallback_reason"] == "agent endpoint missing"
-
-    agent_calls = data["agentCalls"]
-    assert len(agent_calls) == 1
-    assert agent_calls[0]["method"] == "POST"
-    assert "/api/explain/agent" in agent_calls[0]["url"]
-    assert data["agent"]["provider"] == "agent"
-    assert data["agent"]["model"] == "fake-agent"
-    assert data["agent"]["evidence"] == ["kernel/kalloc.c"]
-
-    embedded_calls = data["embeddedCalls"]
-    assert len(embedded_calls) == 1
-    assert embedded_calls[0]["method"] == "GET"
-    assert "/api/explain?" in embedded_calls[0]["url"]
-    assert data["embedded"]["provider"] == "heuristic"
-
-    assert data["noAgent"]["provider"] == "heuristic"
-    no_agent_calls = data["noAgentCalls"]
-    assert len(no_agent_calls) == 1
-    assert no_agent_calls[0]["method"] == "GET"
-    assert "/api/explain?" in no_agent_calls[0]["url"]
-
-    # sampling-capable serve: a 404 is an unknown symbol, not an old endpoint.
-    unknown_calls = data["unknownCalls"]
-    assert len(unknown_calls) == 1
-    assert unknown_calls[0]["method"] == "POST"
-    assert "NOT_FOUND" in data["unknownError"]
-
-    normalized = data["normalized"]
-    assert normalized["provider"] == "agent"
-    assert normalized["fallback"] is False
-    assert normalized["model"] == "fake-agent"
-    assert normalized["language"] == "zh"
-    assert normalized["explanation"] == "agent sync explanation"
-    assert normalized["evidence"] == ["kernel/kalloc.c"]
-    assert normalized["symbol"] == "kfree"
-
 
 
 def test_function_jump_history_stack() -> None:
@@ -1926,127 +1654,6 @@ console.log(JSON.stringify(result));
 
 
 # --------------------------------------------------------------------------- #
-# AI explanation (heuristic default, optional OpenAI-compatible LLM)
-# --------------------------------------------------------------------------- #
-
-
-def test_explain_api_heuristic_uses_indexed_facts(client: UiClient) -> None:
-    status, payload = client.json("/api/explain?symbol=proc_init")
-    assert status == 200 and payload["ok"] is True
-    data = payload["data"]
-    assert data["symbol"] == "proc_init"
-    assert data["function"]["name"] == "proc_init"
-    assert data["function"]["file"] == FILE
-    assert data["provider"] == "heuristic"
-    assert data["model"] == ""
-    assert data["llm_configured"] is False
-    assert data["language"] == "en"
-    assert data["cached"] is False
-    assert data["elapsed_ms"] >= 0
-    assert "Local heuristic explanation" in data["explanation"]
-    # Key indexed facts must show up in the local explanation.
-    for fact in ("proc_init", "flags & PROC_READY", "kmalloc", "main", "read_impl"):
-        assert fact in data["explanation"], fact
-    summary = data["facts_summary"]
-    assert summary["branch_count"] == 1
-    assert summary["branches"][0]["condition"] == "flags & PROC_READY"
-    assert summary["resource_count"] == 1
-    assert summary["resources"][0]["api_name"] == "kmalloc"
-    assert summary["return_count"] == 1
-    assert summary["caller_count"] == 1
-    assert summary["caller_names"] == ["main"]
-    assert "read_impl" in summary["callee_names"]
-    assert summary["candidate_edges"] == 1
-    assert summary["cfg"] == {"blocks": 3, "edges": 3, "branches": 1}
-    # The synthetic main fixture has no real repository on disk, so the
-    # explanation degrades gracefully without a source window.
-    assert summary["source"]["available"] is False
-
-
-def test_explain_api_includes_source_when_repo_exists(
-    source_client: UiClient,
-) -> None:
-    status, payload = source_client.json("/api/explain?symbol=proc_init")
-    assert status == 200
-    data = payload["data"]
-    summary = data["facts_summary"]
-    assert summary["source"]["available"] is True
-    assert summary["source"]["file"] == "kernel/proc.c"
-    assert summary["source"]["line_count"] == 7  # lines 20-26 of the function
-    assert "kernel/proc.c" in data["explanation"]
-
-
-def test_explain_api_language_switch(client: UiClient) -> None:
-    status, payload = client.json("/api/explain?symbol=proc_init&lang=zh")
-    assert status == 200
-    data = payload["data"]
-    assert data["language"] == "zh"
-    assert data["provider"] == "heuristic"
-    assert "本地规则解释" in data["explanation"]
-    assert "函数用途" in data["explanation"]
-    # Data facts (conditions, symbols) stay untranslated in the explanation.
-    assert "flags & PROC_READY" in data["explanation"]
-    assert "kmalloc" in data["explanation"]
-    # Unknown language values fall back to English.
-    _status, payload = client.json("/api/explain?symbol=proc_init&lang=fr")
-    assert payload["data"]["language"] == "en"
-
-
-def test_explain_api_bad_symbol(client: UiClient) -> None:
-    status, payload = client.json("/api/explain?symbol=no_such_symbol_xyz")
-    assert status == 404
-    assert payload["error"]["code"] == "NOT_FOUND"
-    status, payload = client.json("/api/explain")
-    assert status == 400
-    assert payload["error"]["code"] == "INVALID_ARGUMENT"
-
-
-def test_explain_api_without_llm_config_never_calls_llm(
-    client: UiClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import ca.ui.server as server_module
-
-    for name in (
-        "CA_LLM_BASE_URL",
-        "CA_LLM_API_KEY",
-        "CA_LLM_MODEL",
-        "CA_LLM_TIMEOUT",
-    ):
-        monkeypatch.delenv(name, raising=False)
-
-    def fail(*_args, **_kwargs):
-        raise AssertionError("LLM must not be called without configuration")
-
-    monkeypatch.setattr(server_module, "_call_llm", fail)
-    status, payload = client.json("/api/explain?symbol=proc_init")
-    assert status == 200
-    assert payload["data"]["provider"] == "heuristic"
-    assert payload["data"]["llm_configured"] is False
-
-
-def test_explain_api_llm_failure_falls_back_to_heuristic(
-    client: UiClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    closed_port = sock.getsockname()[1]
-    sock.close()
-    monkeypatch.setenv("CA_LLM_BASE_URL", f"http://127.0.0.1:{closed_port}/v1")
-    monkeypatch.setenv("CA_LLM_MODEL", "test-model")
-    monkeypatch.setenv("CA_LLM_TIMEOUT", "0.5")
-    monkeypatch.setenv("CA_LLM_API_KEY", "test-key")
-    status, payload = client.json("/api/explain?symbol=proc_init")
-    assert status == 200  # never 500 on LLM errors
-    data = payload["data"]
-    assert data["provider"] == "heuristic"
-    assert data["model"] == ""
-    assert data["llm_configured"] is True
-    assert data["fallback_reason"]
-    assert "Local heuristic explanation" in data["explanation"]
-    assert "fell back" in data["explanation"].lower()
-
-
-# --------------------------------------------------------------------------- #
 # Thin-client proxy behaviour (P1)
 # --------------------------------------------------------------------------- #
 
@@ -2084,7 +1691,7 @@ def test_proxy_forwards_get_with_query_string(proxy_client: UiClient) -> None:
 def test_proxy_forwards_job_post_and_rejects_other_posts(
     proxy_client: UiClient, fake_serve
 ) -> None:
-    body = {"type": "explain", "symbol": "main", "payload": {"lang": "zh"}}
+    body = {"type": "ensure_deep", "symbol": "main", "payload": {}}
     status, payload = _post_json(proxy_client, "/api/jobs", body)
     assert status == 200
     assert payload["data"]["job"]["id"] == "job-new"
@@ -2096,20 +1703,6 @@ def test_proxy_forwards_job_post_and_rejects_other_posts(
     assert payload["error"]["code"] == "READ_ONLY"
 
 
-def test_proxy_forwards_sync_explain_agent_post(
-    proxy_client: UiClient, fake_serve
-) -> None:
-    body = {"symbol": "kfree", "lang": "zh"}
-    status, payload = _post_json(proxy_client, "/api/explain/agent", body)
-    assert status == 200
-    data = payload["data"]
-    assert data["provider"] == "agent"
-    assert data["model"] == "fake-agent"
-    assert data["language"] == "zh"
-    assert data["explanation"] == "agent sync explanation"
-    assert data["evidence"] == ["kernel/kalloc.c"]
-    received = fake_serve[1].received  # type: ignore[attr-defined]
-    assert received[-1] == ("/api/explain/agent", body)
 
 
 def test_proxy_streams_sse_chunks(proxy_client: UiClient) -> None:
@@ -2223,13 +1816,13 @@ def test_make_server_requires_a_database(tmp_path: Path) -> None:
 
 
 
-def test_accordion_tab_ids_include_explain_only() -> None:
-    """The explain tab must survive normalizeTab(); callers/callees were removed."""
+def test_accordion_tab_ids_exclude_removed_tabs() -> None:
+    """AI explanation, callers and callees tabs were removed from normalizeTab()."""
 
     source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
     match = re.search(r"const TAB_IDS = \[(.*?)\];", source, re.S)
     assert match is not None, "TAB_IDS block missing"
     tab_ids = re.findall(r'"([a-z]+)"', match.group(1))
-    assert "explain" in tab_ids, f"explain missing from TAB_IDS: {tab_ids}"
+    assert "explain" not in tab_ids, f"explain still in TAB_IDS: {tab_ids}"
     assert "callers" not in tab_ids
     assert "callees" not in tab_ids
