@@ -99,6 +99,17 @@ export function createRemoteServeController(options) {
   let disposed = false;
   let generation = 0;
   let taskCounter = 0;
+  /** True while a remote `ca serve` process may still exist (best-effort cleanup). */
+  let remoteMayBeRunning = false;
+  /** Per-instance remote PID-file stem + repo path, so cleanup targets our own server. */
+  /** @type {{token: string, repoPath: string, ssh: any}|null} */
+  let activeRemotePid = null;
+  let pidTokenCounter = 0;
+
+  function nextPidToken() {
+    pidTokenCounter += 1;
+    return `serve-${Date.now().toString(36)}-${process.pid.toString(36)}-${pidTokenCounter.toString(36)}`;
+  }
   /** @type {Set<(status: any, meta: {reason: string}) => void>} */
   const listeners = new Set();
 
@@ -258,13 +269,33 @@ export function createRemoteServeController(options) {
     });
   }
 
-  function needsStaleCleanup(ssh, repoPath) {
+  function needsStaleCleanup(ssh, repoPath, pidFile = 'serve') {
     // Best effort: remove a server left behind by a crashed local ssh client.
     return executor
-      .runSsh(ssh, buildRemoteStopScript({ repoPath }), { timeoutMs: 15000, label: 'cleanup stale remote ca serve' })
+      .runSsh(ssh, buildRemoteStopScript({ repoPath, pidFile }), {
+        timeoutMs: 15000,
+        label: 'cleanup stale remote ca serve',
+      })
+      .then((result) => {
+        if (result && result.code === 0) remoteMayBeRunning = false;
+        return result;
+      })
       .catch((cleanupError) => {
         logger?.warn?.(`[remote] 清理旧 serve 进程失败（忽略）: ${cleanupError?.message || cleanupError}`);
       });
+  }
+
+  /** Best-effort remote cleanup from paths stored in the current config. */
+  async function cleanupRemoteBestEffort(reason) {
+    if (!remoteMayBeRunning) return;
+    const target = activeRemotePid;
+    if (!target) return;
+    try {
+      logger?.info?.(`[remote] 清理可能残留的远端 ca serve（${reason}）`);
+      await needsStaleCleanup(target.ssh, target.repoPath, target.token);
+    } catch (cleanupError) {
+      logger?.warn?.(`[remote] 远端清理失败（忽略）: ${cleanupError?.message || cleanupError}`);
+    }
   }
 
   async function pickRemoteFreePort(ssh, repoPath) {
@@ -371,6 +402,9 @@ export function createRemoteServeController(options) {
       logger?.error?.(`[remote] ${message}`);
       healthData = null;
       setStatus({ state: 'error', baseUrl: null, error: message, health: null }, 'crashed');
+      // The remote server may outlive the ssh transport; best-effort cleanup
+      // (the restart below re-cleans anyway before spawning a replacement).
+      cleanupRemoteBestEffort('ssh 进程意外退出').catch(() => {});
       scheduleRestart();
     };
     serveState.handle.exited.then(onExit('远程 ca serve'));
@@ -432,8 +466,9 @@ export function createRemoteServeController(options) {
         // Fresh deadline per attempt so the fallback port retry gets its own
         // readiness window instead of inheriting an already-expired one.
         const deadline = now() + Number(remote.readyTimeoutMs || config.readyTimeoutMs);
-        if (attempt > 0) await needsStaleCleanup(ssh, repoPath);
-        const script = buildRemoteServeScript({
+        remoteMayBeRunning = true;
+        const pidToken = nextPidToken();
+        const pidScript = buildRemoteServeScript({
           repoPath,
           python,
           db: database.db,
@@ -444,9 +479,11 @@ export function createRemoteServeController(options) {
           host: '127.0.0.1',
           port: remotePort,
           env: remote.env,
+          pidFile: pidToken,
         });
-        const serveState = spawnSshProcess(ssh, script, '启动远程 ca serve');
+        const serveState = spawnSshProcess(ssh, pidScript, '启动远程 ca serve');
         serve = serveState;
+        activeRemotePid = { token: pidToken, repoPath, ssh };
         let tunnelHandle = null;
         try {
           const port = await waitForServePort(serveState, gen, abort.signal, remotePort, deadline);
@@ -503,6 +540,10 @@ export function createRemoteServeController(options) {
           }
           if (serve === serveState) serve = null;
           tunnel = null;
+          // The remote process is not a child of this machine: remove it via
+          // its per-instance PID file before giving up (or before retry).
+          await needsStaleCleanup(ssh, repoPath, pidToken);
+          if (activeRemotePid?.token === pidToken) activeRemotePid = null;
           const canFallback =
             attempt === 0 &&
             configuredPort === 0 &&
@@ -575,11 +616,16 @@ export function createRemoteServeController(options) {
         const ssh = requireSsh();
         const repoPath = remote.repoPath || remote.installDir;
         if (repoPath) {
-          const result = await executor.runSsh(ssh, buildRemoteStopScript({ repoPath }), {
-            timeoutMs: 20000,
-            label: 'stop remote ca serve',
-          });
-          if (result.code !== 0) {
+          const pidToken = activeRemotePid?.token || 'serve';
+          const result = await executor.runSsh(
+            ssh,
+            buildRemoteStopScript({ repoPath, pidFile: pidToken }),
+            { timeoutMs: 20000, label: 'stop remote ca serve' },
+          );
+          if (activeRemotePid?.token === pidToken) activeRemotePid = null;
+          if (result.code === 0) {
+            remoteMayBeRunning = false;
+          } else {
             logger?.warn?.(`[remote] 停止远端 serve 返回 exitCode=${result.code}；继续清理本地 ssh`);
           }
         }
@@ -739,6 +785,9 @@ export function createRemoteServeController(options) {
     clearRestartTimer();
     clearStableTimer();
     startAbort?.abort();
+    // Killing the local ssh transport does not stop the remote process, so run
+    // the PID-file stop script while ssh credentials/config are still usable.
+    await cleanupRemoteBestEffort('dispose');
     for (const handle of [tunnel, serve?.handle].filter(Boolean)) {
       if (!handle.settled) {
         try {

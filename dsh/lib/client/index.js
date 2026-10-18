@@ -24,6 +24,7 @@ import {
 
 import { createSearchPage } from './pages/search.js'
 import { createBackendPage } from './pages/backend.js'
+import { createProjectsPage } from './pages/projects.js'
 import { createTasksPage } from './pages/tasks.js'
 import { createGraphPage } from './pages/graph.js'
 import { createStatsPage } from './pages/stats.js'
@@ -46,6 +47,7 @@ export function apply(ctx) {
 
   shell.registerPage('search', createSearchPage(React, bag))
   shell.registerPage('backend', createBackendPage(React, bag))
+  shell.registerPage('projects', createProjectsPage(React, bag))
   shell.registerPage('tasks', createTasksPage(React, bag))
   shell.registerPage('graph', createGraphPage(React, bag))
   shell.registerPage('stats', createStatsPage(React, bag))

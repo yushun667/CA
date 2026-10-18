@@ -43,19 +43,21 @@ const checks = []
 const manualChecklist = [
   '刷新 DSH Web GUI；Settings → Plugins 中出现 “CA Analyzer / CA 源码分析器”，标题、描述、图标正确且无 metadata 诊断/回退。',
   '左侧 sidebar 出现 CA 图标（order 20）；点击后在 main 插槽渲染 CA 整页（无白屏、无 Console 未捕获异常、无 “duplicate module id” 报错）。',
-  'Agent 工具列表出现 ca_status / ca_search / ca_symbol / ca_graph / ca_facts / ca_source / ca_stats / ca_callbacks / ca_registry / ca_explain / ca_task（11 个）；对 Agent 说“查看 CA 后端状态”应实际调用 ca_status。',
-  '对 Agent 说“用 ca_search 搜索 xv6 的 main 函数”，确认 POST /dsh-ca/ca.request → CA /api 查询链路返回真实数据（需已有索引 DB；未鉴权的 curl 预期 401/403，属正常鉴权，不计为失败）。',
-  '后端设置页：配置本地 CA 仓库/venv/DB 并 Start，状态变为 running 且 /api/health 通过；远程安装走 backend.installStatus 轮询进度；DSH 重启后设置仍在（$DSH_HOME/plugin-data/dsh-ca/settings.json）。',
-  'UI 页面：搜索下拉、函数详情（源码/分支/返回/资源）、调用图、CFG、stats、callbacks 均可渲染；缩放/平移/折叠等交互正常。',
+  'Agent 工具列表出现 12 个 ca_*：ca_status / ca_search / ca_symbol / ca_graph / ca_facts / ca_source / ca_stats / ca_callbacks / ca_registry / ca_explain / ca_task / ca_project；ca_project action=list 应返回项目列表与 active 项目；对 Agent 说“查看 CA 项目状态”应调用 ca_status 或 ca_project。',
+  '对 Agent 说“用 ca_search 搜索 xv6 的 main 函数”，确认 POST /dsh-ca/ca.request → CA /api 查询链路返回真实数据（需已激活含索引的项目；未鉴权的 curl 预期 401，属正常鉴权，不计为失败）。',
+  '项目页（#/projects）：手动新建/编辑/删除/激活项目（name、backend local/remote、sourceRoot、db 或 dbDir 二选一、compdb、python、caRepoPath、SSH host/user/port/keyPath）——项目=源码+数据库+后端位置，不自动扫描；顶栏项目选择器切换项目=激活并重启；旧配置应自动迁移为默认项目；激活后状态 running 且 /api/health 通过；DSH 重启后 projects/activeProjectId 仍在（$DSH_HOME/plugin-data/dsh-ca/settings.json）。',
+  'UI 页面：#/projects 项目管理页、顶栏项目选择器、搜索下拉、函数详情（源码/分支/返回/资源）、调用图、CFG、stats、callbacks、tasks、backend（仅低层配置/状态）均可渲染；缩放/平移/折叠等交互正常。陈旧认知：旧的“扫描数据库选择器”主流程已废弃，backend.databases 仅保留为低层辅助端点。',
   '长任务：启动 index/update 任务，日志滚动、状态机、取消均正常；并发限制生效。',
   'AI 解释：在有可用模型配置时点击解释，返回带证据编号的中/英文 markdown；失败路径有可读错误与重试。',
   '远程 Linux 后端：probe → install → start → SSH 隧道健康检查（本机 macOS 未验证，需真实 Linux 主机）。',
   '禁用/卸载插件后：UI 行与工具消失，后台子进程/SSH 隧道/定时器被清理（不阻塞本次验收，但需记录）。',
 ]
 const unverified = [
+  '项目页 #/projects 与顶栏项目选择器的视觉/交互（需浏览器内人工确认；Client 产物已重建，需刷新页面加载）。',
+  '项目新建/编辑/删除/激活的 UI 实测（Host manager/RPC 层已有单测；页面内实际操作需人工完成）。',
   'UI 视觉与交互（需要浏览器内实际打开页面；本脚本只能验证资源与注册产物可读）。',
   '运行期工具注入与 HTTP 路由端到端（Client↔Host 走同源鉴权 POST /dsh-ca/<endpoint>；未鉴权 curl 预期 401/403，需页面内 fetch 或真实 Agent 工具调用验证；本脚本按约束不调用 plugin_manager）。',
-  '远程 Linux 主机安装/启动/隧道（需要 SSH 可达的 Linux 机器，未在本机验证）。',
+  '远程 Linux 主机安装/启动/隧道/远程项目激活切换（需要 SSH 可达的 Linux 机器；本验收只读观测了已激活 remote 项目状态，未做跨主机写操作）。',
   'AI 解释质量与真实模型调用（需要可用 provider；只验证接口存在，不评估输出质量）。',
 ]
 

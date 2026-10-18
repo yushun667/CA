@@ -128,7 +128,7 @@ const GRAPH = {
   found: true,
 }
 
-test('registers exactly the eleven contract tools with plain JSON schemas', () => {
+test('registers exactly the twelve contract tools with plain JSON schemas', () => {
   const { tools, dispose } = setup()
   assert.equal(tools.size, CA_TOOL_NAMES.length)
   for (const name of CA_TOOL_NAMES) {
@@ -557,6 +557,141 @@ test('an aborted tool-call signal cancels the operation', async () => {
     assert.equal(error.code, 'CANCELLED')
     return true
   })
+})
+
+const PROJECTS = [
+  {
+    id: 'proj-1',
+    name: 'dsoftbus',
+    backend: 'local',
+    sourceRoot: '/repo/oh',
+    db: '/data/oh.db',
+    dbDir: null,
+    compdb: '/data/compile_commands.json',
+  },
+  {
+    id: 'proj-2',
+    name: 'remote-index',
+    backend: 'remote',
+    sourceRoot: '/home/yu/CA_OH',
+    db: null,
+    dbDir: '/home/yu/CA_OH/index',
+    ssh: { host: 'linux-box', user: 'yu', port: 22 },
+  },
+]
+
+function setupWithProjects(options = {}) {
+  const backend = createFakeBackend({
+    status: options.status ?? {
+      mode: 'local',
+      state: 'running',
+      baseUrl: 'http://127.0.0.1:8765',
+      db: '/data/oh.db',
+    },
+    projects: PROJECTS,
+    activeProjectId: options.activeProjectId === undefined ? 'proj-1' : options.activeProjectId,
+  })
+  return setup({ ...options, backend })
+}
+
+test('ca_project lists projects with the active marker and database', async () => {
+  const context = setupWithProjects()
+  const text = (await context.run('ca_project', { action: 'list' })).text
+  assert.match(text, /CA projects: 2 \(active: dsoftbus\)/)
+  assert.match(text, /1\. dsoftbus \[active\] \(local\) — source \/repo\/oh; db \/data\/oh\.db \[id proj-1\]/)
+  assert.match(text, /2\. remote-index \(remote\) — source \/home\/yu\/CA_OH; dbDir \/home\/yu\/CA_OH\/index/)
+  assert.match(text, /compdb: \/data\/compile_commands\.json/)
+  assert.match(text, /ssh: yu@linux-box:22/)
+  assert.match(text, /next: ca_project action=use/)
+
+  const compact = (await context.run('ca_project', { action: 'list', compact: true })).text
+  assert.ok(!compact.includes('compdb:'), 'compact omits compdb')
+  assert.ok(!compact.includes('ssh:'), 'compact omits ssh')
+})
+
+test('ca_project list explains the project model when nothing is configured', async () => {
+  const backend = createFakeBackend({ projects: [], activeProjectId: null })
+  const context = setup({ backend })
+  const text = (await context.run('ca_project', { action: 'list' })).text
+  assert.match(text, /CA projects: 0 \(none active\)/)
+  assert.match(text, /No projects configured\. A project pins one source tree to one database/)
+  assert.match(text, /Ask the user to create a project in the CA page/)
+})
+
+test('ca_project use activates an existing project by case-insensitive name or id', async () => {
+  const context = setupWithProjects()
+  const byName = (await context.run('ca_project', { action: 'use', target: 'REMOTE-INDEX' })).text
+  assert.match(byName, /CA project activated: remote-index \(remote\)/)
+  assert.match(byName, /source: \/home\/yu\/CA_OH/)
+  assert.match(byName, /database: dbDir \/home\/yu\/CA_OH\/index/)
+  assert.match(byName, /note: activation persists the project and restarts the backend/)
+  assert.deepEqual(context.backend.calls.activateProject, ['proj-2'])
+
+  await context.run('ca_project', { action: 'use', target: 'proj-1' })
+  assert.equal(context.backend.calls.activateProject.at(-1), 'proj-1')
+})
+
+test('ca_project use never creates projects and reports unknown targets helpfully', async () => {
+  const context = setupWithProjects()
+  await toolError(context.run('ca_project', { action: 'use' }), 'INVALID_ARGUMENT')
+  await assert.rejects(
+    context.run('ca_project', { action: 'use', target: 'missing' }),
+    (error) => {
+      assert.equal(error.code, 'PROJECT_NOT_FOUND')
+      assert.match(error.message, /available projects: dsoftbus, remote-index/)
+      assert.match(error.message, /created in the CA page/)
+      return true
+    },
+  )
+  assert.equal(context.backend.calls.saveProject.length, 0, 'use never creates projects')
+  assert.equal(context.backend.calls.deleteProject.length, 0, 'use never deletes projects')
+})
+
+test('ca_project status returns the active project and backend state', async () => {
+  const context = setupWithProjects()
+  const text = (await context.run('ca_project', { action: 'status' })).text
+  assert.match(text, /CA project: dsoftbus \[active\]/)
+  assert.match(text, /id: proj-1/)
+  assert.match(text, /source: \/repo\/oh/)
+  assert.match(text, /database: db \/data\/oh\.db/)
+  assert.match(text, /backend: running \(mode: local\)/)
+  assert.match(text, /other projects: remote-index/)
+
+  const none = setupWithProjects({ activeProjectId: null })
+  const noneText = (await none.run('ca_project', { action: 'status' })).text
+  assert.match(noneText, /CA project: none selected/)
+  assert.match(noneText, /legacy database settings/)
+  assert.match(noneText, /available projects: dsoftbus, remote-index/)
+})
+
+test('ca_project reports an unsupported backend build', async () => {
+  const backend = createFakeBackend()
+  delete backend.listProjects
+  delete backend.getActiveProject
+  delete backend.activateProject
+  const context = setup({ backend })
+  await assert.rejects(context.run('ca_project', { action: 'list' }), (error) => {
+    assert.equal(error.code, 'BACKEND_UNSUPPORTED')
+    return true
+  })
+  await assert.rejects(context.run('ca_project', { action: 'use', target: 'x' }), (error) => {
+    assert.equal(error.code, 'BACKEND_UNSUPPORTED')
+    return true
+  })
+  // status degrades gracefully instead of failing: shows the backend state.
+  const statusText = (await context.run('ca_project', { action: 'status' })).text
+  assert.match(statusText, /CA project: none selected/)
+  assert.match(statusText, /backend: running/)
+})
+
+test('ca_status reports the active project and hints when none is selected', async () => {
+  const active = setupWithProjects()
+  const activeText = (await active.run('ca_status', {})).text
+  assert.match(activeText, /project: dsoftbus \(local, source \/repo\/oh, db \/data\/oh\.db\)/)
+
+  const none = setupWithProjects({ activeProjectId: null })
+  const noneText = (await none.run('ca_status', {})).text
+  assert.match(noneText, /project: none selected — create or select one in the CA page/)
 })
 
 test('long tool output is bounded and tells the model how to page', async () => {

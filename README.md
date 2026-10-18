@@ -121,9 +121,10 @@ and SSH-tunnel guidance.
 ## DSH plugin (DeepSeek Harness)
 
 `dsh/` packages CA as a DeepSeek Harness bundle (`@local/dsh-ca`): the full CA
-page inside the Harness Web UI, eleven native `ca_*` tools for the agent, a
+page inside the Harness Web UI, twelve native `ca_*` tools for the agent, a
 local or remote Linux `ca serve` backend, long indexing tasks and AI
-explanations powered by the session's model (CA itself stays LLM-free). The
+explanations powered by the session's model (CA itself stays LLM-free). Projects pair one source root with one database (or shard
+directory) and a backend location, created by hand in the CA panel. The
 plugin is additive: the CLI, `ca ui`, `ca mcp` and the MCP protocol are
 unchanged, and plugin code does not change CA's test baseline. Install it from
 the local `dsh/` directory through the Harness plugin manager; see

@@ -1,7 +1,7 @@
 # DSH plugin (`@local/dsh-ca`)
 
 CA also ships as a DeepSeek Harness bundle: the CA
-page inside the Harness Web UI, eleven native `ca_*` tools for the agent, a local or
+page inside the Harness Web UI, twelve native `ca_*` tools for the agent, a local or
 remote Linux `ca serve` backend, long indexing tasks and AI explanations. CA itself is
 unchanged: the plugin only calls CA's existing read-only HTTP API and CLI, and it does
 not change CA's test baseline (497 passed / 4 skipped at the time of writing).
@@ -37,6 +37,7 @@ the backend page are persisted as a sparse user patch in
 |---|---|---|
 | `backend` | `auto` | `auto` prefers a configured remote host, else a local DB; `local`/`remote` force a mode |
 | `autoStart` | `true` | start the backend when the plugin activates |
+| `projects` / `activeProjectId` | `[]` / `null` | saved projects (see above); the active project drives the backend target |
 | `requestTimeoutMs` | `30000` | CA HTTP request timeout |
 | `readyTimeoutMs` | `20000` | max wait for `ca serve` readiness |
 | `local.repoRoot` | auto | CA checkout root (discovered from cwd when unset) |
@@ -55,18 +56,28 @@ the backend page are persisted as a sparse user patch in
 | `local.env` / `remote.env` | `{}` | extra child-process environment |
 | `log.*` | bounded | plugin log rotation and in-memory ring settings |
 
-### Choosing the database / project
+### Projects (source root + database + backend location)
 
-The top bar always shows the active database (a single `.db` file or a federated
-shard directory, with its full path in the tooltip). Its selector lists databases
-discovered on the backend host — for a remote backend it scans the configured
-directory over one SSH round trip — plus the workspace/project/variant entries a
-CA registry database exposes. The backend page repeats the same list under
-"Available databases". Selecting an entry calls `backend.useDatabase`, which
-persists the new target in the user patch, restarts `ca serve` (and the SSH
-tunnel for remote targets) and reloads the page; a failed switch keeps the
-previous database. Nothing about the queried index is compiled into the plugin:
-it is always the configured local path or the remote path reached through SSH.
+CA is a general analyzer, so the plugin is organized around **projects**, like
+opening a project in DSH. One project binds three things that always belong
+together:
+
+| Field | Meaning |
+|---|---|
+| `name` | unique, human-chosen label |
+| `sourceRoot` | the source tree the index was built from (absolute path on the backend host) |
+| `db` **or** `dbDir` | one SQLite index, or a directory of federated shards |
+| `backend` + `ssh` | run the index locally or on a remote Linux host (SSH target) |
+| `compdb`, `python`, `caRepoPath` | optional: compile database and CA/venv locations |
+
+Projects are created, edited and removed **by hand** on the `#/projects` page and
+persisted in the user patch; nothing is inferred from a scanned directory. The
+top bar always shows the active project; switching it calls
+`projects.activate`, which reconfigures the backend, restarts `ca serve` (and
+the SSH tunnel) and reloads the page. A failed switch rolls back to the previous
+configuration. When upgrading from the older single-target configuration, the
+plugin migrates it into one default project named after the database; check its
+`sourceRoot` and edit it if the source tree lives elsewhere.
 
 All remote paths must be absolute or start with `~/`.
 
@@ -131,18 +142,21 @@ entry in the `sidebar.panellist` sidebar. Routes:
 - `#/callbacks` — cross-TU callback registrations with path/field/module/kind filters
   and pagination.
 - `#/tasks` — long-task list, start, incremental logs and cancel.
+- `#/projects` — create/edit/remove/activate projects (name, backend, source root,
+  `db`/`dbDir`, compile database, SSH target). The primary place to manage indexes.
 - `#/backend` — backend status, start/stop/restart, local/remote probe, remote install,
-  editable configuration and a `/api/health` check.
+  editable low-level configuration and a `/api/health` check.
 - Function page → **Explain with AI** panel, see below.
 
 ## Native tools
 
-Eleven tools are visible to the agent; each returns bounded text and observes the
+Twelve tools are visible to the agent; each returns bounded text and observes the
 tool-call cancellation signal.
 
 | Tool | Purpose |
 |---|---|
-| `ca_status` | backend state, health, database path, index counts, task summary |
+| `ca_status` | backend state, health, active project, database path, index counts, task summary |
+| `ca_project` | list/use/status projects; `use` activates an existing project (creation and editing stay in the UI) |
 | `ca_search` | resolve a function name/id/qualified name/substring (paged) |
 | `ca_symbol` | one function/type record plus deep-fact counts and key conditions |
 | `ca_graph` | callers/callees/both around a symbol; candidate edges are marked |
@@ -194,6 +208,10 @@ rest of the plugin keeps working.
   the Harness after Host changes, rebuild `client.js` and refresh after Client changes.
 - **AI explanation unavailable** — pick a default model in the Harness, or fall back to
   `ca_symbol`/`ca_facts`/`ca_source` and explain manually.
+
+- **No project selected / migrated project points at the CA checkout** — open `#/projects`,
+  edit `sourceRoot` to the real source tree and pick `db`/`dbDir`, then activate; the
+  migrated project keeps the old target working until you do.
 
 ## Security boundaries
 

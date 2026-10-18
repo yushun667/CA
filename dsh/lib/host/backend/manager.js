@@ -36,8 +36,17 @@ import { BackendError, normalizeError, toErrorPayload } from './errors.js';
 import { createHttpClient } from './http.js';
 import { createLocalBackend } from './local.js';
 import { createLogger } from './log.js';
+import {
+  buildProjectFromLegacyConfig,
+  createProjectId,
+  findProjectById,
+  normalizeProject,
+  projectNameKey,
+  projectToBackendPatch,
+  sanitizeStoredProject,
+} from './projects.js';
 import { createRemoteBackend } from './remote/index.js';
-import { nonEmptyString } from './util.js';
+import { cloneJson, isPlainObject, nonEmptyString } from './util.js';
 
 export { BackendError } from './errors.js';
 
@@ -88,6 +97,64 @@ export function createBackendManager(ctx, configInput, deps = {}) {
   }
   if (configError) {
     logger.error(`[backend] ${configError.message}`);
+  }
+
+  // -- project store (product model) ----------------------------------- //
+  /** @type {{projects: Array<Record<string, any>>, activeProjectId: string|null}} */
+  const projectState = { projects: [], activeProjectId: null };
+
+  const generateProjectId = () =>
+    typeof safeDeps.generateProjectId === 'function' ? safeDeps.generateProjectId() : createProjectId();
+
+  /** Snapshot of the project store for settings persistence/rollback. */
+  function projectStoreState() {
+    return {
+      projects: projectState.projects.map((project) => cloneJson(project)),
+      activeProjectId: projectState.activeProjectId,
+    };
+  }
+
+  function persistSettings(patch = storedPatch) {
+    saveStoredSettings(paths, patch, projectStoreState());
+  }
+
+  if (stored.projects !== null) {
+    const sanitized = stored.projects.map((raw) => sanitizeStoredProject(raw)).filter(Boolean);
+    if (sanitized.length !== stored.projects.length) {
+      logger.warn(
+        `[backend] settings.json 中有 ${stored.projects.length - sanitized.length} 个无效项目已忽略`,
+      );
+    }
+    projectState.projects = sanitized;
+    if (stored.activeProjectId && sanitized.some((project) => project.id === stored.activeProjectId)) {
+      projectState.activeProjectId = stored.activeProjectId;
+    }
+  } else if (stored.exists) {
+    // Upgrade path: the settings file predates the project model. Generate a
+    // default project so the existing backend configuration keeps working.
+    const legacyMode = resolveConfiguredMode(config);
+    const migrated = buildProjectFromLegacyConfig({
+      config,
+      mode: legacyMode,
+      now,
+      generateId: generateProjectId,
+    });
+    if (migrated) {
+      projectState.projects = [migrated];
+      projectState.activeProjectId = migrated.id;
+      try {
+        saveStoredSettings(paths, storedPatch, projectStoreState());
+        logger.info(
+          `[backend] 旧配置已迁移为默认项目 "${migrated.name}"（${migrated.backend}，${
+            migrated.dbDir || migrated.db
+          }）`,
+        );
+      } catch (migrationError) {
+        logger.warn(
+          `[backend] 迁移项目写入 settings.json 失败: ${migrationError?.message || migrationError}`,
+        );
+      }
+    }
   }
 
   const http = createHttpClient({
@@ -609,7 +676,13 @@ export function createBackendManager(ctx, configInput, deps = {}) {
     const validation = await backend.validateDatabase({ kind, path: selectedPath });
 
     // 2) Snapshot rollback state, then persist + restart.
-    const rollback = { storedPatch, config, configVersion };
+    const rollback = {
+      storedPatch,
+      config,
+      configVersion,
+      projects: projectState.projects.map((project) => cloneJson(project)),
+      activeProjectId: projectState.activeProjectId,
+    };
     let configureResult;
     try {
       configureResult = configure(patch);
@@ -622,53 +695,275 @@ export function createBackendManager(ctx, configInput, deps = {}) {
     } catch (rawError) {
       const cause = normalizeError(rawError, 'DATABASE_SWITCH_FAILED', '切换数据库失败');
       logger.error(`[backend] 切换数据库失败，回滚设置：${cause.message}`);
-      try {
-        saveStoredSettings(paths, rollback.storedPatch);
-      } catch (writeError) {
-        logger.error(`[backend] 回滚 settings.json 失败: ${writeError?.message || writeError}`);
-      }
-      storedPatch = rollback.storedPatch;
-      config = rollback.config;
-      configVersion += 1;
-      for (const modeKey of BACKEND_MODES) {
-        const entry = backends[modeKey];
-        if (!entry) continue;
-        try {
-          entry.unsubscribe();
-        } catch {
-          // ignore
-        }
-        try {
-          await entry.backend.dispose();
-        } catch (disposeError) {
-          logger.warn(`[backend] 回滚时释放 ${modeKey} 后端失败: ${disposeError?.message || disposeError}`);
-        }
-        backends[modeKey] = null;
-      }
-      let restored = false;
-      let restoreError = null;
-      try {
-        const restoreMode = resolveConfiguredMode(config);
-        if (restoreMode !== 'unconfigured') {
-          const restoredStatus = await start();
-          restored = restoredStatus.state === 'running';
-        }
-      } catch (restoreFailure) {
-        restoreError = normalizeError(restoreFailure, 'BACKEND_START_FAILED');
-        logger.warn(`[backend] 回滚后重启旧后端失败: ${restoreError.message}`);
-      }
-      emit('config', { config: publicConfig(config, paths), changed: true });
-      emit('status', { ...getStatus(), configChanged: false }, { reason: 'rolled-back' });
+      const restore = await restoreAfterConfigFailure(rollback);
       throw new BackendError(
         'DATABASE_SWITCH_FAILED',
         `切换数据库失败：${cause.message}` +
-          (restored ? '；已恢复原配置并重启旧后端' : '；已恢复原配置，但旧后端未能自动重启，请重试 backend.start'),
+          (restore.restored
+            ? '；已恢复原配置并重启旧后端'
+            : '；已恢复原配置，但旧后端未能自动重启，请重试 backend.start'),
         {
           cause: cause.toJSON(),
-          restored,
+          restored: restore.restored,
           validation,
           status: getStatus(),
-          restoreError: restoreError ? restoreError.message : null,
+          restoreError: restore.restoreError ? restore.restoreError.message : null,
+        },
+      );
+    }
+  }
+
+  /**
+   * Restore config/settings/backend after a failed switch (database or project
+   * activation). Best effort: never throws; returns whether the previous
+   * backend is running again so callers can phrase the final error.
+   *
+   * @param {{storedPatch: Record<string, any>, config: Record<string, any>, configVersion: number,
+   *          projects?: Array<Record<string, any>>, activeProjectId?: string|null}} snapshot
+   */
+  async function restoreAfterConfigFailure(snapshot) {
+    const restoredProjects = Array.isArray(snapshot.projects)
+      ? snapshot.projects.map((project) => cloneJson(project))
+      : projectState.projects.map((project) => cloneJson(project));
+    const restoredActive =
+      snapshot.activeProjectId !== undefined ? snapshot.activeProjectId : projectState.activeProjectId;
+    try {
+      saveStoredSettings(paths, snapshot.storedPatch, {
+        projects: restoredProjects,
+        activeProjectId: restoredActive,
+      });
+    } catch (writeError) {
+      logger.error(`[backend] 回滚 settings.json 失败: ${writeError?.message || writeError}`);
+    }
+    storedPatch = snapshot.storedPatch;
+    config = snapshot.config;
+    configVersion += 1;
+    projectState.projects = restoredProjects;
+    projectState.activeProjectId = restoredActive;
+    for (const modeKey of BACKEND_MODES) {
+      const entry = backends[modeKey];
+      if (!entry) continue;
+      try {
+        entry.unsubscribe();
+      } catch {
+        // ignore
+      }
+      try {
+        await entry.backend.dispose();
+      } catch (disposeError) {
+        logger.warn(`[backend] 回滚时释放 ${modeKey} 后端失败: ${disposeError?.message || disposeError}`);
+      }
+      backends[modeKey] = null;
+    }
+    let restored = false;
+    let restoreError = null;
+    try {
+      const restoreMode = resolveConfiguredMode(config);
+      if (restoreMode !== 'unconfigured') {
+        const restoredStatus = await start();
+        restored = restoredStatus.state === 'running';
+      }
+    } catch (restoreFailure) {
+      restoreError = normalizeError(restoreFailure, 'BACKEND_START_FAILED');
+      logger.warn(`[backend] 回滚后重启旧后端失败: ${restoreError.message}`);
+    }
+    emit('config', { config: publicConfig(config, paths), changed: true });
+    emit('status', { ...getStatus(), configChanged: false }, { reason: 'rolled-back' });
+    return { restored, restoreError };
+  }
+
+  // -- project API (product main flow) ---------------------------------- //
+
+  /**
+   * List projects with an `active` flag; the active project additionally gets
+   * a compact runtime `status`. Never throws.
+   * @returns {{projects: Array<Record<string, any>>, activeProjectId: string|null}}
+   */
+  function listProjects() {
+    const runtime = getStatus();
+    const projects = projectState.projects.map((project) => {
+      const active = project.id === projectState.activeProjectId;
+      /** @type {Record<string, any>} */
+      const entry = { ...cloneJson(project), active };
+      if (active) {
+        entry.status = {
+          mode: runtime.mode,
+          state: runtime.state,
+          baseUrl: runtime.baseUrl,
+          version: runtime.version,
+          error: runtime.error,
+        };
+      }
+      return entry;
+    });
+    return { projects, activeProjectId: projectState.activeProjectId };
+  }
+
+  /** The active project, or null when none is selected. */
+  function getActiveProject() {
+    const project = findProjectById(projectState.projects, projectState.activeProjectId);
+    return project ? cloneJson(project) : null;
+  }
+
+  /**
+   * Create or update a project definition. Name is unique (case-insensitive);
+   * local paths must exist, remote paths are format-checked only.
+   * @param {Record<string, any>} input full project object; include `id` to update
+   */
+  function saveProject(input) {
+    if (disposed) throw new BackendError('DISPOSED', 'CA 后端管理器已释放，无法保存项目');
+    const hasId =
+      isPlainObject(input) && input.id !== undefined && input.id !== null && input.id !== '';
+    let previous = null;
+    if (hasId) {
+      const requestedId = nonEmptyString(input.id);
+      if (!requestedId) {
+        throw new BackendError('INVALID_ARGUMENT', '项目 id 无效', { field: 'id' });
+      }
+      previous = findProjectById(projectState.projects, requestedId);
+      if (!previous) {
+        throw new BackendError('PROJECT_NOT_FOUND', `项目不存在: ${requestedId}`, {
+          field: 'id',
+          id: requestedId,
+        });
+      }
+    }
+    const project = normalizeProject(input, { now, generateId: generateProjectId, previous });
+    const conflict = projectState.projects.find(
+      (candidate) =>
+        candidate.id !== project.id && projectNameKey(candidate.name) === projectNameKey(project.name),
+    );
+    if (conflict) {
+      throw new BackendError(
+        'INVALID_ARGUMENT',
+        `项目名 "${project.name}" 已存在（忽略大小写），请换一个名字`,
+        { field: 'name', reason: 'PROJECT_NAME_CONFLICT', conflictingId: conflict.id },
+      );
+    }
+    const previousProjects = projectState.projects.map((projectEntry) => cloneJson(projectEntry));
+    const index = projectState.projects.findIndex((candidate) => candidate.id === project.id);
+    if (index >= 0) projectState.projects[index] = project;
+    else projectState.projects.push(project);
+    try {
+      persistSettings();
+    } catch (error) {
+      projectState.projects = previousProjects;
+      throw error;
+    }
+    logger.info(`[backend] 已保存项目 "${project.name}"（${project.backend}）`);
+    emit('projects', listProjects(), { reason: previous ? 'updated' : 'created' });
+    return {
+      project: cloneJson(project),
+      projects: listProjects().projects,
+      activeProjectId: projectState.activeProjectId,
+    };
+  }
+
+  /**
+   * Delete a project. Deleting the active project clears `activeProjectId` but
+   * leaves the backend running on its last configuration (the UI shows "no
+   * project selected").
+   * @param {string} id
+   */
+  function deleteProject(id) {
+    if (disposed) throw new BackendError('DISPOSED', 'CA 后端管理器已释放，无法删除项目');
+    const projectId = nonEmptyString(id);
+    if (!projectId) {
+      throw new BackendError('INVALID_ARGUMENT', '项目 id 不能为空', { field: 'id' });
+    }
+    const index = projectState.projects.findIndex((project) => project.id === projectId);
+    if (index < 0) {
+      throw new BackendError('PROJECT_NOT_FOUND', `项目不存在: ${projectId}`, { id: projectId });
+    }
+    const previousState = projectStoreState();
+    const [removed] = projectState.projects.splice(index, 1);
+    const activeCleared = projectState.activeProjectId === projectId;
+    if (activeCleared) projectState.activeProjectId = null;
+    try {
+      persistSettings();
+    } catch (error) {
+      projectState.projects = previousState.projects.map((project) => cloneJson(project));
+      projectState.activeProjectId = previousState.activeProjectId;
+      throw error;
+    }
+    logger.info(
+      `[backend] 已删除项目 "${removed.name}"` +
+        (activeCleared ? '（原为活动项目：activeProjectId 已清空，后端继续运行旧配置）' : ''),
+    );
+    emit('projects', listProjects(), { reason: 'deleted' });
+    return {
+      deleted: cloneJson(removed),
+      projects: listProjects().projects,
+      activeProjectId: projectState.activeProjectId,
+      activeCleared,
+    };
+  }
+
+  /**
+   * Activate a project: re-validate it, map it onto backend config, persist and
+   * restart. On any failure the previous config/settings/project selection are
+   * restored (best-effort restart of the old backend) and a
+   * `PROJECT_ACTIVATION_FAILED` BackendError is thrown.
+   * @param {string} id
+   * @returns {Promise<{project: Record<string, any>, config: Record<string, any>, status: Record<string, any>}>}
+   */
+  async function activateProject(id) {
+    if (disposed) throw new BackendError('DISPOSED', 'CA 后端管理器已释放，无法激活项目');
+    const projectId = nonEmptyString(id);
+    if (!projectId) {
+      throw new BackendError('INVALID_ARGUMENT', '项目 id 不能为空', { field: 'id' });
+    }
+    const project = findProjectById(projectState.projects, projectId);
+    if (!project) {
+      throw new BackendError('PROJECT_NOT_FOUND', `项目不存在: ${projectId}`, { id: projectId });
+    }
+    // Re-validate the stored definition: local paths may have disappeared since
+    // the project was saved, remote paths are format-checked only.
+    const validated = normalizeProject(
+      { ...project, id: project.id },
+      { now, generateId: () => project.id, previous: project },
+    );
+    const patch = projectToBackendPatch(validated);
+    try {
+      applyConfigPatch({ currentPatch: storedPatch, patch, explicit: configInput, env, homedir, cwd });
+    } catch (error) {
+      throw normalizeError(error, 'CONFIG_INVALID', `项目 "${validated.name}" 的后端配置无效`);
+    }
+    const snapshot = {
+      storedPatch,
+      config,
+      configVersion,
+      projects: projectState.projects.map((entry) => cloneJson(entry)),
+      activeProjectId: projectState.activeProjectId,
+    };
+    projectState.activeProjectId = validated.id;
+    try {
+      configure(patch);
+      const status = await restart();
+      logger.info(`[backend] 已激活项目 "${validated.name}"（${validated.backend}）`);
+      emit('projects', listProjects(), { reason: 'activated' });
+      return { project: cloneJson(project), config: publicConfig(config, paths), status };
+    } catch (rawError) {
+      const cause = normalizeError(
+        rawError,
+        'PROJECT_ACTIVATION_FAILED',
+        `激活项目 "${validated.name}" 失败`,
+      );
+      logger.error(`[backend] ${cause.message}；回滚设置`);
+      const restore = await restoreAfterConfigFailure(snapshot);
+      emit('projects', listProjects(), { reason: 'activation-rolled-back' });
+      throw new BackendError(
+        'PROJECT_ACTIVATION_FAILED',
+        `激活项目 "${validated.name}" 失败：${cause.message}` +
+          (restore.restored
+            ? '；已恢复原配置并重启旧后端'
+            : '；已恢复原配置，但旧后端未能自动重启，请重试 backend.start'),
+        {
+          cause: cause.toJSON(),
+          project: cloneJson(project),
+          restored: restore.restored,
+          status: getStatus(),
+          restoreError: restore.restoreError ? restore.restoreError.message : null,
         },
       );
     }
@@ -697,7 +992,7 @@ export function createBackendManager(ctx, configInput, deps = {}) {
     } catch (error) {
       throw normalizeError(error, 'CONFIG_INVALID', 'CA 后端设置无效');
     }
-    saveStoredSettings(paths, result.patch);
+    persistSettings(result.patch);
     const previous = config;
     const changed = JSON.stringify(previous) !== JSON.stringify(result.config);
     storedPatch = result.patch;
@@ -778,6 +1073,11 @@ export function createBackendManager(ctx, configInput, deps = {}) {
     getInstallStatus,
     listDatabases,
     useDatabase,
+    listProjects,
+    getActiveProject,
+    saveProject,
+    deleteProject,
+    activateProject,
     configure,
     onChange,
     on,

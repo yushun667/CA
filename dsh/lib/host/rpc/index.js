@@ -21,6 +21,7 @@
 
 import { BackendError, isAbortError, isBackendError, normalizeError } from '../backend/errors.js'
 import { clampInt, isPlainObject } from '../backend/util.js'
+import { fetchActiveProject } from '../tools/projects.js'
 
 export const CHANNEL = '/dsh-ca'
 export const PLUGIN_VERSION = '0.1.0'
@@ -40,6 +41,10 @@ export const RPC_ENDPOINTS = Object.freeze([
   'backend.installStatus',
   'backend.databases',
   'backend.useDatabase',
+  'projects.list',
+  'projects.save',
+  'projects.remove',
+  'projects.activate',
   'tasks.start',
   'tasks.list',
   'tasks.get',
@@ -62,6 +67,7 @@ const MAX_SYMBOL_LENGTH = 1024
 const MAX_QUESTION_LENGTH = 4000
 const MAX_ID_LENGTH = 128
 const MAX_DB_PATH_LENGTH = 4096
+const MAX_PROJECT_ID_LENGTH = 256
 
 /** Stable RPC error carrying a machine-readable code. */
 export class RpcError extends Error {
@@ -190,18 +196,42 @@ function validateDatabasePath(value) {
 }
 
 /**
- * Map backend failures onto the small database-switch vocabulary the UI knows:
- * INVALID_ARGUMENT (bad input/config), DB_NOT_FOUND (missing target), and
- * BACKEND_ERROR (anything else, original code kept in details).
+ * Map backend mutation failures onto the small vocabulary the UI knows:
+ * INVALID_ARGUMENT (bad input/config), DB_NOT_FOUND (missing database or
+ * project target), and BACKEND_ERROR (anything else, original code kept in
+ * details).
  */
-function databaseSwitchFailure(error) {
-  if (!isBackendError(error)) return error
+function backendMutationFailure(error) {
+  // BackendError instances and plain errors carrying a stable uppercase code
+  // are both mapped; anything else falls through to INTERNAL.
+  if (!error || typeof error !== 'object' || typeof error.code !== 'string') return error
   const details = detailsOf(error.details)
-  if (error.code === 'DB_NOT_FOUND') return new RpcError('DB_NOT_FOUND', error.message, details)
-  if (error.code === 'INVALID_ARGUMENT' || error.code === 'CONFIG_INVALID') {
-    return new RpcError('INVALID_ARGUMENT', error.message, details)
+  const message = typeof error.message === 'string' ? error.message : String(error.code)
+  if (
+    error.code === 'DB_NOT_FOUND' ||
+    error.code === 'PROJECT_NOT_FOUND' ||
+    error.code === 'NOT_FOUND'
+  ) {
+    return new RpcError('DB_NOT_FOUND', message, details)
   }
-  return new RpcError('BACKEND_ERROR', error.message, { ...details, backendCode: error.code })
+  if (error.code === 'INVALID_ARGUMENT' || error.code === 'CONFIG_INVALID') {
+    return new RpcError('INVALID_ARGUMENT', message, details)
+  }
+  return new RpcError('BACKEND_ERROR', message, { ...details, backendCode: error.code })
+}
+
+/** Normalize a project list/save/remove/activate manager result. */
+function projectPayload(result) {
+  const safe = isPlainObject(result) ? jsonSafe(result) ?? {} : {}
+  return {
+    ...safe,
+    project: isPlainObject(safe.project) ? safe.project : null,
+    projects: Array.isArray(safe.projects) ? safe.projects.slice(0, 500) : [],
+    activeProjectId:
+      typeof safe.activeProjectId === 'string' && safe.activeProjectId.length > 0
+        ? safe.activeProjectId
+        : null,
+  }
 }
 
 /** Trim the CA registry snapshot to the fields the database picker needs. */
@@ -469,6 +499,7 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
         tasks: items.slice(0, 50),
         model: await currentModel(),
         counts: taskCounts(items),
+        project: await fetchActiveProject(backend),
       }
     },
 
@@ -685,7 +716,7 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
       try {
         report = await listDatabases(refresh === true ? { refresh: true } : undefined)
       } catch (error) {
-        throw databaseSwitchFailure(error)
+        throw backendMutationFailure(error)
       }
       if (!isPlainObject(report)) {
         fail('BACKEND_ERROR', 'The CA backend returned an invalid database discovery report')
@@ -752,12 +783,105 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
       try {
         result = await useDatabase({ kind, path: target })
       } catch (error) {
-        throw databaseSwitchFailure(error)
+        throw backendMutationFailure(error)
       }
       const safe = isPlainObject(result) ? jsonSafe(result) : {}
       return {
         ...safe,
         config: publicConfig(safe?.config ?? backend.config ?? config) ?? {},
+        status: safeStatus(backend),
+      }
+    },
+
+    async 'projects.list'() {
+      const listProjects = backendMethod(backend, ['listProjects'])
+      if (listProjects === null) {
+        fail(
+          'BACKEND_UNSUPPORTED',
+          'This CA backend build does not support the project model yet; configure the database on the CA backend page instead.',
+        )
+      }
+      let result
+      try {
+        result = await listProjects()
+      } catch (error) {
+        throw backendMutationFailure(error)
+      }
+      const safe = projectPayload(result)
+      return { projects: safe.projects, activeProjectId: safe.activeProjectId }
+    },
+
+    async 'projects.save'(payload) {
+      const project = requirePlainObject(payload.project, 'payload.project', MAX_CONFIG_PATCH_BYTES)
+      if (Object.keys(project).length === 0) {
+        fail('INVALID_ARGUMENT', 'payload.project must contain at least one field')
+      }
+      const saveProject = backendMethod(backend, ['saveProject'])
+      if (saveProject === null) {
+        fail(
+          'BACKEND_UNSUPPORTED',
+          'This CA backend build does not support the project model yet; configure the database on the CA backend page instead.',
+        )
+      }
+      let result
+      try {
+        result = await saveProject(jsonSafe(project))
+      } catch (error) {
+        throw backendMutationFailure(error)
+      }
+      const safe = projectPayload(result)
+      return {
+        project: safe.project,
+        projects: safe.projects,
+        activeProjectId: safe.activeProjectId,
+      }
+    },
+
+    async 'projects.remove'(payload) {
+      const id = optionalString(payload, 'id', {
+        required: true,
+        maxLength: MAX_PROJECT_ID_LENGTH,
+      })
+      const deleteProject = backendMethod(backend, ['deleteProject'])
+      if (deleteProject === null) {
+        fail('BACKEND_UNSUPPORTED', 'This CA backend build does not support the project model yet')
+      }
+      let result
+      try {
+        result = await deleteProject(id)
+      } catch (error) {
+        throw backendMutationFailure(error)
+      }
+      const safe = projectPayload(result)
+      return {
+        // `deleted`/`activeCleared` are additive; the UI needs them to explain
+        // that deleting the active project clears the selection.
+        deleted: isPlainObject(safe.deleted) ? safe.deleted : null,
+        projects: safe.projects,
+        activeProjectId: safe.activeProjectId,
+        activeCleared: safe.activeCleared === true,
+      }
+    },
+
+    async 'projects.activate'(payload) {
+      const id = optionalString(payload, 'id', {
+        required: true,
+        maxLength: MAX_PROJECT_ID_LENGTH,
+      })
+      const activateProject = backendMethod(backend, ['activateProject'])
+      if (activateProject === null) {
+        fail('BACKEND_UNSUPPORTED', 'This CA backend build does not support the project model yet')
+      }
+      let result
+      try {
+        result = await activateProject(id)
+      } catch (error) {
+        throw backendMutationFailure(error)
+      }
+      const safe = projectPayload(result)
+      return {
+        project: safe.project,
+        config: publicConfig(safe.config ?? backend.config ?? config) ?? {},
         status: safeStatus(backend),
       }
     },

@@ -39,6 +39,7 @@ const { createShell, createPanelIcon, PANEL_ID, NS } = __m("shell/index.js")
 
 const { createSearchPage } = __m("pages/search.js")
 const { createBackendPage } = __m("pages/backend.js")
+const { createProjectsPage } = __m("pages/projects.js")
 const { createTasksPage } = __m("pages/tasks.js")
 const { createGraphPage } = __m("pages/graph.js")
 const { createStatsPage } = __m("pages/stats.js")
@@ -61,6 +62,7 @@ function apply(ctx) {
 
   shell.registerPage('search', createSearchPage(React, bag))
   shell.registerPage('backend', createBackendPage(React, bag))
+  shell.registerPage('projects', createProjectsPage(React, bag))
   shell.registerPage('tasks', createTasksPage(React, bag))
   shell.registerPage('graph', createGraphPage(React, bag))
   shell.registerPage('stats', createStatsPage(React, bag))
@@ -9362,6 +9364,10 @@ const Endpoints = Object.freeze({
   tasksLogs: 'tasks.logs',
   tasksCancel: 'tasks.cancel',
   explain: 'explain',
+  projectsList: 'projects.list',
+  projectsSave: 'projects.save',
+  projectsRemove: 'projects.remove',
+  projectsActivate: 'projects.activate',
 })
 
 const CA_METHODS = new Set(['GET', 'HEAD', 'POST'])
@@ -9689,6 +9695,16 @@ function createApi(ctx) {
     cancel: (id, signal) => rpc(Endpoints.tasksCancel, { id }, signal),
   }
 
+  // Project = source tree + database (single DB or shard dir) + backend target,
+  // created and named by the user. The UI treats projects as the primary model;
+  // database discovery is only a low-level fallback on the backend page.
+  const projects = {
+    list: (signal) => rpc(Endpoints.projectsList, {}, signal),
+    save: (project, signal) => rpc(Endpoints.projectsSave, { project: project || {} }, signal),
+    remove: (id, signal) => rpc(Endpoints.projectsRemove, { id }, signal),
+    activate: (id, signal) => rpc(Endpoints.projectsActivate, { id }, signal),
+  }
+
   const explain = (params, signal) => rpc(Endpoints.explain, params || {}, signal)
 
   // -- active variant store -------------------------------------------------- //
@@ -9761,6 +9777,7 @@ function createApi(ctx) {
     ping,
     backend,
     tasks,
+    projects,
     explain,
     variant: {
       get: () => variantState,
@@ -9794,6 +9811,964 @@ __exports["createApi"] = createApi;
 __exports["ApiError"] = ApiError;
 __exports["RPC_CHANNEL"] = RPC_CHANNEL;
 __exports["Endpoints"] = Endpoints;
+
+    })
+    __modules.set("pages/projects.js", function (__exports) {
+/**
+ * CA projects page (`#/projects`).
+ *
+ * A project is the user-managed unit the plugin serves: one source tree, one
+ * database (a single SQLite file or a federated shard directory) and one
+ * backend target (local machine or remote Linux host over SSH). Projects are
+ * created, named and edited **manually** — there is no directory scanning
+ * here. Activating a project maps it onto the backend configuration, restarts
+ * the backend and reloads the page so every view reads the new database.
+ *
+ * RPC: `projects.list` / `projects.save` / `projects.remove` /
+ * `projects.activate` through `bag.api.projects`; responses are the Host
+ * envelopes already unwrapped by the api layer.
+ */
+
+const { toApiError } = __m("api.js")
+
+const PROJECTS_CSS = `
+.ca-projects-page { gap: 14px; overflow: auto; padding: 18px; }
+.ca-projects-inner { width: 100%; max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.ca-projects-head { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.ca-projects-title { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+.ca-projects-sub { margin: 2px 0 0; font-size: 12.5px; color: var(--dsw-alias-label-secondary, #57606a); }
+.ca-projects-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ca-projects-hint { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-2, rgba(127, 127, 127, 0.05)); font-size: 12.5px; color: var(--dsw-alias-label-secondary, #57606a); }
+.ca-projects-notice { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-2, rgba(127, 127, 127, 0.05)); font-size: 12.5px; color: var(--dsw-alias-label-secondary, #57606a); }
+.ca-projects-row-active td { background: var(--dsw-alias-button-ghost-active-fill, rgba(127, 127, 127, 0.13)); }
+.ca-projects-cell-main { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+.ca-projects-name { display: flex; align-items: center; gap: 6px; font-weight: 550; overflow-wrap: anywhere; }
+.ca-projects-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); overflow-wrap: anywhere; }
+.ca-projects-form-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ca-projects-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px 14px; }
+.ca-projects-section { display: flex; flex-direction: column; gap: 10px; }
+.ca-projects-section-title { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; padding-bottom: 4px; border-bottom: 1px solid var(--dsw-alias-border-l1, #eaeef2); font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-secondary, #57606a); }
+.ca-projects-form-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ca-projects-danger { color: var(--dsw-alias-state-error-primary, #d1242f); }
+`
+
+const BACKEND_OPTIONS = [
+  { value: 'local', labelKey: 'projects.backend.local', fallback: 'local' },
+  { value: 'remote', labelKey: 'projects.backend.remote', fallback: 'remote (SSH)' },
+]
+
+const DB_KIND_OPTIONS = [
+  { value: 'db', labelKey: 'projects.field.dbSingle', fallback: 'Single DB file' },
+  { value: 'dbDir', labelKey: 'projects.field.dbDir', fallback: 'Shard directory' },
+]
+
+const EMPTY_FORM = Object.freeze({
+  name: '',
+  backend: 'local',
+  sourceRoot: '',
+  dbKind: 'db',
+  dbPath: '',
+  compdb: '',
+  python: '',
+  caRepoPath: '',
+  sshHost: '',
+  sshUser: '',
+  sshPort: '',
+  sshKeyPath: '',
+})
+
+function asText(value) {
+  return value === undefined || value === null ? '' : String(value)
+}
+
+function projectToForm(project) {
+  const source = project && typeof project === 'object' ? project : {}
+  const ssh = source.ssh && typeof source.ssh === 'object' ? source.ssh : {}
+  const hasDb = typeof source.db === 'string' && source.db.length > 0
+  return {
+    name: asText(source.name),
+    backend: source.backend === 'remote' ? 'remote' : 'local',
+    sourceRoot: asText(source.sourceRoot),
+    dbKind: hasDb ? 'db' : 'dbDir',
+    dbPath: hasDb ? asText(source.db) : asText(source.dbDir),
+    compdb: asText(source.compdb),
+    python: asText(source.python),
+    caRepoPath: asText(source.caRepoPath),
+    sshHost: asText(ssh.host),
+    sshUser: asText(ssh.user),
+    sshPort: asText(ssh.port),
+    sshKeyPath: asText(ssh.keyPath),
+  }
+}
+
+function isAbsolutePath(path) {
+  return typeof path === 'string' && path.startsWith('/')
+}
+
+/**
+ * Validate the form and build the project payload sent to `projects.save`.
+ * Local path existence is validated by the Host manager; this only covers
+ * shape and the fields a user can fix in place.
+ */
+function formToProject(form) {
+  const errors = []
+  const name = asText(form.name).trim()
+  if (!name) errors.push({ field: 'name', messageKey: 'projects.error.nameRequired', fallback: 'Name is required.' })
+  const backend = form.backend === 'remote' ? 'remote' : 'local'
+  const sourceRoot = asText(form.sourceRoot).trim()
+  if (!isAbsolutePath(sourceRoot)) {
+    errors.push({
+      field: 'sourceRoot',
+      messageKey: 'projects.error.sourceRootRequired',
+      fallback: 'Source root must be an absolute path.',
+    })
+  }
+  const dbPath = asText(form.dbPath).trim()
+  if (!dbPath) {
+    errors.push({
+      field: 'dbPath',
+      messageKey: 'projects.error.databaseRequired',
+      fallback: 'Choose a database path (single DB or shard directory).',
+    })
+  }
+  const ssh = { host: asText(form.sshHost).trim(), user: null, port: null, keyPath: null }
+  if (backend === 'remote') {
+    if (!ssh.host) {
+      errors.push({
+        field: 'sshHost',
+        messageKey: 'projects.error.sshHostRequired',
+        fallback: 'SSH host is required for a remote project.',
+      })
+    }
+    const portText = asText(form.sshPort).trim()
+    if (portText) {
+      const port = Number(portText)
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        errors.push({
+          field: 'sshPort',
+          messageKey: 'projects.error.portInvalid',
+          fallback: 'SSH port must be an integer between 1 and 65535.',
+        })
+      } else {
+        ssh.port = port
+      }
+    }
+    if (asText(form.sshUser).trim()) ssh.user = asText(form.sshUser).trim()
+    if (asText(form.sshKeyPath).trim()) ssh.keyPath = asText(form.sshKeyPath).trim()
+  }
+  if (errors.length > 0) return { ok: false, errors }
+  const project = {
+    name,
+    backend,
+    sourceRoot,
+    db: form.dbKind === 'db' ? dbPath : null,
+    dbDir: form.dbKind === 'dbDir' ? dbPath : null,
+    compdb: asText(form.compdb).trim() || null,
+    python: asText(form.python).trim() || null,
+    caRepoPath: asText(form.caRepoPath).trim() || null,
+    ssh: backend === 'remote' ? ssh : null,
+  }
+  return { ok: true, project }
+}
+
+function projectDbLabel(project) {
+  if (!project || typeof project !== 'object') return ''
+  const db = typeof project.db === 'string' ? project.db : ''
+  const dbDir = typeof project.dbDir === 'string' ? project.dbDir : ''
+  if (db) return db
+  if (dbDir) return dbDir
+  return ''
+}
+
+function projectDbBasename(project) {
+  const path = projectDbLabel(project)
+  if (!path) return ''
+  const cleaned = path.replace(/[\\/]+$/, '')
+  const parts = cleaned.split(/[\\/]/)
+  return parts[parts.length - 1] || cleaned
+}
+
+/**
+ * Create the projects page component.
+ *
+ * @param {object} React React namespace.
+ * @param {{ ui: object, api: object, i18n: object }} bag
+ */
+function createProjectsPage(React, bag) {
+  const { ui, api, i18n } = bag || {}
+  if (!ui || !api || !i18n) throw new TypeError('createProjectsPage(React, { ui, api, i18n })')
+  const h = React.createElement
+  const t = (key, vars, fallback) => i18n.t(key, vars, fallback)
+
+  function notifyProjectsChanged() {
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+      try {
+        window.dispatchEvent(new CustomEvent('ca:projectschange'))
+      } catch (_error) {
+        /* the shell refresh is a convenience */
+      }
+    }
+  }
+
+  function ProjectsPage(props) {
+    ui.useStyles(PROJECTS_CSS)
+
+    const navigate = props && typeof props.navigate === 'function' ? props.navigate : null
+
+    const [phase, setPhase] = React.useState('loading')
+    const [loadError, setLoadError] = React.useState(null)
+    const [list, setList] = React.useState(null) // { projects, activeProjectId }
+    const [formOpen, setFormOpen] = React.useState(false)
+    const [editingId, setEditingId] = React.useState('')
+    const [form, setForm] = React.useState(() => Object.assign({}, EMPTY_FORM))
+    const [formErrors, setFormErrors] = React.useState([])
+    const [busy, setBusy] = React.useState('')
+    const [actionError, setActionError] = React.useState(null)
+    const [notice, setNotice] = React.useState('')
+    const [confirmDeleteId, setConfirmDeleteId] = React.useState('')
+
+    const mountedRef = React.useRef(true)
+    const noticeTimer = React.useRef(null)
+
+    React.useEffect(
+      () => () => {
+        mountedRef.current = false
+        if (noticeTimer.current !== null && typeof window !== 'undefined') {
+          window.clearTimeout(noticeTimer.current)
+        }
+      },
+      [],
+    )
+
+    function showNotice(message) {
+      setNotice(message)
+      if (noticeTimer.current !== null && typeof window !== 'undefined') {
+        window.clearTimeout(noticeTimer.current)
+      }
+      if (typeof window !== 'undefined') {
+        noticeTimer.current = window.setTimeout(() => {
+          noticeTimer.current = null
+          if (mountedRef.current) setNotice('')
+        }, 4500)
+      }
+    }
+
+    function applyListResult(value) {
+      if (value && typeof value === 'object') {
+        if (Array.isArray(value.projects)) {
+          setList({
+            projects: value.projects,
+            activeProjectId:
+              value.activeProjectId !== undefined ? value.activeProjectId : list ? list.activeProjectId : null,
+          })
+        }
+      }
+    }
+
+    async function loadProjects() {
+      setPhase((current) => (current === 'ready' ? current : 'loading'))
+      setLoadError(null)
+      try {
+        const value = await api.projects.list()
+        if (!mountedRef.current) return
+        if (value && typeof value === 'object' && value.ok === false && value.error) {
+          setLoadError(toApiError(value.error))
+          setPhase('error')
+          return
+        }
+        applyListResult(value)
+        setPhase('ready')
+      } catch (error) {
+        if (!mountedRef.current) return
+        const apiError = toApiError(error)
+        if (apiError.code === 'ABORTED') return
+        setLoadError(apiError)
+        setPhase('error')
+      }
+    }
+
+    React.useEffect(() => {
+      void loadProjects()
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+
+    const projects = list && Array.isArray(list.projects) ? list.projects : []
+    const activeId = list ? list.activeProjectId : null
+
+    function startCreate() {
+      setEditingId('')
+      setForm(Object.assign({}, EMPTY_FORM))
+      setFormErrors([])
+      setActionError(null)
+      setFormOpen(true)
+    }
+
+    function startEdit(project) {
+      setEditingId(String(project.id))
+      setForm(projectToForm(project))
+      setFormErrors([])
+      setActionError(null)
+      setFormOpen(true)
+    }
+
+    function cancelForm() {
+      setFormOpen(false)
+      setEditingId('')
+      setFormErrors([])
+    }
+
+    function setField(field, value) {
+      setForm((current) => Object.assign({}, current, { [field]: value }))
+      setFormErrors((current) => current.filter((entry) => entry.field !== field))
+    }
+
+    function errorFor(field) {
+      const entry = formErrors.find((item) => item.field === field)
+      if (!entry) return ''
+      if (typeof entry.messageKey === 'string' && entry.messageKey) {
+        return t(entry.messageKey, null, entry.fallback)
+      }
+      return entry.fallback || ''
+    }
+
+    function describeActionError(apiError) {
+      if (apiError.code === 'PROJECT_ACTIVATION_FAILED') {
+        apiError.message = `${apiError.message} ${t(
+          'projects.activateFailedHint',
+          null,
+          'The previous configuration was restored; fix the project fields and retry.',
+        )}`.trim()
+      }
+      if (apiError.code === 'BACKEND_UNSUPPORTED') {
+        apiError.message = t(
+          'projects.unsupported',
+          null,
+          'This backend build does not support the project model yet; restart or upgrade the CA plugin.',
+        )
+      }
+      return apiError
+    }
+
+    async function saveProject() {
+      const built = formToProject(form)
+      if (!built.ok) {
+        setFormErrors(built.errors)
+        return
+      }
+      setBusy('save')
+      setActionError(null)
+      try {
+        const payload = built.project
+        if (editingId) payload.id = editingId
+        const value = await api.projects.save(payload)
+        if (!mountedRef.current) return
+        const wasCreating = !editingId
+        const savedProject = value && value.project ? value.project : null
+        applyListResult(value)
+        setFormOpen(false)
+        setEditingId('')
+        notifyProjectsChanged()
+        const hasActive = Boolean(value && value.activeProjectId)
+        if (wasCreating && !hasActive && savedProject) {
+          // First project: save then activate it right away, like a project picker.
+          showNotice(t('projects.activatingFirst', null, 'Project created; activating…'))
+          await activateProject(savedProject)
+        } else if (savedProject && hasActive && savedProject.id === (value.activeProjectId || '')) {
+          showNotice(
+            t(
+              'projects.savedNeedsActivate',
+              null,
+              'Project saved. Activate it to apply the new configuration to the backend.',
+            ),
+          )
+        } else {
+          showNotice(t('projects.created', null, 'Project saved.'))
+        }
+      } catch (error) {
+        if (!mountedRef.current) return
+        const apiError = describeActionError(toApiError(error))
+        if (apiError.code === 'ABORTED') return
+        const field = apiError.details && typeof apiError.details.field === 'string' ? apiError.details.field : ''
+        if (field) {
+          const known = ['name', 'backend', 'sourceRoot', 'db', 'dbDir', 'compdb', 'python', 'caRepoPath', 'ssh', 'sshHost', 'id']
+          const formField =
+            field === 'db' || field === 'dbDir'
+              ? 'dbPath'
+              : field === 'ssh'
+                ? 'sshHost'
+                : known.includes(field)
+                  ? field
+                  : ''
+          if (formField) {
+            setFormErrors([{ field: formField, messageKey: '', fallback: apiError.message }])
+            return
+          }
+        }
+        setActionError(apiError)
+      } finally {
+        if (mountedRef.current) setBusy('')
+      }
+    }
+
+    async function waitForBackendSettled(timeoutMs) {
+      const startedAt = Date.now()
+      while (Date.now() - startedAt < (timeoutMs || 30000)) {
+        try {
+          const status = await api.getStatus()
+          if (!mountedRef.current) return null
+          const backend = status && status.backend ? status.backend : null
+          if (backend && (backend.state === 'running' || backend.state === 'error')) return backend
+        } catch (_error) {
+          /* keep polling while the backend restarts */
+        }
+        await new Promise((resolve) => {
+          if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+            window.setTimeout(resolve, 600)
+          } else {
+            setTimeout(resolve, 600)
+          }
+        })
+      }
+      return null
+    }
+
+    async function activateProject(project) {
+      if (!project || !project.id) return
+      setBusy(`activate:${project.id}`)
+      setActionError(null)
+      try {
+        const value = await api.projects.activate(project.id)
+        if (!mountedRef.current) return
+        applyListResult(value)
+        const backend = await waitForBackendSettled(30000)
+        if (!mountedRef.current) return
+        if (backend && backend.state === 'running') {
+          showNotice(t('projects.activated', null, 'Project activated; reloading…'))
+          notifyProjectsChanged()
+          if (
+            typeof window !== 'undefined' &&
+            window.location &&
+            typeof window.location.reload === 'function'
+          ) {
+            window.location.reload()
+          }
+          return
+        }
+        setActionError(
+          toApiError({
+            code: 'BACKEND_ERROR',
+            message: t('shell.projectSwitchTimeout', null, 'The backend did not become ready in time.'),
+          }),
+        )
+      } catch (error) {
+        if (!mountedRef.current) return
+        const apiError = describeActionError(toApiError(error))
+        if (apiError.code === 'ABORTED') return
+        setActionError(apiError)
+      } finally {
+        if (mountedRef.current) setBusy('')
+      }
+    }
+
+    async function removeProject(project) {
+      if (!project || !project.id) return
+      if (confirmDeleteId !== String(project.id)) {
+        setConfirmDeleteId(String(project.id))
+        return
+      }
+      setBusy(`remove:${project.id}`)
+      setActionError(null)
+      setConfirmDeleteId('')
+      try {
+        const value = await api.projects.remove(project.id)
+        if (!mountedRef.current) return
+        applyListResult(value)
+        if (editingId === String(project.id)) {
+          setFormOpen(false)
+          setEditingId('')
+        }
+        if (value && value.activeCleared === true) {
+          showNotice(
+            t(
+              'projects.activeCleared',
+              null,
+              'The active project was deleted; the backend keeps running on the old configuration. Create or activate a project to choose a database.',
+            ),
+          )
+        } else {
+          showNotice(t('projects.removed', null, 'Project deleted.'))
+        }
+        notifyProjectsChanged()
+      } catch (error) {
+        if (!mountedRef.current) return
+        const apiError = describeActionError(toApiError(error))
+        if (apiError.code === 'ABORTED') return
+        setActionError(apiError)
+      } finally {
+        if (mountedRef.current) setBusy('')
+      }
+    }
+
+    function rowActive(project) {
+      return Boolean(
+        (activeId && project.id === activeId) || project.active === true,
+      )
+    }
+
+    function renderFormField(field, label, options) {
+      const settings = options && typeof options === 'object' ? options : {}
+      return h(
+        ui.Field,
+        {
+          key: field,
+          label,
+          hint: settings.hint,
+          error: settings.errorField ? errorFor(settings.errorField) : '',
+          optional: settings.optional === true,
+        },
+        h(ui.Input, {
+          value: form[field],
+          placeholder: settings.placeholder,
+          ariaLabel: label,
+          onChange: (event) => setField(field, event.target.value),
+        }),
+      )
+    }
+
+    const columns = [
+      {
+        key: 'name',
+        label: t('projects.field.name', null, 'Name'),
+        render: (project) =>
+          h(
+            'span',
+            { className: 'ca-projects-cell-main' },
+            h(
+              'span',
+              { className: 'ca-projects-name' },
+              h(ui.Icon, { name: 'folder', size: 13 }),
+              projectDisplayName(project),
+              rowActive(project)
+                ? h(ui.Badge, { tone: 'success' }, t('projects.active', null, 'active'))
+                : null,
+              project.status && project.status.state
+                ? h(
+                    ui.Badge,
+                    { tone: project.status.state === 'running' ? 'info' : project.status.state === 'error' ? 'error' : 'warn' },
+                    t(`shell.backendState.${project.status.state}`, null, String(project.status.state)),
+                  )
+                : null,
+            ),
+            project.sourceRoot
+              ? h('span', { className: 'ca-projects-path' }, project.sourceRoot)
+              : null,
+          ),
+      },
+      {
+        key: 'backend',
+        label: t('projects.field.backend', null, 'Backend'),
+        width: '110px',
+        render: (project) =>
+          h(
+            ui.Badge,
+            { tone: project.backend === 'remote' ? 'info' : 'neutral' },
+            project.backend === 'remote'
+              ? t('projects.backend.remote', null, 'remote (SSH)')
+              : t('projects.backend.local', null, 'local'),
+          ),
+      },
+      {
+        key: 'database',
+        label: t('projects.field.database', null, 'Database'),
+        render: (project) =>
+          h(
+            'span',
+            { className: 'ca-projects-cell-main' },
+            h(
+              'span',
+              null,
+              projectDbBasename(project) || '—',
+              project.dbDir
+                ? h(
+                    ui.Badge,
+                    { tone: 'muted' },
+                    t('projects.field.dbDir', null, 'Shard directory'),
+                  )
+                : null,
+            ),
+            projectDbLabel(project)
+              ? h('span', { className: 'ca-projects-path' }, projectDbLabel(project))
+              : null,
+          ),
+      },
+      {
+        key: 'actions',
+        label: '',
+        width: '250px',
+        render: (project) => {
+          const projectActive = rowActive(project)
+          const activating = busy === `activate:${project.id}`
+          const removing = busy === `remove:${project.id}`
+          const confirming = confirmDeleteId === String(project.id)
+          return h(
+            'span',
+            { className: 'ca-row', style: { gap: 6, flexWrap: 'wrap' } },
+            h(
+              ui.Button,
+              {
+                variant: projectActive ? 'secondary' : 'primary',
+                size: 'sm',
+                disabled: projectActive || busy !== '',
+                onClick: () => {
+                  void activateProject(project)
+                },
+              },
+              activating ? h(ui.Spinner, { size: 11 }) : null,
+              projectActive
+                ? t('projects.active', null, 'active')
+                : activating
+                  ? t('projects.activating', null, 'Activating…')
+                  : t('projects.activate', null, 'Activate'),
+            ),
+            h(
+              ui.Button,
+              {
+                variant: 'ghost',
+                size: 'sm',
+                disabled: busy !== '',
+                onClick: () => startEdit(project),
+              },
+              t('projects.edit', null, 'Edit'),
+            ),
+            h(
+              ui.Button,
+              {
+                variant: 'danger',
+                size: 'sm',
+                disabled: busy !== '',
+                title: confirming
+                  ? t('projects.deleteConfirm', { name: project.name }, `Delete project “${project.name}”?`)
+                  : undefined,
+                onClick: () => {
+                  void removeProject(project)
+                },
+              },
+              removing
+                ? h(ui.Spinner, { size: 11 })
+                : confirming
+                  ? t('projects.confirmDelete', null, 'Confirm delete')
+                  : t('projects.delete', null, 'Delete'),
+            ),
+          )
+        },
+      },
+    ]
+
+    function projectDisplayName(project) {
+      return project && typeof project.name === 'string' && project.name ? project.name : '—'
+    }
+
+    const showRemote = form.backend === 'remote'
+
+    const formCard = formOpen
+      ? h(
+          ui.Card,
+          {
+            title: editingId
+              ? t('projects.formTitleEdit', null, 'Edit project')
+              : t('projects.formTitleNew', null, 'New project'),
+            subtitle: t(
+              'projects.hint',
+              null,
+              "The generic CA tools read the active project's database; switching projects restarts the backend.",
+            ),
+            actions: h(
+              ui.Button,
+              {
+                variant: 'ghost',
+                size: 'sm',
+                disabled: busy !== '',
+                onClick: cancelForm,
+              },
+              h(ui.Icon, { name: 'close', size: 12 }),
+              t('projects.cancel', null, 'Cancel'),
+            ),
+          },
+          h(
+            'div',
+            { className: 'ca-projects-section' },
+            h(
+              'div',
+              { className: 'ca-projects-grid' },
+              renderFormField('name', t('projects.field.name', null, 'Name'), {
+                hint: t('projects.field.nameHint', null, 'Unique display name, e.g. oh-xv6'),
+                errorField: 'name',
+              }),
+              h(
+                ui.Field,
+                { key: 'backend', label: t('projects.field.backend', null, 'Backend') },
+                h(ui.Select, {
+                  value: form.backend,
+                  options: BACKEND_OPTIONS.map((option) => ({
+                    value: option.value,
+                    label: t(option.labelKey, null, option.fallback),
+                  })),
+                  ariaLabel: t('projects.field.backend', null, 'Backend'),
+                  onChange: (value) => setField('backend', value),
+                }),
+              ),
+              renderFormField('sourceRoot', t('projects.field.sourceRoot', null, 'Source root'), {
+                hint: t(
+                  'projects.field.sourceRootHint',
+                  null,
+                  'Absolute path of the source tree on the backend host.',
+                ),
+                placeholder: '/home/user/src/linux',
+                errorField: 'sourceRoot',
+              }),
+              h(
+                ui.Field,
+                { key: 'dbKind', label: t('projects.field.databaseKind', null, 'Kind') },
+                h(ui.Select, {
+                  value: form.dbKind,
+                  options: DB_KIND_OPTIONS.map((option) => ({
+                    value: option.value,
+                    label: t(option.labelKey, null, option.fallback),
+                  })),
+                  ariaLabel: t('projects.field.databaseKind', null, 'Kind'),
+                  onChange: (value) => setField('dbKind', value),
+                }),
+              ),
+              renderFormField('dbPath', t('projects.field.dbPath', null, 'Database path'), {
+                hint: t(
+                  'projects.field.dbHint',
+                  null,
+                  'Set exactly one of a single DB file or a shard directory.',
+                ),
+                placeholder: form.dbKind === 'dbDir' ? '/home/user/CA/index' : '/home/user/CA/index/ca.db',
+                errorField: 'dbPath',
+              }),
+              renderFormField('compdb', t('projects.field.compdb', null, 'compile_commands.json'), {
+                optional: true,
+                placeholder: '/home/user/src/linux/compile_commands.json',
+              }),
+              renderFormField('python', t('projects.field.python', null, 'Python interpreter'), {
+                optional: true,
+                placeholder: '/home/user/.venv/bin/python',
+              }),
+              renderFormField('caRepoPath', t('projects.field.caRepoPath', null, 'CA repository path'), {
+                optional: true,
+                placeholder: '/home/user/CA',
+              }),
+            ),
+            showRemote
+              ? h(
+                  'div',
+                  { className: 'ca-projects-section' },
+                  h(
+                    'div',
+                    { className: 'ca-projects-section-title' },
+                    h(ui.Icon, { name: 'external', size: 13 }),
+                    t('projects.section.remote', null, 'Remote SSH'),
+                  ),
+                  h(
+                    'div',
+                    { className: 'ca-projects-grid' },
+                    renderFormField('sshHost', t('projects.field.sshHost', null, 'SSH host'), {
+                      placeholder: 'user@host or ssh alias',
+                      errorField: 'sshHost',
+                    }),
+                    renderFormField('sshUser', t('projects.field.sshUser', null, 'SSH user'), {
+                      optional: true,
+                    }),
+                    renderFormField('sshPort', t('projects.field.sshPort', null, 'SSH port'), {
+                      optional: true,
+                      placeholder: '22',
+                      errorField: 'sshPort',
+                    }),
+                    renderFormField('sshKeyPath', t('projects.field.sshKeyPath', null, 'SSH private key path'), {
+                      optional: true,
+                      placeholder: '~/.ssh/id_ed25519',
+                    }),
+                  ),
+                )
+              : null,
+            h(
+              'div',
+              { className: 'ca-projects-form-actions' },
+              h(
+                ui.Button,
+                { variant: 'primary', disabled: busy === 'save', onClick: () => void saveProject() },
+                busy === 'save' ? h(ui.Spinner, { size: 12 }) : h(ui.Icon, { name: 'check', size: 13 }),
+                busy === 'save'
+                  ? t('projects.saving', null, 'Saving…')
+                  : t('projects.save', null, 'Save project'),
+              ),
+              h(
+                ui.Button,
+                { variant: 'ghost', disabled: busy !== '', onClick: cancelForm },
+                t('projects.cancel', null, 'Cancel'),
+              ),
+              errorFor('name') || errorFor('sourceRoot') || errorFor('dbPath') || errorFor('sshHost') || errorFor('sshPort')
+                ? h(
+                    'span',
+                    { className: 'ca-projects-danger', style: { fontSize: 12 } },
+                    t('projects.formErrorHint', null, 'Fix the highlighted fields before saving.'),
+                  )
+                : null,
+            ),
+          ),
+        )
+      : null
+
+    if (phase === 'loading') {
+      return h(
+        'div',
+        { className: 'ca-page ca-projects-page' },
+        h(
+          'div',
+          { className: 'ca-projects-inner' },
+          h(ui.Spinner, { size: 18, label: t('common.loading', null, 'loading…') }),
+        ),
+      )
+    }
+
+    return h(
+      'div',
+      { className: 'ca-page ca-projects-page' },
+      h(
+        'div',
+        { className: 'ca-projects-inner' },
+        h(
+          'div',
+          { className: 'ca-projects-head' },
+          h('h1', { className: 'ca-projects-title' }, t('projects.title', null, 'Projects')),
+          h(
+            'p',
+            { className: 'ca-projects-sub' },
+            t(
+              'projects.subtitle',
+              null,
+              'A project binds a source tree, a database (single DB or shard directory) and a backend target.',
+            ),
+          ),
+          h('span', { className: 'ca-spacer' }),
+          h(
+            'div',
+            { className: 'ca-projects-actions' },
+            h(
+              ui.Button,
+              {
+                variant: 'ghost',
+                size: 'sm',
+                disabled: busy !== '',
+                onClick: () => void loadProjects(),
+              },
+              h(ui.Icon, { name: 'refresh', size: 13 }),
+              t('projects.refresh', null, 'Refresh'),
+            ),
+            h(
+              ui.Button,
+              {
+                variant: 'primary',
+                size: 'sm',
+                disabled: busy !== '',
+                onClick: startCreate,
+              },
+              h(ui.Icon, { name: 'folder', size: 13 }),
+              t('projects.new', null, 'New project'),
+            ),
+            navigate
+              ? h(
+                  ui.Button,
+                  {
+                    variant: 'ghost',
+                    size: 'sm',
+                    onClick: () => navigate({ page: 'backend' }),
+                  },
+                  h(ui.Icon, { name: 'backend', size: 13 }),
+                  t('shell.nav.backend', null, 'Backend'),
+                )
+              : null,
+          ),
+        ),
+        h(
+          'div',
+          { className: 'ca-projects-hint' },
+          h(ui.Icon, { name: 'info', size: 13 }),
+          h(
+            'span',
+            null,
+            t(
+              'projects.hint',
+              null,
+              "The generic CA tools read the active project's database; switching projects restarts the backend.",
+            ),
+          ),
+        ),
+        phase === 'error' && loadError
+          ? h(ui.ErrorBox, {
+              title: t('projects.loadFailed', null, 'Could not load projects'),
+              error: loadError,
+              retryLabel: t('common.retry', null, 'Retry'),
+              onRetry: () => void loadProjects(),
+            })
+          : null,
+        actionError
+          ? h(ui.ErrorBox, {
+              title: t('projects.actionFailed', null, 'Project action failed'),
+              error: actionError,
+              retryLabel: t('common.close', null, 'Close'),
+              onRetry: () => setActionError(null),
+            })
+          : null,
+        notice ? h('div', { className: 'ca-projects-notice' }, h(ui.Icon, { name: 'check', size: 13 }), notice) : null,
+        formCard,
+        h(
+          ui.Card,
+          {
+            title: t('projects.listTitle', null, 'Saved projects'),
+            subtitle: activeId
+              ? t('projects.activeHint', { name: (projects.find((project) => project.id === activeId) || {}).name || activeId }, `Active: ${activeId}`)
+              : t('projects.noActive', null, 'No active project'),
+            actions: h(ui.Badge, { tone: 'neutral' }, t('projects.count', { count: projects.length }, `${projects.length} projects`)),
+          },
+          projects.length === 0
+            ? h(ui.EmptyState, {
+                icon: h(ui.Icon, { name: 'folder', size: 26 }),
+                title: t('projects.empty', null, 'No projects yet'),
+                body: t(
+                  'projects.emptyBody',
+                  null,
+                  'Create a project to choose the source tree and database this plugin should serve.',
+                ),
+                action: h(
+                  ui.Button,
+                  { variant: 'primary', onClick: startCreate },
+                  h(ui.Icon, { name: 'folder', size: 13 }),
+                  t('projects.new', null, 'New project'),
+                ),
+              })
+            : h(ui.Table, {
+                columns,
+                rows: projects,
+                rowKey: (project) => String(project.id),
+                rowClassName: (project) => (rowActive(project) ? 'ca-projects-row-active' : undefined),
+                selectedKey: activeId ? String(activeId) : undefined,
+                empty: t('projects.empty', null, 'No projects yet'),
+              }),
+        ),
+      ),
+    )
+  }
+
+  ProjectsPage.displayName = 'CaProjectsPage'
+  return ProjectsPage
+}
+
+
+__exports.default = createProjectsPage;
+__exports["createProjectsPage"] = createProjectsPage;
 
     })
     __modules.set("pages/backend.js", function (__exports) {
@@ -9831,11 +10806,6 @@ const BACKEND_CSS = `
 .ca-backend-group-title { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; padding-bottom: 4px; border-bottom: 1px solid var(--dsw-alias-border-l1, #eaeef2); font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-secondary, #57606a); }
 .ca-backend-check { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--dsw-alias-label-primary, #1f2328); cursor: pointer; user-select: none; }
 .ca-backend-check input { width: 14px; height: 14px; accent-color: var(--dsw-alias-state-business-primary, #2f6feb); }
-.ca-backend-db-current { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; margin-bottom: 8px; border: 1px solid var(--dsw-alias-border-l1, #eaeef2); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-2, rgba(127, 127, 127, 0.04)); font-size: 12px; }
-.ca-backend-db-current-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); overflow-wrap: anywhere; }
-.ca-backend-db-name { display: flex; flex-direction: column; gap: 0; min-width: 0; }
-.ca-backend-db-label { font-size: 12.5px; }
-.ca-backend-db-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); overflow-wrap: anywhere; }
 .ca-backend-notice { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-2, rgba(127, 127, 127, 0.05)); font-size: 12.5px; color: var(--dsw-alias-label-secondary, #57606a); }
 .ca-backend-report { max-height: 320px; }
 `
@@ -9848,39 +10818,6 @@ const MODE_OPTIONS = [
 
 function asText(value) {
   return value === undefined || value === null ? '' : String(value)
-}
-
-/** Last path segment for a POSIX or Windows path. */
-function basename(path) {
-  if (typeof path !== 'string') return ''
-  const cleaned = path.replace(/[\\/]+$/, '')
-  const parts = cleaned.split(/[\\/]/)
-  return parts[parts.length - 1] || cleaned
-}
-
-/** Current database path from a backend.databases payload or config. */
-function currentDatabasePath(databases, config) {
-  if (databases && typeof databases === 'object') {
-    const configured = databases.configured
-    if (configured && typeof configured === 'object' && typeof configured.path === 'string' && configured.path) {
-      return configured.path
-    }
-    if (databases.current && typeof databases.current === 'object') {
-      if (typeof databases.current.db === 'string' && databases.current.db) return databases.current.db
-      if (typeof databases.current.dbDir === 'string' && databases.current.dbDir) return databases.current.dbDir
-    }
-    if (Array.isArray(databases.candidates)) {
-      const marked = databases.candidates.find((candidate) => candidate && candidate.current === true)
-      if (marked && typeof marked.path === 'string' && marked.path) return marked.path
-    }
-  }
-  const local = config && config.local && typeof config.local === 'object' ? config.local : {}
-  if (typeof local.db === 'string' && local.db) return local.db
-  if (typeof local.dbDir === 'string' && local.dbDir) return local.dbDir
-  const remote = config && config.remote && typeof config.remote === 'object' ? config.remote : {}
-  if (typeof remote.db === 'string' && remote.db) return remote.db
-  if (typeof remote.dbDir === 'string' && remote.dbDir) return remote.dbDir
-  return ''
 }
 
 function nullIfEmpty(value) {
@@ -9994,8 +10931,10 @@ function createBackendPage(React, bag) {
     return apiError
   }
 
-  function BackendPage() {
+  function BackendPage(props) {
     ui.useStyles(BACKEND_CSS)
+
+    const navigate = props && typeof props.navigate === 'function' ? props.navigate : null
 
     const [phase, setPhase] = React.useState('loading')
     const [loadError, setLoadError] = React.useState(null)
@@ -10010,11 +10949,6 @@ function createBackendPage(React, bag) {
     const [health, setHealth] = React.useState(null)
     const [healthError, setHealthError] = React.useState(null)
     const [install, setInstall] = React.useState(null)
-    const [databases, setDatabases] = React.useState(null)
-    const [databasesLoading, setDatabasesLoading] = React.useState(false)
-    const [databasesError, setDatabasesError] = React.useState(null)
-    const [databasesUnsupported, setDatabasesUnsupported] = React.useState(false)
-    const [databaseBusy, setDatabaseBusy] = React.useState('')
 
     const mountedRef = React.useRef(true)
     const noticeTimer = React.useRef(null)
@@ -10093,121 +11027,8 @@ function createBackendPage(React, bag) {
       }
     }
 
-    const loadDatabases = React.useCallback(async (refreshMode) => {
-      setDatabasesLoading(true)
-      setDatabasesError(null)
-      try {
-        const value = await api.rpc('backend.databases', refreshMode ? { refresh: true } : {})
-        if (!mountedRef.current) return
-        if (value && typeof value === 'object' && value.ok === false) {
-          const apiError = value.error
-            ? toApiError(value.error)
-            : toApiError({ code: 'DB_SCAN_FAILED', message: 'Database scan failed' })
-          setDatabases(value)
-          if (apiError.code === 'BACKEND_UNSUPPORTED' || apiError.code === 'UNKNOWN_ENDPOINT') {
-            setDatabasesError(null)
-            setDatabasesUnsupported(true)
-          } else {
-            setDatabasesError(apiError)
-            setDatabasesUnsupported(false)
-          }
-          return
-        }
-        setDatabases(value && typeof value === 'object' ? value : null)
-        setDatabasesError(value && value.error ? toApiError(value.error) : null)
-        setDatabasesUnsupported(false)
-      } catch (error) {
-        if (!mountedRef.current) return
-        const apiError = toApiError(error)
-        if (apiError.code === 'ABORTED') return
-        const unsupported =
-          apiError.code === 'BACKEND_UNSUPPORTED' || apiError.code === 'UNKNOWN_ENDPOINT'
-        setDatabasesUnsupported(unsupported)
-        setDatabasesError(unsupported ? null : apiError)
-      } finally {
-        if (mountedRef.current) setDatabasesLoading(false)
-      }
-    }, [])
-
-    /** Poll `backend.get` until the backend settles after a database switch. */
-    async function waitForBackendSettled(timeoutMs) {
-      const startedAt = Date.now()
-      while (Date.now() - startedAt < (timeoutMs || 30000)) {
-        try {
-          const snapshot = await api.backend.get()
-          if (!mountedRef.current) return null
-          applySnapshot(snapshot)
-          const nextStatus = snapshot && snapshot.status ? snapshot.status : null
-          const backendState = nextStatus ? nextStatus.state : ''
-          if (backendState === 'running' || backendState === 'error') {
-            return nextStatus
-          }
-        } catch (_error) {
-          /* keep polling: the backend may be restarting */
-        }
-        await new Promise((resolve) => {
-          if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
-            window.setTimeout(resolve, 600)
-          } else {
-            setTimeout(resolve, 600)
-          }
-        })
-      }
-      return null
-    }
-
-    /** Switch the backend database through `backend.useDatabase`, then reload. */
-    async function useDatabase(kind, path) {
-      const key = `${kind}:${path}`
-      setDatabaseBusy(key)
-      setActionError(null)
-      try {
-        const result = await api.rpc('backend.useDatabase', { kind, path })
-        if (!mountedRef.current) return
-        if (result && typeof result === 'object') {
-          applySnapshot({ status: result.status, config: result.config })
-        }
-        const nextStatus = await waitForBackendSettled(30000)
-        if (!mountedRef.current) return
-        if (nextStatus && nextStatus.state === 'running') {
-          showNotice(t('backend.databaseSwitched', null, 'Database switched; reloading…'))
-          if (
-            typeof window !== 'undefined' &&
-            window.location &&
-            typeof window.location.reload === 'function'
-          ) {
-            window.location.reload()
-          }
-          return
-        }
-        setActionError(
-          toApiError({
-            code: 'BACKEND_ERROR',
-            message: t('shell.dbSwitchTimeout', null, 'The backend did not become ready in time.'),
-          }),
-        )
-        void loadDatabases(true)
-      } catch (error) {
-        if (!mountedRef.current) return
-        const apiError = toApiError(error)
-        if (apiError.code === 'ABORTED') return
-        if (apiError.code === 'BACKEND_UNSUPPORTED') {
-          apiError.message = t(
-            'shell.dbSwitchUnsupported',
-            null,
-            'This backend build cannot switch databases from the UI; configure it on the backend page.',
-          )
-        }
-        setActionError(apiError)
-        void loadDatabases(true)
-      } finally {
-        if (mountedRef.current) setDatabaseBusy('')
-      }
-    }
-
     React.useEffect(() => {
       void load()
-      void loadDatabases(false)
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
@@ -10601,218 +11422,37 @@ function createBackendPage(React, bag) {
       ),
     )
 
-    const databaseCandidates =
-      databases && Array.isArray(databases.candidates) ? databases.candidates : []
-    const currentDbPath = currentDatabasePath(databases, config)
-
-    const databaseColumns = [
-      {
-        key: 'kind',
-        label: t('backend.databaseKind', null, 'Kind'),
-        width: '104px',
-        render: (candidate) =>
-          h(
-            ui.Badge,
-            { tone: candidate.status === 'failed' ? 'error' : 'muted' },
-            candidate.kind === 'dbDir'
-              ? t('shell.dbKindDbDir', null, 'shard dir')
-              : t('shell.dbKindDb', null, 'single DB'),
-          ),
-      },
-      {
-        key: 'path',
-        label: t('backend.db', null, 'Database'),
-        render: (candidate) =>
-          h(
-            'span',
-            { className: 'ca-backend-db-name' },
-            h('span', { className: 'ca-backend-db-label' }, candidate.label || basename(candidate.path)),
-            h('span', { className: 'ca-backend-db-path' }, candidate.path),
-            candidate.status === 'failed'
-              ? h(
-                  'span',
-                  { className: 'ca-backend-db-path', style: { color: 'var(--dsw-alias-state-error-primary, #d1242f)' } },
-                  t('backend.databaseScanFailed', null, 'scan failed'),
-                )
-              : null,
-          ),
-      },
-      {
-        key: 'size',
-        label: t('backend.databaseSize', null, 'Size'),
-        align: 'right',
-        width: '120px',
-        render: (candidate) => {
-          if (candidate.sizeBytes !== undefined && candidate.sizeBytes !== null) {
-            return h('span', { className: 'ca-mono' }, formatBytes(candidate.sizeBytes))
-          }
-          if (Number(candidate.dbCount) > 0) {
-            return t('backend.databaseFiles', { count: Number(candidate.dbCount) }, `${candidate.dbCount} DB files`)
-          }
-          return '—'
-        },
-      },
-      {
-        key: 'source',
-        label: t('backend.databaseSource', null, 'Source'),
-        width: '110px',
-        render: (candidate) =>
-          candidate.source ? h(ui.Badge, { tone: 'neutral' }, String(candidate.source)) : '—',
-      },
-      {
-        key: 'actions',
-        label: '',
-        width: '150px',
-        render: (candidate) => {
-          const isCurrent = Boolean(currentDbPath) && currentDbPath === candidate.path
-          const rowBusy = databaseBusy === `${candidate.kind}:${candidate.path}`
-          return h(
-            ui.Button,
-            {
-              variant: isCurrent ? 'secondary' : 'primary',
-              size: 'sm',
-              disabled: isCurrent || Boolean(databaseBusy),
-              title: candidate.path,
-              onClick: () => {
-                void useDatabase(candidate.kind || 'db', candidate.path)
-              },
-            },
-            rowBusy ? h(ui.Spinner, { size: 11 }) : null,
-            isCurrent
-              ? t('backend.databaseCurrent', null, 'Current')
-              : rowBusy
-                ? t('backend.usingDatabase', null, 'Switching…')
-                : t('backend.useDatabase', null, 'Use this database'),
-          )
-        },
-      },
-    ]
-
-    const databasesCard = h(
+    const projectHintCard = h(
       ui.Card,
       {
-        title: t('backend.databases', null, 'Available databases'),
+        title: t('backend.projectHintTitle', null, 'Manage indexes as projects'),
         subtitle: t(
-          'backend.databasesHint',
+          'backend.projectHint',
           null,
-          'Scanned on the backend host; choosing one updates the backend configuration and restarts it.',
+          'Recommended: create and switch projects on the Projects page — a project binds a source tree, a database and a backend target. This page keeps the low-level backend status and configuration.',
         ),
-        actions: [
-          h(
-            ui.Button,
-            {
-              key: 'rescan',
-              variant: 'ghost',
-              size: 'sm',
-              disabled: databasesLoading || Boolean(databaseBusy),
-              onClick: () => {
-                void loadDatabases(true)
-              },
-            },
-            databasesLoading ? h(ui.Spinner, { size: 12 }) : h(ui.Icon, { name: 'refresh', size: 13 }),
-            databasesLoading
-              ? t('backend.scanning', null, 'Scanning…')
-              : t('backend.scan', null, 'Rescan'),
-          ),
-        ],
+        actions: navigate
+          ? h(
+              ui.Button,
+              { variant: 'primary', size: 'sm', onClick: () => navigate({ page: 'projects' }) },
+              h(ui.Icon, { name: 'folder', size: 13 }),
+              t('backend.openProjects', null, 'Open projects'),
+            )
+          : null,
       },
       h(
         'div',
-        { className: 'ca-col' },
-        currentDbPath
-          ? h(
-              'div',
-              { className: 'ca-backend-db-current' },
-              h(ui.Badge, { tone: 'success' }, t('backend.databaseCurrent', null, 'Current')),
-              h('span', { className: 'ca-backend-db-current-path' }, currentDbPath),
-            )
-          : null,
-        databases && (Number(databases.total) > 0 || databases.scannedAt)
-          ? h(
-              'div',
-              { className: 'ca-row', style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary, #8b949e)', flexWrap: 'wrap' } },
-              Number(databases.total) > 0
-                ? h(
-                    ui.Badge,
-                    { tone: 'neutral' },
-                    t('backend.databaseTotal', { count: Number(databases.total) }, `${Number(databases.total)} candidates`),
-                  )
-                : null,
-              databases.truncated
-                ? h(
-                    ui.Badge,
-                    { tone: 'warn' },
-                    t(
-                      'backend.databaseTruncated',
-                      { count: Number(databases.maxItems) || Number(databases.total) || 0 },
-                      'Only the first entries are shown.',
-                    ),
-                  )
-                : null,
-              databases.scannedAt
-                ? h(
-                    'span',
-                    null,
-                    t(
-                      'backend.databaseScannedAt',
-                      { time: formatTimestamp(Number(databases.scannedAt)) },
-                      `Scanned ${formatTimestamp(Number(databases.scannedAt))}`,
-                    ),
-                  )
-                : null,
-            )
-          : null,
-        databasesUnsupported
-          ? h(ui.EmptyState, {
-              icon: h(ui.Icon, { name: 'info', size: 22 }),
-              title: t('shell.dbScanUnsupported', null, 'This host build does not support database scanning; configure the database on the backend page.'),
-              body: t('backend.configHint', null, 'Saved on the DSH host; SSH passwords are never stored — use keys or ssh-agent.'),
-            })
-          : null,
-        databasesError
-          ? h(ui.ErrorBox, {
-              title: t('common.error', null, 'Error'),
-              error: databasesError,
-              hint: t('backend.databasesHint', null, 'Scanned on the backend host; choosing one updates the backend configuration and restarts it.'),
-              retryLabel: t('common.retry', null, 'Retry'),
-              onRetry: () => {
-                void loadDatabases(true)
-              },
-            })
-          : null,
-        !databasesUnsupported && databaseCandidates.length === 0
-          ? h(ui.EmptyState, {
-              icon: h(ui.Icon, { name: 'backend', size: 22 }),
-              title: databasesLoading
-                ? t('backend.scanning', null, 'Scanning…')
-                : t('backend.databasesEmpty', null, 'No database candidates were found next to the configured paths.'),
-              action: databasesLoading
-                ? null
-                : h(
-                    ui.Button,
-                    { variant: 'ghost', size: 'sm', onClick: () => void loadDatabases(true) },
-                    h(ui.Icon, { name: 'refresh', size: 13 }),
-                    t('backend.scan', null, 'Rescan'),
-                  ),
-            })
-          : null,
-        databaseCandidates.length > 0
-          ? h(ui.Table, {
-              columns: databaseColumns,
-              rows: databaseCandidates,
-              rowKey: (candidate) => `${candidate.kind}:${candidate.path}`,
-              dense: true,
-              empty: t('backend.databasesEmpty', null, 'No database candidates were found next to the configured paths.'),
-            })
-          : null,
-        databaseBusy
-          ? h(
-              'div',
-              { className: 'ca-backend-notice' },
-              h(ui.Spinner, { size: 12 }),
-              t('backend.usingDatabase', null, 'Switching…'),
-            )
-          : null,
+        { className: 'ca-backend-notice' },
+        h(ui.Icon, { name: 'info', size: 13 }),
+        h(
+          'span',
+          null,
+          t(
+            'backend.projectHintLowLevel',
+            null,
+            'The controls below are low-level: they edit the backend configuration directly and are not tied to a saved project.',
+          ),
+        ),
       ),
     )
 
@@ -11072,7 +11712,7 @@ function createBackendPage(React, bag) {
         ),
         unconfiguredHint,
         statusCard,
-        databasesCard,
+        projectHintCard,
         healthCard,
         probeCard,
         installCard,
@@ -11605,7 +12245,7 @@ const PANEL_ID = 'ca'
 const NS = 'ca'
 
 /** Pages that have a route even when no explicit entry is registered. */
-const KNOWN_PAGES = Object.freeze(['search', 'function', 'stats', 'callbacks', 'graph', 'tasks', 'backend'])
+const KNOWN_PAGES = Object.freeze(['search', 'function', 'stats', 'callbacks', 'graph', 'tasks', 'projects', 'backend'])
 
 const STATUS_POLL_MS = 8000
 
@@ -11658,7 +12298,7 @@ function parseHash(rawHash) {
     })
   }
   if (page === 'search' && segments.length === 1) return Object.assign({}, base, { page: 'search' })
-  if (['stats', 'callbacks', 'graph', 'tasks', 'backend'].includes(page)) {
+  if (['stats', 'callbacks', 'graph', 'tasks', 'projects', 'backend'].includes(page)) {
     return Object.assign({}, base, { page })
   }
   if (segments.length === 0) return Object.assign({}, base, { page: 'search' })
@@ -11826,8 +12466,8 @@ const SHELL_CSS = `
 .ca-lang-switch { display: inline-flex; align-items: center; padding: 2px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-sm, 6px); }
 .ca-lang-switch .ca-btn { min-height: 20px; padding: 0 7px; font-size: 11.5px; border-radius: calc(var(--dsw-radius-sm, 6px) - 2px); }
 .ca-lang-switch .ca-btn-active { background: var(--dsw-alias-button-ghost-active-fill, rgba(127, 127, 127, 0.14)); }
-.ca-db { position: relative; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.ca-db-trigger {
+.ca-project { position: relative; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.ca-project-trigger {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -11842,11 +12482,10 @@ const SHELL_CSS = `
   font-size: 12px;
   cursor: pointer;
 }
-.ca-db-trigger:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.1)); color: var(--dsw-alias-label-primary, #1f2328); }
-.ca-db-trigger[aria-expanded='true'] { background: var(--dsw-alias-button-ghost-active-fill, rgba(127, 127, 127, 0.14)); border-color: var(--dsw-alias-border-l3, #d0d7de); color: var(--dsw-alias-label-primary, #1f2328); }
-.ca-db-label { max-width: 185px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11.5px; }
-.ca-db-switching { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); white-space: nowrap; }
-.ca-db-dropdown {
+.ca-project-trigger:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.1)); color: var(--dsw-alias-label-primary, #1f2328); }
+.ca-project-trigger[aria-expanded='true'] { background: var(--dsw-alias-button-ghost-active-fill, rgba(127, 127, 127, 0.14)); border-color: var(--dsw-alias-border-l3, #d0d7de); color: var(--dsw-alias-label-primary, #1f2328); }
+.ca-project-switching { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); white-space: nowrap; }
+.ca-project-dropdown {
   position: absolute;
   z-index: 80;
   top: calc(100% + 6px);
@@ -11860,13 +12499,13 @@ const SHELL_CSS = `
   background: var(--dsw-alias-bg-layer-1, #ffffff);
   box-shadow: var(--dsw-elevation-panel, 0 10px 30px rgba(0, 0, 0, 0.16));
 }
-.ca-db-section { display: flex; flex-direction: column; gap: 1px; padding: 3px 0; }
-.ca-db-section + .ca-db-section { border-top: 1px solid var(--dsw-alias-border-l1, #eaeef2); }
-.ca-db-section-head { display: flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary, #8b949e); }
-.ca-db-current { display: flex; flex-direction: column; gap: 2px; padding: 5px 8px; }
-.ca-db-current-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.ca-db-current-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); overflow-wrap: anywhere; }
-.ca-db-row {
+.ca-project-section { display: flex; flex-direction: column; gap: 1px; padding: 3px 0; }
+.ca-project-section + .ca-project-section { border-top: 1px solid var(--dsw-alias-border-l1, #eaeef2); }
+.ca-project-section-head { display: flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary, #8b949e); }
+.ca-project-current { display: flex; flex-direction: column; gap: 2px; padding: 5px 8px; }
+.ca-project-current-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ca-project-current-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); overflow-wrap: anywhere; }
+.ca-project-row {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -11881,17 +12520,20 @@ const SHELL_CSS = `
   text-align: left;
   cursor: pointer;
 }
-.ca-db-row:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.09)); }
-.ca-db-row:disabled { opacity: 0.7; cursor: default; }
-.ca-db-row-active { background: var(--dsw-alias-button-ghost-active-fill, rgba(127, 127, 127, 0.13)); }
-.ca-db-row-main { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-width: 0; }
-.ca-db-row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ca-db-row-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); }
-.ca-db-row-meta { font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); white-space: nowrap; }
-.ca-db-hint { padding: 5px 8px; font-size: 11.5px; color: var(--dsw-alias-label-tertiary, #8b949e); }
-.ca-db-hint-error { color: var(--dsw-alias-state-error-primary, #d1242f); }
-.ca-db-foot { display: flex; gap: 6px; padding: 4px; border-top: 1px solid var(--dsw-alias-border-l1, #eaeef2); }
-.ca-db-foot .ca-btn { flex: 1 1 auto; justify-content: flex-start; }
+.ca-project-row:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.09)); }
+.ca-project-row:disabled { opacity: 0.7; cursor: default; }
+.ca-project-row-active { background: var(--dsw-alias-button-ghost-active-fill, rgba(127, 127, 127, 0.13)); }
+.ca-project-row-main { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-width: 0; }
+.ca-project-row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ca-project-row-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); }
+.ca-project-row-meta { font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); white-space: nowrap; }
+.ca-project-hint { padding: 5px 8px; font-size: 11.5px; color: var(--dsw-alias-label-tertiary, #8b949e); }
+.ca-project-hint-error { color: var(--dsw-alias-state-error-primary, #d1242f); }
+.ca-project-foot { display: flex; gap: 6px; padding: 4px; border-top: 1px solid var(--dsw-alias-border-l1, #eaeef2); }
+.ca-project-foot .ca-btn { flex: 1 1 auto; justify-content: flex-start; }
+.ca-project-db { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); }
+.ca-project-current-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ca-project-label { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ca-banner { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding: 6px 14px; border-bottom: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-2, #f6f8fa); color: var(--dsw-alias-label-secondary, #57606a); font-size: 12.5px; }
 .ca-banner-warn { color: var(--dsw-alias-state-warn-label, #9a6700); }
 .ca-banner-error { color: var(--dsw-alias-state-error-primary, #d1242f); }
@@ -11901,7 +12543,8 @@ const SHELL_CSS = `
 .ca-static-fill > * { max-width: 560px; width: 100%; }
 @media (max-width: 1080px) {
   .ca-brand-sub { display: none; }
-  .ca-db-label { max-width: 120px; }
+  .ca-project-label { max-width: 120px; }
+  .ca-project-db { display: none; }
 }
 @media (max-width: 860px) {
   .ca-topnav .ca-btn { padding: 4px 8px; }
@@ -11940,11 +12583,11 @@ function createShell(React, bag) {
     backend: null, // status.backend
     counts: null,
     variantError: null,
-    databases: null, // backend.databases value {mode,current,candidates,registry}
-    databasesLoading: false,
-    databasesError: null,
-    databasesUnsupported: false,
-    databaseSwitch: null, // {kind,path,label,busy,phase,error}
+    projects: null, // { projects: [...], activeProjectId }
+    projectsLoading: false,
+    projectsError: null,
+    projectSwitch: null, // { id, name, busy, phase, error }
+    language: i18n.lang,
     language: i18n.lang,
   }
 
@@ -12053,16 +12696,16 @@ function createShell(React, bag) {
         // Keep the variant catalog fresh once the backend can answer.
         api.variant.refresh({ signal: controller ? controller.signal : undefined }).catch(() => {})
       }
-      if (
-        value &&
-        value.backend &&
-        value.backend.mode !== 'unconfigured' &&
-        (!state.databases || state.databases.ok !== true) &&
-        !state.databasesLoading &&
-        !state.databasesUnsupported &&
-        !databasesInFlight
-      ) {
-        void refreshDatabases()
+      if (!projectsInFlight) {
+        // Keep the top-bar project list aligned with Host state after edits made
+        // on the projects page or by another client; `ca:projectschange` covers
+        // edits made in this page without waiting for the poll.
+        const activeId = value && value.project ? value.project.id : null
+        const stale =
+          !state.projects ||
+          Boolean(state.projectsError) ||
+          Boolean(activeId && state.projects.activeProjectId !== activeId)
+        if (stale) void refreshProjects()
       }
     } catch (error) {
       if (controller && controller.signal.aborted) return
@@ -12142,7 +12785,7 @@ function createShell(React, bag) {
     })
   }
 
-  // -- databases / project switching ---------------------------------------- //
+  // -- projects -------------------------------------------------------------- //
 
   /** File-name portion of a POSIX or Windows path. */
   function basename(path) {
@@ -12152,111 +12795,85 @@ function createShell(React, bag) {
     return parts[parts.length - 1] || cleaned
   }
 
-  /** Current database descriptor: {kind:'db'|'dbDir'|'', path}. */
-  function currentDatabase() {
-    const databases = state.databases
-    if (databases && typeof databases === 'object') {
-      const configured = databases.configured
-      if (configured && typeof configured === 'object' && typeof configured.path === 'string' && configured.path) {
-        return { kind: configured.kind === 'dbDir' ? 'dbDir' : 'db', path: configured.path }
+  /** Current project: `status.project` first, then the active row of the list. */
+  function currentProject() {
+    const fromStatus = state.status && state.status.project
+    if (fromStatus && typeof fromStatus === 'object' && fromStatus.id) return fromStatus
+    const list = state.projects
+    if (list && Array.isArray(list.projects)) {
+      if (list.activeProjectId) {
+        const found = list.projects.find((project) => project && project.id === list.activeProjectId)
+        if (found) return found
       }
-      if (databases.current && typeof databases.current === 'object') {
-        const db = databases.current.db
-        const dbDir = databases.current.dbDir
-        if (typeof db === 'string' && db) return { kind: 'db', path: db }
-        if (typeof dbDir === 'string' && dbDir) return { kind: 'dbDir', path: dbDir }
-      }
-      if (Array.isArray(databases.candidates)) {
-        const marked = databases.candidates.find((candidate) => candidate && candidate.current === true)
-        if (marked && typeof marked.path === 'string' && marked.path) {
-          return { kind: marked.kind === 'dbDir' ? 'dbDir' : 'db', path: marked.path }
-        }
-      }
+      const marked = list.projects.find((project) => project && project.active === true)
+      if (marked) return marked
     }
-    const backend = state.backend || {}
-    if (typeof backend.db === 'string' && backend.db) return { kind: 'db', path: backend.db }
-    if (typeof backend.dbDir === 'string' && backend.dbDir) return { kind: 'dbDir', path: backend.dbDir }
-    return { kind: '', path: '' }
+    return null
   }
 
-  function currentDatabaseLabel() {
-    const current = currentDatabase()
-    return current.path
-      ? basename(current.path)
-      : translate('shell.dbUnconfigured', null, 'No database configured')
+  function projectDisplayName(project) {
+    if (project && typeof project.name === 'string' && project.name) return project.name
+    return translate('shell.projectNone', null, 'No project selected')
   }
 
-  function databaseKindLabel(kind) {
-    return kind === 'dbDir'
-      ? translate('shell.dbKindDbDir', null, 'shard dir')
-      : translate('shell.dbKindDb', null, 'single DB')
+  function projectDatabaseLabel(project) {
+    if (!project || typeof project !== 'object') return ''
+    const db = typeof project.db === 'string' ? project.db : ''
+    const dbDir = typeof project.dbDir === 'string' ? project.dbDir : ''
+    return db ? basename(db) : dbDir ? basename(dbDir) : ''
   }
 
-  function databaseOptions() {
-    const databases = state.databases
-    if (!databases || !Array.isArray(databases.candidates)) return []
-    return databases.candidates.filter((candidate) => candidate && typeof candidate.path === 'string')
+  function projectSourceRoot(project) {
+    return project && typeof project.sourceRoot === 'string' ? project.sourceRoot : ''
   }
 
-  let databasesAbort = null
-  let databasesInFlight = false
+  function projectOptions() {
+    const list = state.projects
+    if (!list || !Array.isArray(list.projects)) return []
+    return list.projects.filter((project) => project && typeof project === 'object')
+  }
 
-  /** Scan the backend host for index databases (`backend.databases`). */
-  async function refreshDatabases(options) {
+  let projectsAbort = null
+  let projectsInFlight = false
+
+  /** Load the user-managed project list (`projects.list`). */
+  async function refreshProjects(options) {
     const settings = options && typeof options === 'object' ? options : {}
-    if (databasesInFlight && !settings.force) return state.databases
-    databasesInFlight = true
-    publish({ databasesLoading: true, databasesError: null })
-    if (databasesAbort) databasesAbort.abort()
+    if (projectsInFlight && !settings.force) return state.projects
+    projectsInFlight = true
+    publish({ projectsLoading: true, projectsError: null })
+    if (projectsAbort) projectsAbort.abort()
     const controller = typeof AbortController === 'function' ? new AbortController() : null
-    databasesAbort = controller
+    projectsAbort = controller
     try {
-      const value = await api.rpc(
-        'backend.databases',
-        settings.refresh ? { refresh: true } : {},
-        controller ? controller.signal : undefined,
-      )
+      const value = await api.projects.list(controller ? controller.signal : undefined)
       if (controller && controller.signal.aborted) return null
-      if (value && typeof value === 'object' && value.ok === false) {
-        const failure = value.error ? toApiError(value.error) : toApiError({ code: 'DB_SCAN_FAILED', message: 'Database scan failed' })
-        const unsupported = failure.code === 'BACKEND_UNSUPPORTED' || failure.code === 'UNKNOWN_ENDPOINT'
-        publish({
-          databasesLoading: false,
-          databases: value,
-          databasesError: unsupported ? null : failure,
-          databasesUnsupported: unsupported,
-        })
+      if (value && typeof value === 'object' && value.ok === false && value.error) {
+        publish({ projectsLoading: false, projectsError: toApiError(value.error) })
         return null
       }
-      // A structured scan failure still carries mode/current/candidates; show
-      // the warning next to the list instead of discarding it.
-      const scanError =
-        value && typeof value === 'object' && value.error ? toApiError(value.error) : null
       publish({
-        databasesLoading: false,
-        databases: value && typeof value === 'object' ? value : null,
-        databasesError: scanError,
-        databasesUnsupported: false,
+        projectsLoading: false,
+        projects: value && typeof value === 'object' ? value : null,
+        projectsError: null,
       })
       return value
     } catch (error) {
       if (controller && controller.signal.aborted) return null
       const apiError = toApiError(error)
       if (apiError.code === 'ABORTED') return null
-      const unsupported =
-        apiError.code === 'UNKNOWN_ENDPOINT' ||
-        apiError.code === 'NOT_FOUND' ||
-        apiError.code === 'INVALID_ARGUMENT' ||
-        apiError.code === 'BACKEND_UNSUPPORTED'
-      publish({
-        databasesLoading: false,
-        databasesError: unsupported ? null : apiError,
-        databasesUnsupported: unsupported,
-      })
+      if (apiError.code === 'BACKEND_UNSUPPORTED') {
+        apiError.message = translate(
+          'projects.unsupported',
+          null,
+          'This backend build does not support the project model yet; restart or upgrade the CA plugin.',
+        )
+      }
+      publish({ projectsLoading: false, projectsError: apiError })
       return null
     } finally {
-      databasesInFlight = false
-      databasesAbort = null
+      projectsInFlight = false
+      projectsAbort = null
     }
   }
 
@@ -12279,9 +12896,7 @@ function createShell(React, bag) {
             counts: value.counts || null,
           })
           const backendState = value.backend.state
-          if (backendState === 'running' || backendState === 'error') {
-            return value.backend
-          }
+          if (backendState === 'running' || backendState === 'error') return value.backend
         }
       } catch (error) {
         const apiError = toApiError(error)
@@ -12298,27 +12913,27 @@ function createShell(React, bag) {
     return null
   }
 
-  /** Switch the backend database through `backend.useDatabase`, then reload. */
-  async function switchDatabase(kind, path) {
-    if (!kind || !path) return false
-    const target = { kind, path, label: basename(path) || path }
+  /** Activate a project (`projects.activate`), wait for the backend, then reload. */
+  async function switchProject(projectOrId) {
+    const id = typeof projectOrId === 'string' ? projectOrId : projectOrId && projectOrId.id
+    if (!id) return false
+    const known =
+      projectOptions().find((project) => project && project.id === id) ||
+      (projectOrId && typeof projectOrId === 'object' ? projectOrId : null)
+    const name = known && known.name ? known.name : id
     publish({
       variantError: null,
-      databaseSwitch: { kind, path, label: target.label, busy: true, phase: 'switching', error: null },
+      projectSwitch: { id, name, busy: true, phase: 'activating', error: null },
     })
     try {
-      const result = await api.rpc('backend.useDatabase', { kind, path })
+      const result = await api.projects.activate(id)
       if (result && result.status && typeof result.status === 'object') {
         publish({ backend: result.status })
       }
-      publish({
-        databaseSwitch: { kind, path, label: target.label, busy: true, phase: 'waiting', error: null },
-      })
+      publish({ projectSwitch: { id, name, busy: true, phase: 'waiting', error: null } })
       const backend = await waitForBackendSettled({ timeoutMs: 30000 })
       if (backend && backend.state === 'running') {
-        publish({
-          databaseSwitch: { kind, path, label: target.label, busy: true, phase: 'reloading', error: null },
-        })
+        publish({ projectSwitch: { id, name, busy: true, phase: 'reloading', error: null } })
         if (
           typeof window !== 'undefined' &&
           window.location &&
@@ -12326,42 +12941,46 @@ function createShell(React, bag) {
         ) {
           window.location.reload()
         }
-        // Clear the transient state; a working reload replaces the page anyway.
-        publish({ databaseSwitch: null })
+        publish({ projectSwitch: null })
         return true
       }
       const message =
         backend && backend.state === 'error' && backend.error
           ? String(backend.error)
-          : translate('shell.dbSwitchTimeout', null, 'The backend did not become ready in time.')
+          : translate('shell.projectSwitchTimeout', null, 'The backend did not become ready in time.')
       publish({
-        databaseSwitch: {
-          kind,
-          path,
-          label: target.label,
+        projectSwitch: {
+          id,
+          name,
           busy: false,
           phase: 'error',
           error: toApiError({ code: 'BACKEND_ERROR', message }),
         },
       })
+      void refreshProjects({ force: true })
       return false
     } catch (error) {
       const apiError = toApiError(error)
       if (apiError.code === 'ABORTED') {
-        publish({ databaseSwitch: null })
+        publish({ projectSwitch: null })
         return false
+      }
+      if (apiError.code === 'PROJECT_ACTIVATION_FAILED') {
+        apiError.message = `${apiError.message} ${translate(
+          'projects.activateFailedHint',
+          null,
+          'The previous configuration was restored; fix the project fields and retry.',
+        )}`.trim()
       }
       if (apiError.code === 'BACKEND_UNSUPPORTED') {
         apiError.message = translate(
-          'shell.dbSwitchUnsupported',
+          'shell.projectSwitchUnsupported',
           null,
-          'This backend build cannot switch databases from the UI; configure it on the backend page.',
+          'This backend build cannot switch projects from the UI; configure the backend on its page.',
         )
       }
-      publish({
-        databaseSwitch: { kind, path, label: target.label, busy: false, phase: 'error', error: apiError },
-      })
-      void refreshDatabases({ refresh: true, force: true })
+      publish({ projectSwitch: { id, name, busy: false, phase: 'error', error: apiError } })
+      void refreshProjects({ force: true })
       return false
     }
   }
@@ -12377,6 +12996,7 @@ function createShell(React, bag) {
     { page: 'callbacks', icon: 'callbacks', label: 'shell.nav.callbacks', fallback: 'Callbacks' },
     { page: 'graph', icon: 'graph', label: 'shell.nav.graph', fallback: 'Graph' },
     { page: 'tasks', icon: 'tasks', label: 'shell.nav.tasks', fallback: 'Tasks' },
+    { page: 'projects', icon: 'folder', label: 'shell.nav.projects', fallback: 'Projects' },
     { page: 'backend', icon: 'backend', label: 'shell.nav.backend', fallback: 'Backend' },
   ]
 
@@ -12399,42 +13019,31 @@ function createShell(React, bag) {
   }
 
   /**
-   * Always-visible project/database selector in the top bar.
+   * Always-visible project selector in the top bar.
    *
-   * Sections: current backend + scanned database candidates (`backend.databases`),
-   * registered registry variants (switch through POST /api/registry/active),
-   * and a fixed link to the backend settings page.
+   * A project is a user-named bundle of source tree + database (single DB or
+   * shard directory) + backend target. Switching activates it on the Host,
+   * waits for the backend to settle, then reloads the whole page so every view
+   * re-reads data from the new database.
    */
-  function DatabaseSelector() {
+  function ProjectSelector() {
     const [open, setOpen] = React.useState(false)
     const wrapRef = React.useRef(null)
-    const databases = state.databases
-    const switchState = state.databaseSwitch
+    const switchState = state.projectSwitch
     const busy = Boolean(switchState && switchState.busy)
-    const current = currentDatabase()
-    const currentLabel = currentDatabaseLabel()
-    const options = databaseOptions()
-    const registryState = api.variant.get()
-    const registry =
-      (registryState && registryState.registry) ||
-      (databases && databases.registry && typeof databases.registry === 'object'
-        ? databases.registry
-        : null)
-    const variants = registry && Array.isArray(registry.variants) ? registry.variants : []
-    const showRegistry = Boolean(registry && registry.available && variants.length > 0)
+    const projects = projectOptions()
+    const current = currentProject()
+    const currentName = projectDisplayName(current)
+    const currentDb = projectDatabaseLabel(current)
 
     const close = () => setOpen(false)
 
-    // Lazy scan when the dropdown opens (and a manual retry path).
     const openDropdown = () => {
       const next = !open
       setOpen(next)
-      if (next && (!databases || databases.ok !== true) && !state.databasesLoading) {
-        void refreshDatabases()
-      }
+      if (next) void refreshProjects({ force: true })
     }
 
-    // Close on outside click / Escape.
     React.useEffect(() => {
       if (!open) return undefined
       const onPointerDown = (event) => {
@@ -12454,269 +13063,192 @@ function createShell(React, bag) {
 
     const switchText = (() => {
       if (!switchState) return ''
-      if (switchState.phase === 'reloading') return translate('shell.dbReloading', null, 'Reloading…')
-      if (switchState.phase === 'waiting') return translate('shell.dbRestarting', null, 'Restarting backend…')
-      return translate('shell.dbSwitching', null, 'Switching database…')
+      if (switchState.phase === 'reloading') return translate('shell.projectReloading', null, 'Reloading…')
+      if (switchState.phase === 'waiting') return translate('shell.projectRestarting', null, 'Restarting backend…')
+      return translate('shell.projectSwitching', null, 'Switching project…')
     })()
-
-    const candidatesSection = h(
-      'div',
-      { className: 'ca-db-section' },
-      h(
-        'div',
-        { className: 'ca-db-section-head' },
-        h(ui.Icon, { name: 'backend', size: 12 }),
-        h('span', null, translate('shell.dbCandidates', null, 'Backend databases')),
-        databases && Number(databases.total) > 0
-          ? h(ui.Badge, { tone: 'neutral' }, String(Number(databases.total)))
-          : null,
-        state.databasesLoading ? h(ui.Spinner, { size: 11 }) : null,
-        h('span', { className: 'ca-spacer' }),
-        h(
-          ui.IconButton,
-          {
-            label: translate('shell.dbRescan', null, 'Rescan'),
-            title: translate('shell.dbRescan', null, 'Rescan'),
-            size: 22,
-            disabled: state.databasesLoading || busy,
-            onClick: () => {
-              void refreshDatabases({ refresh: true, force: true })
-            },
-          },
-          h(ui.Icon, { name: 'refresh', size: 12 }),
-        ),
-      ),
-      state.databasesError
-        ? h(
-            'div',
-            { className: 'ca-db-hint ca-db-hint-error' },
-            state.databasesError.message,
-            ' ',
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'ca-btn ca-btn-ghost ca-btn-sm',
-                onClick: () => {
-                  void refreshDatabases({ refresh: true, force: true })
-                },
-              },
-              translate('common.retry', null, 'Retry'),
-            ),
-          )
-        : null,
-      state.databasesUnsupported
-        ? h(
-            'div',
-            { className: 'ca-db-hint' },
-            translate(
-              'shell.dbScanUnsupported',
-              null,
-              'This host build does not support database scanning; configure the database on the backend page.',
-            ),
-          )
-        : null,
-      state.databasesLoading && options.length === 0
-        ? h('div', { className: 'ca-db-hint' }, translate('shell.dbScanning', null, 'Scanning databases…'))
-        : null,
-      !state.databasesLoading && !state.databasesError && !state.databasesUnsupported && options.length === 0
-        ? h(
-            'div',
-            { className: 'ca-db-hint' },
-            translate('shell.dbNoCandidates', null, 'No database candidates were found.'),
-          )
-        : null,
-      options.map((candidate) => {
-        const currentCandidate =
-          candidate.current === true ||
-          (current.path === candidate.path && (current.kind === candidate.kind || !candidate.kind))
-        const failed = candidate.status === 'failed'
-        const label = candidate.label || basename(candidate.path)
-        return h(
-          'button',
-          {
-            key: `${candidate.kind || 'db'}:${candidate.path}`,
-            type: 'button',
-            className: `ca-db-row${currentCandidate ? ' ca-db-row-active' : ''}`,
-            disabled: busy || currentCandidate || failed,
-            title: candidate.path,
-            onClick: () => {
-              close()
-              if (!currentCandidate && !failed) void switchDatabase(candidate.kind || 'db', candidate.path)
-            },
-          },
-          h(ui.Badge, { tone: failed ? 'error' : 'muted' }, databaseKindLabel(candidate.kind)),
-          h(
-            'span',
-            { className: 'ca-db-row-main' },
-            h('span', { className: 'ca-db-row-label' }, label),
-            h('span', { className: 'ca-db-row-path' }, candidate.path),
-          ),
-          failed
-            ? h(ui.Badge, { tone: 'error' }, translate('shell.dbCandidateFailed', null, 'scan failed'))
-            : null,
-          !failed && candidate.sizeBytes !== undefined && candidate.sizeBytes !== null
-            ? h('span', { className: 'ca-db-row-meta' }, formatBytes(candidate.sizeBytes))
-            : null,
-          !failed && Number(candidate.dbCount) > 0
-            ? h(
-                'span',
-                { className: 'ca-db-row-meta' },
-                translate('backend.databaseFiles', { count: Number(candidate.dbCount) }, `${candidate.dbCount} DB files`),
-              )
-            : null,
-          currentCandidate
-            ? h(ui.Badge, { tone: 'success' }, translate('shell.dbActive', null, 'active'))
-            : null,
-        )
-      }),
-      databases && databases.truncated
-        ? h(
-            'div',
-            { className: 'ca-db-hint' },
-            translate(
-              'shell.dbTruncated',
-              { count: Number(databases.maxItems) || Number(databases.total) || 0 },
-              'Only the first candidates are shown.',
-            ),
-          )
-        : null,
-    )
-
-    const registrySection = showRegistry
-      ? h(
-          'div',
-          { className: 'ca-db-section' },
-          h(
-            'div',
-            { className: 'ca-db-section-head' },
-            h(ui.Icon, { name: 'graph', size: 12 }),
-            h('span', null, translate('shell.dbRegistry', null, 'Registered variants')),
-          ),
-          variants.map((variant) => {
-            const active = variant.id === registry.active_variant_id
-            const parts = [variant.name, variant.product, variant.board, variant.version].filter(
-              (part) => typeof part === 'string' && part.length > 0,
-            )
-            const label = parts.length ? parts.join(' · ') : String(variant.id)
-            return h(
-              'button',
-              {
-                key: String(variant.id),
-                type: 'button',
-                className: `ca-db-row${active ? ' ca-db-row-active' : ''}`,
-                disabled: busy || active || !variant.db_exists,
-                title: variant.db_path || label,
-                onClick: () => {
-                  close()
-                  void switchVariant(variant.id)
-                },
-              },
-              h(ui.Badge, { tone: 'info' }, translate('shell.variant', null, 'Variant')),
-              h(
-                'span',
-                { className: 'ca-db-row-main' },
-                h('span', { className: 'ca-db-row-label' }, label),
-                variant.db_path ? h('span', { className: 'ca-db-row-path' }, variant.db_path) : null,
-              ),
-              active ? h(ui.Badge, { tone: 'success' }, translate('shell.dbActive', null, 'active')) : null,
-            )
-          }),
-        )
-      : null
 
     return h(
       'div',
-      { className: 'ca-db', ref: wrapRef },
+      { className: 'ca-project', ref: wrapRef },
       h(
         'button',
         {
           type: 'button',
-          className: 'ca-db-trigger',
+          className: 'ca-project-trigger',
           'aria-haspopup': 'dialog',
           'aria-expanded': open ? 'true' : 'false',
-          'aria-label': `${translate('shell.database', null, 'Database')}: ${currentLabel}`,
-          title: current.path
-            ? `${translate('shell.database', null, 'Database')}: ${current.path}`
-            : translate('shell.dbUnconfiguredHint', null, 'No database configured — open the selector to choose one.'),
+          'aria-label': `${translate('shell.project', null, 'Project')}: ${currentName}`,
+          title: current
+            ? [currentName, projectSourceRoot(current), currentDb].filter(Boolean).join(' · ')
+            : translate('shell.projectNoneHint', null, 'No project selected — open the selector to choose one.'),
           onClick: openDropdown,
         },
-        h(ui.Icon, { name: 'backend', size: 13 }),
-        h('span', { className: 'ca-db-label' }, currentLabel),
+        h(ui.Icon, { name: 'folder', size: 13 }),
+        h('span', { className: 'ca-project-label' }, currentName),
+        currentDb ? h('span', { className: 'ca-project-db' }, currentDb) : null,
         h(ui.Icon, { name: 'chevron-down', size: 11 }),
       ),
       switchState && switchState.busy
-        ? h('span', { className: 'ca-db-switching' }, h(ui.Spinner, { size: 11 }), switchText)
+        ? h('span', { className: 'ca-project-switching' }, h(ui.Spinner, { size: 11 }), switchText)
         : null,
       open
         ? h(
             'div',
             {
-              className: 'ca-db-dropdown',
+              className: 'ca-project-dropdown',
               role: 'dialog',
-              'aria-label': translate('shell.databaseSelector', null, 'Project / database selector'),
+              'aria-label': translate('shell.projectSelector', null, 'Project selector'),
             },
             h(
               'div',
-              { className: 'ca-db-section' },
+              { className: 'ca-project-section' },
               h(
                 'div',
-                { className: 'ca-db-current' },
+                { className: 'ca-project-current' },
                 h(
                   'div',
-                  { className: 'ca-db-current-row' },
-                  h(ui.Badge, { tone: backendStateTone(state.backend) === 'running' ? 'success' : 'neutral' }, backendStateLabel(state.backend)),
-                  state.backend && state.backend.mode
-                    ? h('span', { className: 'ca-db-row-meta' }, String(state.backend.mode))
+                  { className: 'ca-project-current-row' },
+                  h(ui.Icon, { name: 'folder', size: 13 }),
+                  h('span', { className: 'ca-project-current-name' }, currentName),
+                  current && current.backend
+                    ? h(ui.Badge, { tone: 'info' }, String(current.backend))
                     : null,
+                  currentDb ? h('span', { className: 'ca-project-row-meta' }, currentDb) : null,
+                  h('span', { className: 'ca-spacer' }),
+                  h(
+                    ui.Badge,
+                    { tone: backendStateTone(state.backend) === 'running' ? 'success' : 'neutral' },
+                    backendStateLabel(state.backend),
+                  ),
                 ),
-                h(
-                  'div',
-                  { className: 'ca-db-current-path' },
-                  current.path || translate('shell.dbUnconfigured', null, 'No database configured'),
-                ),
+                current && projectSourceRoot(current)
+                  ? h('div', { className: 'ca-project-current-path' }, projectSourceRoot(current))
+                  : null,
               ),
             ),
             switchState && switchState.phase === 'error' && switchState.error
               ? h(
                   'div',
-                  { className: 'ca-db-hint ca-db-hint-error' },
+                  { className: 'ca-project-hint ca-project-hint-error' },
                   translate(
-                    'shell.dbSwitchFailed',
+                    'shell.projectSwitchFailed',
                     { message: switchState.error.message },
-                    `Could not switch database: ${switchState.error.message}`,
+                    `Could not switch project: ${switchState.error.message}`,
                   ),
                 )
               : null,
-            candidatesSection,
-            registrySection,
             h(
               'div',
-              { className: 'ca-db-foot' },
+              { className: 'ca-project-section' },
+              h(
+                'div',
+                { className: 'ca-project-section-head' },
+                h('span', null, translate('shell.projects', null, 'Projects')),
+                projects.length > 0 ? h(ui.Badge, { tone: 'neutral' }, String(projects.length)) : null,
+                state.projectsLoading ? h(ui.Spinner, { size: 11 }) : null,
+                h('span', { className: 'ca-spacer' }),
+                h(
+                  ui.IconButton,
+                  {
+                    label: translate('shell.projectRefresh', null, 'Refresh projects'),
+                    title: translate('shell.projectRefresh', null, 'Refresh projects'),
+                    size: 22,
+                    disabled: state.projectsLoading || busy,
+                    onClick: () => {
+                      void refreshProjects({ force: true })
+                    },
+                  },
+                  h(ui.Icon, { name: 'refresh', size: 12 }),
+                ),
+              ),
+              state.projectsError
+                ? h(
+                    'div',
+                    { className: 'ca-project-hint ca-project-hint-error' },
+                    state.projectsError.message,
+                    ' ',
+                    h(
+                      ui.Button,
+                      {
+                        variant: 'ghost',
+                        size: 'sm',
+                        onClick: () => {
+                          void refreshProjects({ force: true })
+                        },
+                      },
+                      translate('common.retry', null, 'Retry'),
+                    ),
+                  )
+                : null,
+              state.projectsLoading && projects.length === 0
+                ? h('div', { className: 'ca-project-hint' }, translate('shell.projectLoading', null, 'Loading projects…'))
+                : null,
+              !state.projectsLoading && projects.length === 0
+                ? h(
+                    'div',
+                    { className: 'ca-project-hint' },
+                    translate('shell.projectEmpty', null, 'No projects yet.'),
+                  )
+                : null,
+              projects.map((project) => {
+                const active = Boolean(
+                  (current && project.id === current.id) || project.active === true,
+                )
+                const dbLabel = projectDatabaseLabel(project)
+                return h(
+                  'button',
+                  {
+                    key: String(project.id),
+                    type: 'button',
+                    className: `ca-project-row${active ? ' ca-project-row-active' : ''}`,
+                    disabled: busy || active,
+                    title: [project.name, projectSourceRoot(project), project.db || project.dbDir]
+                      .filter(Boolean)
+                      .join(' · '),
+                    onClick: () => {
+                      close()
+                      if (!active) void switchProject(project)
+                    },
+                  },
+                  h(ui.Icon, { name: 'folder', size: 13 }),
+                  h(
+                    'span',
+                    { className: 'ca-project-row-main' },
+                    h('span', { className: 'ca-project-row-label' }, projectDisplayName(project)),
+                    h('span', { className: 'ca-project-row-path' }, projectSourceRoot(project) || '—'),
+                  ),
+                  project.backend
+                    ? h(
+                        ui.Badge,
+                        { tone: 'muted' },
+                        project.backend === 'remote'
+                          ? translate('projects.backend.remote', null, 'remote (SSH)')
+                          : translate('projects.backend.local', null, 'local'),
+                      )
+                    : null,
+                  dbLabel ? h('span', { className: 'ca-project-row-meta' }, dbLabel) : null,
+                  active
+                    ? h(ui.Badge, { tone: 'success' }, translate('shell.projectActive', null, 'active'))
+                    : null,
+                )
+              }),
+            ),
+            h(
+              'div',
+              { className: 'ca-project-foot' },
               h(
                 ui.Button,
                 {
-                  variant: 'ghost',
+                  variant: 'primary',
                   size: 'sm',
                   onClick: () => {
                     close()
-                    navigate({ page: 'backend' })
+                    navigate({ page: 'projects' })
                   },
                 },
-                h(ui.Icon, { name: 'settings', size: 13 }),
-                translate('shell.dbSettings', null, 'Backend settings…'),
-              ),
-              h(
-                ui.Button,
-                {
-                  variant: 'ghost',
-                  size: 'sm',
-                  onClick: () => {
-                    void refreshDatabases({ refresh: true, force: true })
-                  },
-                },
-                h(ui.Icon, { name: 'refresh', size: 13 }),
-                translate('shell.dbRescan', null, 'Rescan'),
+                h(ui.Icon, { name: 'folder', size: 13 }),
+                translate('shell.projectManage', null, 'Manage projects…'),
               ),
             ),
           )
@@ -12783,7 +13315,7 @@ function createShell(React, bag) {
       h(
         'div',
         { className: 'ca-topbar-right' },
-        h(DatabaseSelector),
+        h(ProjectSelector),
         h(
           'button',
           {
@@ -12923,10 +13455,10 @@ function createShell(React, bag) {
     )
   }
 
-  function VariantErrorBanner() {
+  function ProjectErrorBanner() {
     const switchError =
-      state.databaseSwitch && state.databaseSwitch.phase === 'error' && state.databaseSwitch.error
-        ? state.databaseSwitch.error
+      state.projectSwitch && state.projectSwitch.phase === 'error' && state.projectSwitch.error
+        ? state.projectSwitch.error
         : null
     const error = state.variantError || switchError
     if (!error) return null
@@ -12938,7 +13470,11 @@ function createShell(React, bag) {
         'span',
         { className: 'ca-banner-text' },
         switchError
-          ? translate('shell.dbSwitchFailed', { message: error.message }, `Could not switch database: ${error.message}`)
+          ? translate(
+              'shell.projectSwitchFailed',
+              { message: error.message },
+              `Could not switch project: ${error.message}`,
+            )
           : error.message,
       ),
       h('span', { className: 'ca-spacer' }),
@@ -12947,7 +13483,7 @@ function createShell(React, bag) {
         {
           variant: 'ghost',
           size: 'sm',
-          onClick: () => publish({ variantError: null, databaseSwitch: null }),
+          onClick: () => publish({ variantError: null, projectSwitch: null }),
         },
         translate('common.close', null, 'Close'),
       ),
@@ -13015,15 +13551,20 @@ function createShell(React, bag) {
     React.useEffect(() => {
       const onHashChange = () => publish({ route: parseHash(currentHash()) })
       const onPopState = () => publish({ route: parseHash(currentHash()) })
+      const onProjectsChange = () => {
+        void refreshProjects({ force: true })
+      }
       if (typeof window !== 'undefined') {
         window.addEventListener('hashchange', onHashChange)
         window.addEventListener('popstate', onPopState)
+        window.addEventListener('ca:projectschange', onProjectsChange)
       }
       startPolling()
       return () => {
         if (typeof window !== 'undefined') {
           window.removeEventListener('hashchange', onHashChange)
           window.removeEventListener('popstate', onPopState)
+          window.removeEventListener('ca:projectschange', onProjectsChange)
         }
         stopPolling()
       }
@@ -13042,7 +13583,7 @@ function createShell(React, bag) {
       { className: 'ca-app' },
       h(TopBar),
       h(StoppedBanner),
-      h(VariantErrorBanner),
+      h(ProjectErrorBanner),
       h('main', { className: 'ca-main' }, body),
     )
   }
@@ -13060,8 +13601,8 @@ function createShell(React, bag) {
     subscribe,
     getSnapshot,
     refreshStatus,
-    refreshDatabases,
-    switchDatabase,
+    refreshProjects,
+    switchProject,
   }
 }
 
@@ -13919,6 +14460,90 @@ const zh = {
   'backend.databaseScannedAt': '扫描于 {time}',
   'backend.databaseScanFailed': '扫描失败',
 
+  // ---- DSH projects model --------------------------------------------------
+  'shell.project': '项目',
+  'shell.projects': '项目',
+  'shell.projectNone': '未选择项目',
+  'shell.projectNoneHint': '尚未选择项目——打开选择器选择。',
+  'shell.projectLoading': '正在加载项目…',
+  'shell.projectEmpty': '还没有项目。',
+  'shell.projectManage': '管理项目…',
+  'shell.projectActive': '当前',
+  'shell.projectRefresh': '刷新项目',
+  'shell.projectSwitching': '正在切换项目…',
+  'shell.projectRestarting': '正在重启后端…',
+  'shell.projectReloading': '正在刷新…',
+  'shell.projectSwitchFailed': '切换项目失败：{message}',
+  'shell.projectSwitchTimeout': '后端未在预期时间内就绪。',
+  'shell.projectSwitchUnsupported': '当前后端版本不支持从界面切换项目；请在后端页配置。',
+  'shell.projectSelector': '项目选择器',
+  'shell.nav.projects': '项目',
+  'backend.projectHintTitle': '用项目来管理索引',
+  'backend.projectHint': '推荐在「项目」页创建与切换项目——项目 = 源码 + 数据库 + 后端位置。本页仅保留低层后端状态与配置。',
+  'backend.projectHintLowLevel': '下方为低层控制：直接编辑后端配置，不与已保存项目绑定。',
+  'backend.openProjects': '打开项目页',
+  'projects.title': '项目',
+  'projects.subtitle': '项目 = 一份源码 + 一个数据库（单库或分片目录）+ 一个后端位置。',
+  'projects.new': '新建项目',
+  'projects.edit': '编辑',
+  'projects.save': '保存项目',
+  'projects.saving': '保存中…',
+  'projects.cancel': '取消',
+  'projects.activate': '激活',
+  'projects.activating': '激活中…',
+  'projects.active': '当前',
+  'projects.delete': '删除',
+  'projects.confirmDelete': '确认删除',
+  'projects.deleting': '删除中…',
+  'projects.refresh': '刷新',
+  'projects.empty': '还没有项目',
+  'projects.emptyBody': '创建项目以指定插件要使用的源码与数据库。',
+  'projects.created': '项目已保存。',
+  'projects.removed': '项目已删除。',
+  'projects.activated': '项目已激活，正在刷新…',
+  'projects.loadFailed': '无法加载项目',
+  'projects.actionFailed': '项目操作失败',
+  'projects.listTitle': '已保存项目',
+  'projects.count': '{count} 个项目',
+  'projects.activeHint': '当前：{name}',
+  'projects.noActive': '未激活项目',
+  'projects.hint': '通用 CA 工具读取当前激活项目的数据库；切换项目会重启后端。',
+  'projects.formTitleNew': '新建项目',
+  'projects.formTitleEdit': '编辑项目',
+  'projects.formErrorHint': '请先修正标红的字段。',
+  'projects.field.name': '名称',
+  'projects.field.nameHint': '唯一显示名称，例如 oh-xv6',
+  'projects.field.backend': '后端',
+  'projects.field.sourceRoot': '源码根目录',
+  'projects.field.sourceRootHint': '后端主机上的源码根目录绝对路径。自动迁移的默认项目可能指向 CA 检出目录，请改为真实源码根。',
+  'projects.field.database': '数据库',
+  'projects.field.databaseKind': '类型',
+  'projects.field.dbSingle': '单库文件',
+  'projects.field.dbDir': '分片目录',
+  'projects.field.dbPath': '数据库路径',
+  'projects.field.dbHint': '单库文件与分片目录二选一。',
+  'projects.field.compdb': 'compile_commands.json',
+  'projects.field.python': 'Python 解释器',
+  'projects.field.caRepoPath': 'CA 仓库路径',
+  'projects.field.sshHost': 'SSH 主机',
+  'projects.field.sshUser': 'SSH 用户',
+  'projects.field.sshPort': 'SSH 端口',
+  'projects.field.sshKeyPath': 'SSH 私钥路径',
+  'projects.section.remote': '远程 SSH',
+  'projects.error.nameRequired': '名称必填。',
+  'projects.error.sourceRootRequired': '源码根目录必须为绝对路径。',
+  'projects.error.databaseRequired': '请填写数据库路径（单库或分片目录）。',
+  'projects.error.sshHostRequired': '远程项目必须填写 SSH 主机。',
+  'projects.error.portInvalid': 'SSH 端口必须是 1–65535 的整数。',
+  'projects.backend.local': '本地',
+  'projects.backend.remote': '远程（SSH）',
+  'projects.deleteConfirm': '删除项目“{name}”？仅删除已保存的项目条目。',
+  'projects.unsupported': '当前后端版本尚不支持项目模型；请重启或升级 CA 插件。',
+  'projects.activeCleared': '当前项目已删除；后端仍按旧配置运行。请创建或激活一个项目以指定数据库。',
+  'projects.activateFailedHint': '已回滚到之前的配置；请修正项目字段后重试。',
+  'projects.savedNeedsActivate': '项目已保存。激活后才会把新配置应用到后端。',
+  'projects.activatingFirst': '项目已创建，正在激活…',
+
   // ---- DSH view keys (ui-detail / ui-graph / shared views) ----------------
 
   // ---- DSH AI explanation panel (ai-explain) ------------------------------
@@ -14670,6 +15295,90 @@ const en = {
   'backend.databaseScannedAt': 'Scanned {time}',
   'backend.databaseScanFailed': 'scan failed',
 
+  // ---- DSH projects model --------------------------------------------------
+  'shell.project': 'Project',
+  'shell.projects': 'Projects',
+  'shell.projectNone': 'No project selected',
+  'shell.projectNoneHint': 'No project selected — open the selector to choose one.',
+  'shell.projectLoading': 'Loading projects…',
+  'shell.projectEmpty': 'No projects yet.',
+  'shell.projectManage': 'Manage projects…',
+  'shell.projectActive': 'active',
+  'shell.projectRefresh': 'Refresh projects',
+  'shell.projectSwitching': 'Switching project…',
+  'shell.projectRestarting': 'Restarting backend…',
+  'shell.projectReloading': 'Reloading…',
+  'shell.projectSwitchFailed': 'Could not switch project: {message}',
+  'shell.projectSwitchTimeout': 'The backend did not become ready in time.',
+  'shell.projectSwitchUnsupported': 'This backend build cannot switch projects from the UI; configure the backend on its page.',
+  'shell.projectSelector': 'Project selector',
+  'shell.nav.projects': 'Projects',
+  'backend.projectHintTitle': 'Manage indexes as projects',
+  'backend.projectHint': 'Recommended: create and switch projects on the Projects page — a project binds a source tree, a database and a backend target. This page keeps the low-level backend status and configuration.',
+  'backend.projectHintLowLevel': 'The controls below are low-level: they edit the backend configuration directly and are not tied to a saved project.',
+  'backend.openProjects': 'Open projects',
+  'projects.title': 'Projects',
+  'projects.subtitle': 'A project binds a source tree, a database (single DB or shard directory) and a backend target.',
+  'projects.new': 'New project',
+  'projects.edit': 'Edit',
+  'projects.save': 'Save project',
+  'projects.saving': 'Saving…',
+  'projects.cancel': 'Cancel',
+  'projects.activate': 'Activate',
+  'projects.activating': 'Activating…',
+  'projects.active': 'active',
+  'projects.delete': 'Delete',
+  'projects.confirmDelete': 'Confirm delete',
+  'projects.deleting': 'Deleting…',
+  'projects.refresh': 'Refresh',
+  'projects.empty': 'No projects yet',
+  'projects.emptyBody': 'Create a project to choose the source tree and database this plugin should serve.',
+  'projects.created': 'Project saved.',
+  'projects.removed': 'Project deleted.',
+  'projects.activated': 'Project activated; reloading…',
+  'projects.loadFailed': 'Could not load projects',
+  'projects.actionFailed': 'Project action failed',
+  'projects.listTitle': 'Saved projects',
+  'projects.count': '{count} projects',
+  'projects.activeHint': 'Active: {name}',
+  'projects.noActive': 'No active project',
+  'projects.hint': 'The generic CA tools read the active project\'s database; switching projects restarts the backend.',
+  'projects.formTitleNew': 'New project',
+  'projects.formTitleEdit': 'Edit project',
+  'projects.formErrorHint': 'Fix the highlighted fields before saving.',
+  'projects.field.name': 'Name',
+  'projects.field.nameHint': 'Unique display name, e.g. oh-xv6',
+  'projects.field.backend': 'Backend',
+  'projects.field.sourceRoot': 'Source root',
+  'projects.field.sourceRootHint': 'Absolute path of the source tree on the backend host. A migrated default project may point at the CA checkout — change it to the real source root.',
+  'projects.field.database': 'Database',
+  'projects.field.databaseKind': 'Kind',
+  'projects.field.dbSingle': 'Single DB file',
+  'projects.field.dbDir': 'Shard directory',
+  'projects.field.dbPath': 'Database path',
+  'projects.field.dbHint': 'Set exactly one of a single DB file or a shard directory.',
+  'projects.field.compdb': 'compile_commands.json',
+  'projects.field.python': 'Python interpreter',
+  'projects.field.caRepoPath': 'CA repository path',
+  'projects.field.sshHost': 'SSH host',
+  'projects.field.sshUser': 'SSH user',
+  'projects.field.sshPort': 'SSH port',
+  'projects.field.sshKeyPath': 'SSH private key path',
+  'projects.section.remote': 'Remote SSH',
+  'projects.error.nameRequired': 'Name is required.',
+  'projects.error.sourceRootRequired': 'Source root must be an absolute path.',
+  'projects.error.databaseRequired': 'Choose a database path (single DB or shard directory).',
+  'projects.error.sshHostRequired': 'SSH host is required for a remote project.',
+  'projects.error.portInvalid': 'SSH port must be an integer between 1 and 65535.',
+  'projects.backend.local': 'local',
+  'projects.backend.remote': 'remote (SSH)',
+  'projects.deleteConfirm': 'Delete project “{name}”? This only removes the saved project entry.',
+  'projects.unsupported': 'This backend build does not support the project model yet; restart or upgrade the CA plugin.',
+  'projects.activeCleared': 'The active project was deleted; the backend keeps running on the old configuration. Create or activate a project to choose a database.',
+  'projects.activateFailedHint': 'The previous configuration was restored; fix the project fields and retry.',
+  'projects.savedNeedsActivate': 'Project saved. Activate it to apply the new configuration to the backend.',
+  'projects.activatingFirst': 'Project created; activating…',
+
   // ---- DSH view keys (ui-detail / ui-graph / shared views) ----------------
 
   // ---- DSH AI explanation panel (ai-explain) ------------------------------
@@ -15297,6 +16006,7 @@ const ICON_PATHS = {
   external: ['M14 4h6v6', 'M20 4l-9 9', 'M18 14v5H5V6h5'],
   settings: ['M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z', 'M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1L14.5 3h-5l-.4 2.6a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.4 2.6h5l.4-2.6a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5c.06-.33.1-.66.1-1z'],
   menu: ['M4 6h16M4 12h16M4 18h16'],
+  folder: ['M3 6.5h6l2 2h10v9H3z'],
 }
 
 // ---------------------------------------------------------------------------

@@ -870,6 +870,194 @@ test('explain reports unavailable/failed services and invalid payloads', async (
 })
 
 // --------------------------------------------------------------------------- //
+// projects.*
+// --------------------------------------------------------------------------- //
+
+const RPC_PROJECTS = [
+  {
+    id: 'proj-1',
+    name: 'dsoftbus',
+    backend: 'local',
+    sourceRoot: '/repo/oh',
+    db: '/data/oh.db',
+    dbDir: null,
+    compdb: '/data/compile_commands.json',
+  },
+  {
+    id: 'proj-2',
+    name: 'remote-index',
+    backend: 'remote',
+    sourceRoot: '/home/yu/CA_OH',
+    db: null,
+    dbDir: '/home/yu/CA_OH/index',
+    ssh: { host: 'linux-box', user: 'yu' },
+  },
+]
+
+function seededProjectsBackend(activeProjectId = 'proj-1') {
+  return createFakeBackend({ projects: RPC_PROJECTS, activeProjectId })
+}
+
+test('the endpoint list exposes the project endpoints', () => {
+  for (const endpoint of [
+    'projects.list',
+    'projects.save',
+    'projects.remove',
+    'projects.activate',
+  ]) {
+    assert.ok(RPC_ENDPOINTS.includes(endpoint), `missing ${endpoint}`)
+  }
+})
+
+test('projects.list returns projects and the active id', async () => {
+  const empty = setup()
+  const emptyValue = valueOf(await empty.call('projects.list'))
+  assert.deepEqual(emptyValue, { projects: [], activeProjectId: null })
+
+  const seeded = setup({ backend: seededProjectsBackend('proj-2') })
+  const value = valueOf(await seeded.call('projects.list'))
+  assert.equal(value.projects.length, 2)
+  assert.equal(value.activeProjectId, 'proj-2')
+  assert.equal(value.projects[0].name, 'dsoftbus')
+  assert.equal(value.projects[1].active, true)
+  assert.equal(seeded.backend.calls.listProjects, 1)
+})
+
+test('projects.save creates a project and validates the payload', async () => {
+  const context = setup()
+  const response = await context.call('projects.save', {
+    project: { name: 'demo', backend: 'local', sourceRoot: '/src/demo', db: '/data/demo.db' },
+  })
+  assert.equal(response.status, 200)
+  const value = valueOf(response)
+  assert.equal(value.project.id, 'proj-1')
+  assert.equal(value.project.name, 'demo')
+  assert.equal(value.projects.length, 1)
+  assert.equal(value.activeProjectId, null)
+  assert.deepEqual(context.backend.calls.saveProject[0], {
+    name: 'demo',
+    backend: 'local',
+    sourceRoot: '/src/demo',
+    db: '/data/demo.db',
+  })
+
+  assert.equal(errorOf(await context.call('projects.save', {})).code, 'INVALID_ARGUMENT')
+  assert.equal(
+    errorOf(await context.call('projects.save', { project: 'nope' })).code,
+    'INVALID_ARGUMENT',
+  )
+  assert.equal(
+    errorOf(await context.call('projects.save', { project: {} })).code,
+    'INVALID_ARGUMENT',
+  )
+  assert.equal(context.backend.calls.saveProject.length, 1)
+})
+
+test('projects.save normalizes manager errors into the picker vocabulary', async () => {
+  const cases = [
+    [new BackendError('INVALID_ARGUMENT', 'project name is required'), 'INVALID_ARGUMENT', 400],
+    [new BackendError('CONFIG_INVALID', 'invalid project field'), 'INVALID_ARGUMENT', 400],
+    [new BackendError('DB_NOT_FOUND', 'database not found'), 'DB_NOT_FOUND', 200],
+    [new BackendError('PROJECT_NOT_FOUND', 'project not found'), 'DB_NOT_FOUND', 200],
+    [new BackendError('DATABASE_SWITCH_FAILED', 'restart failed', { restored: true }), 'BACKEND_ERROR', 200],
+    [new Error('boom'), 'INTERNAL', 500],
+  ]
+  for (const [thrown, expectedCode, expectedStatus] of cases) {
+    const backend = createFakeBackend({ projects: RPC_PROJECTS })
+    backend.saveProject = async () => {
+      throw thrown
+    }
+    const context = setup({ backend })
+    const response = await context.call('projects.save', {
+      project: { name: 'demo', backend: 'local', sourceRoot: '/src', db: '/d.db' },
+    })
+    assert.equal(response.status, expectedStatus, `${thrown.code ?? 'plain'} status`)
+    const error = errorOf(response)
+    assert.equal(error.code, expectedCode)
+    if (expectedCode === 'BACKEND_ERROR') {
+      assert.equal(error.details.backendCode, 'DATABASE_SWITCH_FAILED')
+      assert.equal(error.details.restored, true)
+    }
+  }
+})
+
+test('projects.remove deletes a project and clears the active id', async () => {
+  const context = setup({ backend: seededProjectsBackend('proj-2') })
+  const value = valueOf(await context.call('projects.remove', { id: 'proj-2' }))
+  assert.equal(value.projects.length, 1)
+  assert.equal(value.activeProjectId, null)
+  assert.equal(value.activeCleared, true)
+  assert.equal(value.deleted.name, 'remote-index')
+  assert.deepEqual(context.backend.calls.deleteProject, ['proj-2'])
+
+  assert.equal(errorOf(await context.call('projects.remove', {})).code, 'INVALID_ARGUMENT')
+  assert.equal(
+    errorOf(await context.call('projects.remove', { id: 'proj-missing' })).code,
+    'DB_NOT_FOUND',
+    'unknown project maps to the not-found vocabulary',
+  )
+})
+
+test('projects.activate activates a project and redacts the config', async () => {
+  const context = setup({ backend: seededProjectsBackend('proj-1') })
+  const response = await context.call('projects.activate', { id: 'proj-2' })
+  assert.equal(response.status, 200)
+  const value = valueOf(response)
+  assert.equal(value.project.name, 'remote-index')
+  assert.equal(value.project.id, 'proj-2')
+  assert.equal(value.config.auth.password, '***')
+  assert.equal(value.config.remote.ssh.keyPath, '/home/yu/.ssh/id_ed25519')
+  assert.equal(typeof value.status, 'object')
+  assert.deepEqual(context.backend.calls.activateProject, ['proj-2'])
+
+  assert.equal(errorOf(await context.call('projects.activate', {})).code, 'INVALID_ARGUMENT')
+
+  const invalid = setup({ backend: createFakeBackend() })
+  invalid.backend.activateProject = async () => {
+    throw new BackendError('INVALID_ARGUMENT', 'project is invalid')
+  }
+  const invalidResponse = await invalid.call('projects.activate', { id: 'proj-1' })
+  assert.equal(invalidResponse.status, 400)
+  assert.equal(errorOf(invalidResponse).code, 'INVALID_ARGUMENT')
+})
+
+test('project endpoints report an unsupported backend manager', async () => {
+  const backend = createFakeBackend()
+  delete backend.listProjects
+  delete backend.saveProject
+  delete backend.deleteProject
+  delete backend.activateProject
+  const context = setup({ backend })
+  for (const [endpoint, payload] of [
+    ['projects.list', {}],
+    ['projects.save', { project: { name: 'x' } }],
+    ['projects.remove', { id: 'proj-1' }],
+    ['projects.activate', { id: 'proj-1' }],
+  ]) {
+    const response = await context.call(endpoint, payload)
+    assert.equal(response.status, 200, endpoint)
+    assert.equal(errorOf(response).code, 'BACKEND_UNSUPPORTED', endpoint)
+  }
+})
+
+test('status includes the active project summary', async () => {
+  const context = setup({ backend: seededProjectsBackend('proj-1') })
+  const status = valueOf(await context.call('status'))
+  assert.deepEqual(status.project, {
+    id: 'proj-1',
+    name: 'dsoftbus',
+    backend: 'local',
+    sourceRoot: '/repo/oh',
+    db: '/data/oh.db',
+    dbDir: null,
+  })
+
+  const legacy = setup()
+  const legacyStatus = valueOf(await legacy.call('status'))
+  assert.equal(legacyStatus.project, null)
+})
+
+// --------------------------------------------------------------------------- //
 // robustness
 // --------------------------------------------------------------------------- //
 
@@ -882,6 +1070,10 @@ test('the route handler never throws, for any endpoint or body shape', async () 
     'backend.get',
     'backend.databases',
     'backend.useDatabase',
+    'projects.list',
+    'projects.save',
+    'projects.remove',
+    'projects.activate',
     'tasks.list',
     'explain',
     '???',

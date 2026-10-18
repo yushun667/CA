@@ -155,6 +155,14 @@ test('buildRemoteServeScript starts ca serve with a pid file and DB flags', () =
   assert.match(withExtras, /--repo \/home\/yu\/src\/openharmony/);
   assert.match(withExtras, /--compdb \/home\/yu\/compdb\.json/);
   assert.throws(() => buildRemoteServeScript({ repoPath: '' }), /检出路径未配置/);
+
+  // Per-instance PID file keeps two managers from killing each other's server.
+  const tokenScript = buildRemoteServeScript({
+    repoPath: '/home/yu/CA',
+    db: '/home/yu/x.db',
+    pidFile: 'serve-abc123',
+  });
+  assert.match(tokenScript, /echo \$\$ > "\$RUN_DIR\/serve-abc123\.pid"/);
 });
 
 test('buildRemoteStopScript stops the pid from the run dir', () => {

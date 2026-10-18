@@ -26,6 +26,12 @@ import {
   ToolError,
 } from './backend.js'
 import * as fmt from './format.js'
+import {
+  fetchActiveProject,
+  fetchProjects,
+  findProject,
+  supportsProjects,
+} from './projects.js'
 
 /** Fixed public tool names (CONTRACT.md). */
 export const CA_TOOL_NAMES = Object.freeze([
@@ -38,6 +44,7 @@ export const CA_TOOL_NAMES = Object.freeze([
   'ca_stats',
   'ca_callbacks',
   'ca_registry',
+  'ca_project',
   'ca_explain',
   'ca_task',
 ])
@@ -310,6 +317,18 @@ function taskCounts(tasks) {
   }
 }
 
+/** Fetch the project list or fail with an actionable tool error. */
+async function requireProjects(backend) {
+  const list = await fetchProjects(backend)
+  if (!list) {
+    throw new ToolError(
+      'BACKEND_UNSUPPORTED',
+      'This CA backend build does not support the project model yet; configure the database on the CA backend page instead.',
+    )
+  }
+  return list
+}
+
 function taskStatus(backend) {
   try {
     return typeof backend.getStatus === 'function' ? backend.getStatus() ?? {} : {}
@@ -373,7 +392,7 @@ export function registerTools(ctx, deps = {}) {
       name: 'ca_status',
       title: 'CA backend status',
       description:
-        'Report the CA backend and index: configured target (local or remote Linux), running state, database path, index table counts, health and task summary. Call it when a ca_* call fails with a backend error, or when the user asks whether CA is available or what is indexed.',
+        'Report the CA backend, the active project and the index: project (source tree + database + backend location), configured target (local or remote Linux), running state, database path, index table counts, health and task summary. Call it when a ca_* call fails with a backend error, or when the user asks whether CA is available, which project/database is active, or what is indexed.',
       args: {},
       async execute() {
         const status = taskStatus(backend)
@@ -387,7 +406,14 @@ export function registerTools(ctx, deps = {}) {
           }
         }
         const counts = taskCounts(tasks)
-        const rendered = fmt.formatStatus({ status, health, counts })
+        const project = await fetchActiveProject(backend)
+        const rendered = fmt.formatStatus({
+          status,
+          health,
+          counts,
+          project,
+          projectsSupported: supportsProjects(backend),
+        })
         return healthError ? `${rendered}\nhealth error: ${healthError}` : rendered
       },
     },
@@ -617,6 +643,70 @@ export function registerTools(ctx, deps = {}) {
         }
         const data = await caGet(backend, '/api/registry', undefined, { signal: exec?.signal })
         return fmt.formatRegistry(data, { compact: args.compact === true })
+      },
+    },
+
+    {
+      name: 'ca_project',
+      title: 'CA projects',
+      description:
+        'List, inspect or activate CA projects. A project pins one source tree to one database (a single .db file or a shard directory) and one backend location (local machine or remote Linux host). Projects are created, edited and removed by the user in the CA page; this tool only lists and activates existing ones, it never creates or deletes them. action=list shows the projects and the active id; action=use activates an existing project by name or id (the backend reconfigures and restarts, which can take a few seconds); action=status shows the active project and backend state. If there are no projects, ask the user to create one in the CA page.',
+      args: {
+        action: enumArg('list projects, activate an existing project, or show the active project status.', [
+          'list',
+          'use',
+          'status',
+        ], { required: true }),
+        target: strArg(
+          'Project name or id for action=use; must be an existing project (create projects in the CA page).',
+          { maxLength: 256 },
+        ),
+        compact: boolArg('One line per project in action=list (default false).'),
+      },
+      async execute(args, exec) {
+        const action = args.action
+        if (action === 'list') {
+          const list = await requireProjects(backend)
+          return fmt.formatProjects(list, { compact: args.compact === true })
+        }
+        if (action === 'use') {
+          if (!args.target) {
+            throw new ToolError('INVALID_ARGUMENT', 'ca_project: "target" (project name or id) is required for action=use')
+          }
+          const list = await requireProjects(backend)
+          const project = findProject(list.projects, args.target)
+          if (!project) {
+            const available = list.projects
+              .map((item) => item.name || item.id)
+              .filter(Boolean)
+              .slice(0, 20)
+              .join(', ')
+            throw new ToolError(
+              'PROJECT_NOT_FOUND',
+              `no CA project named or with id "${args.target}"${available ? `; available projects: ${available}` : ''}. Projects are created in the CA page (one project = source tree + database + backend location).`,
+            )
+          }
+          if (typeof backend.activateProject !== 'function') {
+            throw new ToolError('BACKEND_UNSUPPORTED', 'This CA backend build cannot activate projects yet')
+          }
+          const result = await backend.activateProject(project.id)
+          const active = result && typeof result === 'object' && result.project ? result.project : project
+          return fmt.formatProjectActivated({
+            project: active,
+            config: result?.config,
+            status: taskStatus(backend),
+          })
+        }
+        // status: stay useful even when the project list cannot be read.
+        let list = { projects: [], activeProjectId: null }
+        try {
+          const fetched = await fetchProjects(backend)
+          if (fetched) list = fetched
+        } catch {
+          // Degrade: show the active project/backend state without the list.
+        }
+        const project = await fetchActiveProject(backend)
+        return fmt.formatProjectStatus({ project, list, status: taskStatus(backend) })
       },
     },
 

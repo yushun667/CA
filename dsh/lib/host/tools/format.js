@@ -29,7 +29,7 @@ function location(row) {
 }
 
 /** Header line for backend/health status. */
-export function formatStatus({ status, health, counts, model } = {}) {
+export function formatStatus({ status, health, counts, model, project, projectsSupported } = {}) {
   const backendStatus = status ?? {}
   const mode = text(backendStatus.mode) || 'unconfigured'
   const state = text(backendStatus.state) || 'stopped'
@@ -42,6 +42,16 @@ export function formatStatus({ status, health, counts, model } = {}) {
   if (Number.isFinite(backendStatus.since)) lines.push(`state since: ${formatTime(backendStatus.since)}`)
   if (errorText) lines.push(`backend error: ${oneLine(errorText)}`)
   if (model?.provider && model?.model) lines.push(`explain model: ${model.provider}/${model.model}`)
+  if (project) {
+    const database = project.db ? `db ${text(project.db)}` : project.dbDir ? `dbDir ${text(project.dbDir)}` : 'database unset'
+    lines.push(
+      `project: ${text(project.name) || text(project.id) || '?'} (${text(project.backend) || '?'}, source ${text(project.sourceRoot) || '?'}, ${database})`,
+    )
+  } else if (projectsSupported) {
+    lines.push(
+      'project: none selected — create or select one in the CA page (project = source tree + database + backend location)',
+    )
+  }
   if (counts) {
     lines.push(
       `tasks: running ${counts.running ?? 0}, queued ${counts.queued ?? 0}, succeeded ${counts.succeeded ?? 0}, failed ${counts.failed ?? 0}, cancelled ${counts.cancelled ?? 0}`,
@@ -444,6 +454,132 @@ export function formatExplain(result) {
   const evidence = Number.isFinite(Number(result?.evidenceCount)) ? Number(result.evidenceCount) : 0
   const footer = `— ${text(result?.symbol) || 'symbol'} · ${modelText} · ${evidence} evidence item(s)`
   return body ? `${body}\n\n${footer}` : footer
+}
+
+/** Project list (projects.list / ca_project action=list). */
+export function formatProjects(data, { compact = false } = {}) {
+  const projects = Array.isArray(data?.projects) ? data.projects : []
+  const activeProjectId = typeof data?.activeProjectId === 'string' ? data.activeProjectId : null
+  const active = projects.find(
+    (project) => project.id === activeProjectId || project.active === true,
+  )
+  const lines = [
+    `CA projects: ${projects.length}${active ? ` (active: ${text(active.name) || text(active.id) || '?'})` : ' (none active)'}`,
+  ]
+  if (projects.length === 0) {
+    lines.push(
+      'No projects configured. A project pins one source tree to one database (single .db file or shard directory) and one backend location (local machine or remote Linux host).',
+    )
+    lines.push('Ask the user to create a project in the CA page, then run ca_project action=list/use again.')
+    return lines.join('\n')
+  }
+  projects.slice(0, 50).forEach((project, index) => {
+    const isActive = project.id === activeProjectId || project.active === true
+    const database = project.db
+      ? `db ${text(project.db)}`
+      : project.dbDir
+        ? `dbDir ${text(project.dbDir)}`
+        : 'database unset'
+    lines.push(
+      `${index + 1}. ${text(project.name) || text(project.id) || '?'}${isActive ? ' [active]' : ''} (${text(project.backend) || '?'}) — source ${text(project.sourceRoot) || '?'}; ${database}${text(project.id) ? ` [id ${text(project.id)}]` : ''}`,
+    )
+    if (!compact) {
+      if (project.compdb) lines.push(`   compdb: ${text(project.compdb)}`)
+      const ssh = project.ssh
+      if (ssh && typeof ssh === 'object' && ssh.host) {
+        const target = `${ssh.user ? `${text(ssh.user)}@` : ''}${text(ssh.host)}${ssh.port ? `:${text(ssh.port)}` : ''}`
+        lines.push(`   ssh: ${target}${ssh.keyPath ? ` (key ${text(ssh.keyPath)})` : ''}`)
+      }
+      if (project.status) lines.push(`   status: ${oneLine(JSON.stringify(project.status)).slice(0, 200)}`)
+    }
+  })
+  if (projects.length > 50) lines.push(`…(+${projects.length - 50} more projects)`)
+  lines.push('next: ca_project action=use target="<name or id>" activates an existing project (the backend reconfigures and restarts)')
+  return lines.join('\n')
+}
+
+/** Project activation result (projects.activate / ca_project action=use). */
+export function formatProjectActivated({ project, config, status } = {}) {
+  const safeProject = project && typeof project === 'object' ? project : null
+  const backendStatus = status && typeof status === 'object' ? status : {}
+  const lines = [
+    safeProject
+      ? `CA project activated: ${text(safeProject.name) || text(safeProject.id) || '?'} (${text(safeProject.backend) || '?'})`
+      : 'CA project activated.',
+  ]
+  if (safeProject) {
+    lines.push(`source: ${text(safeProject.sourceRoot) || '?'}`)
+    lines.push(
+      `database: ${
+        safeProject.db
+          ? `db ${text(safeProject.db)}`
+          : safeProject.dbDir
+            ? `dbDir ${text(safeProject.dbDir)}`
+            : 'unset'
+      }`,
+    )
+    if (safeProject.compdb) lines.push(`compdb: ${text(safeProject.compdb)}`)
+    if (safeProject.id) lines.push(`id: ${text(safeProject.id)}`)
+  }
+  lines.push(
+    `backend: ${text(backendStatus.state) || 'unknown'} (mode: ${text(backendStatus.mode) || 'unknown'})${backendStatus.db ? ` · db ${text(backendStatus.db)}` : ''}`,
+  )
+  if (backendStatus.error) {
+    const error = backendStatus.error
+    const message = typeof error === 'string' ? error : error.message
+    if (message) lines.push(`backend error: ${oneLine(message)}`)
+  }
+  lines.push('note: activation persists the project and restarts the backend (1-3s); wait until ca_status reports running before querying.')
+  return lines.join('\n')
+}
+
+/** Active project + backend state (ca_project action=status). */
+export function formatProjectStatus({ project, list, status } = {}) {
+  const backendStatus = status && typeof status === 'object' ? status : {}
+  const projects = Array.isArray(list?.projects) ? list.projects : []
+  const lines = []
+  if (project) {
+    lines.push(`CA project: ${text(project.name) || text(project.id) || '?'} [active]`)
+    if (project.id) lines.push(`id: ${text(project.id)}`)
+    lines.push(`backend location: ${text(project.backend) || '?'}`)
+    lines.push(`source: ${text(project.sourceRoot) || '?'}`)
+    lines.push(
+      `database: ${
+        project.db
+          ? `db ${text(project.db)}`
+          : project.dbDir
+            ? `dbDir ${text(project.dbDir)}`
+            : 'unset'
+      }`,
+    )
+  } else {
+    lines.push('CA project: none selected')
+    if (backendStatus.mode === 'unconfigured') {
+      lines.push('No backend is configured either. Create a project in the CA page: one project = source tree + database (single .db file or shard directory) + backend location (local or remote Linux).')
+    } else {
+      lines.push('The backend is using legacy database settings. Create or select a project in the CA page to pin the source tree + database + backend location.')
+    }
+    if (projects.length > 0) {
+      lines.push(`available projects: ${projects.map((item) => text(item.name) || text(item.id)).filter(Boolean).slice(0, 20).join(', ')}`)
+      lines.push('next: ca_project action=use target="<name or id>"')
+    }
+  }
+  lines.push(
+    `backend: ${text(backendStatus.state) || 'unknown'} (mode: ${text(backendStatus.mode) || 'unknown'})${backendStatus.db ? ` · db ${text(backendStatus.db)}` : ''}`,
+  )
+  if (backendStatus.baseUrl) lines.push(`base URL: ${text(backendStatus.baseUrl)}`)
+  if (backendStatus.error) {
+    const error = backendStatus.error
+    const message = typeof error === 'string' ? error : error.message
+    if (message) lines.push(`backend error: ${oneLine(message)}`)
+  }
+  if (project && projects.length > 0) {
+    const others = projects.filter((item) => item.id !== project.id && item.active !== true)
+    if (others.length > 0) {
+      lines.push(`other projects: ${others.map((item) => text(item.name) || text(item.id)).filter(Boolean).slice(0, 20).join(', ')}`)
+    }
+  }
+  return lines.join('\n')
 }
 
 /** One task summary. */

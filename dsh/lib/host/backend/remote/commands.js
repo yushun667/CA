@@ -283,6 +283,7 @@ export function remoteRunDirExpression(repoPath, runDir) {
  * @param {string} [options.host] bind host, default 127.0.0.1
  * @param {number} [options.port] 0 = OS-assigned
  * @param {string|null} [options.runDir]
+ * @param {string} [options.pidFile] per-instance PID file stem (default "serve")
  * @param {Record<string,string>} [options.env]
  */
 export function buildRemoteServeScript(options) {
@@ -296,11 +297,12 @@ export function buildRemoteServeScript(options) {
   }
   const python = nonEmptyString(options.python) || `${repoPath}/.venv/bin/python`;
   const runDir = remoteRunDirExpression(repoPath, options.runDir);
+  const pidFile = sanitizeTag(options.pidFile || 'serve');
   const lines = ['set -e', ...envExportLines(options.env)];
   lines.push(`RUN_DIR=${runDir}`);
   lines.push('mkdir -p "$RUN_DIR"');
   lines.push(`cd ${remotePathExpression(repoPath)}`);
-  lines.push('echo $$ > "$RUN_DIR/serve.pid"');
+  lines.push(`echo $$ > "$RUN_DIR/${pidFile}.pid"`);
   const parts = [
     remotePathExpression(python),
     '-m',

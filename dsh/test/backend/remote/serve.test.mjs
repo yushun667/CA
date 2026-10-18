@@ -9,6 +9,7 @@ import {
   createFakeFetch,
   createFakeSpawn,
   healthResponse,
+  unreachableFetch,
   waitFor,
 } from '../helpers/fakes.mjs';
 import { createFakeRunner, remoteTestConfig } from './helpers.mjs';
@@ -328,4 +329,114 @@ test('dispose stops a running remote serve and cleans listeners', async () => {
   assert.equal(controller.getStatus().state, 'stopped');
   assert.ok(serveChild.killSignals.length > 0 || serveChild._exited);
   await controller.dispose();
+});
+
+test('remote serve uses a per-instance PID file so parallel managers do not collide', async () => {
+  const first = setup();
+  const second = setup();
+  try {
+    await first.controller.start();
+    await second.controller.start();
+    const serveScripts = [...first.fakeSpawn.calls, ...second.fakeSpawn.calls]
+      .filter((call) => !isTunnelCall(call))
+      .map((call) => call.args.at(-1));
+    const tokens = serveScripts
+      .map((script) => /(serve-[A-Za-z0-9-]+\.pid)/.exec(script || '')?.[1])
+      .filter(Boolean);
+    assert.equal(tokens.length, 2);
+    assert.notEqual(tokens[0], tokens[1], 'each serve instance owns a unique PID file');
+  } finally {
+    await first.controller.dispose();
+    await second.controller.dispose();
+  }
+});
+
+test('dispose stops the remote server through its per-instance PID file', async () => {
+  const { controller, runProcess } = setup();
+  await controller.start();
+  await controller.dispose();
+  const cleanupCall = runProcess.calls.find(
+    (call) => call.script?.includes('CA_STOP_DONE') && /serve-[A-Za-z0-9-]+\.pid/.test(call.script),
+  );
+  assert.ok(cleanupCall, 'dispose runs the per-instance remote stop script');
+});
+
+test('a failed startup also cleans the remote server process', async () => {
+  const fakeSpawn = createFakeSpawn({ onSpawn() {} });
+  const deps = {
+    spawn: fakeSpawn.spawn,
+    fetch: unreachableFetch(),
+    runProcess: createFakeRunner((call) => {
+      if (call.script?.includes('CA_STOP_DONE')) return { code: 0, stdout: 'CA_STOP_DONE' };
+      return { code: 0, stdout: '' };
+    }),
+    findFreePort: async () => 45678,
+    env: {},
+  };
+  const executor = createRemoteExecutor({ deps, logger });
+  const controller = createRemoteServeController({
+    config: remoteTestConfig({
+      remote: {
+        ssh: { host: 'linux-box' },
+        repoPath: '/home/yu/CA',
+        db: '/home/yu/CA_OH/openharmony.db',
+        serveRemotePort: 39007,
+        localPort: 0,
+        readyTimeoutMs: 120,
+        maxRestarts: 0,
+        restartBackoffMs: 10,
+        env: {},
+      },
+    }),
+    deps,
+    logger,
+    executor,
+  });
+  try {
+    await assert.rejects(controller.start(), (error) => error.code === 'HEALTH_TIMEOUT');
+    await waitFor(
+      () =>
+        deps.runProcess.calls.some(
+          (call) => call.script?.includes('CA_STOP_DONE') && /serve-[A-Za-z0-9-]+\.pid/.test(call.script),
+        ),
+      { label: 'remote cleanup after failed startup' },
+    );
+    assert.ok(fakeSpawn.calls[0].child.killSignals.includes('SIGTERM'));
+  } finally {
+    await controller.dispose();
+  }
+});
+
+test('an ssh crash triggers a best-effort remote cleanup', async () => {
+  const { controller, fakeSpawn, runProcess } = setup({
+    config: remoteTestConfig({
+      remote: {
+        ssh: { host: 'linux-box' },
+        repoPath: '/home/yu/CA',
+        db: '/home/yu/CA_OH/openharmony.db',
+        serveRemotePort: 39008,
+        localPort: 0,
+        readyTimeoutMs: 2000,
+        maxRestarts: 0,
+        restartBackoffMs: 10,
+        env: {},
+      },
+    }),
+    silentServe: true,
+  });
+  try {
+    await controller.start();
+    const serveChild = fakeSpawn.calls.find((call) => !isTunnelCall(call)).child;
+    serveChild.exit(9, null);
+    await waitFor(() => controller.getStatus().state === 'error', { label: 'crash recorded' });
+    await waitFor(
+      () =>
+        runProcess.calls.some(
+          (call) => call.script?.includes('CA_STOP_DONE') && /serve-[A-Za-z0-9-]+\.pid/.test(call.script),
+        ),
+      { label: 'remote cleanup after crash' },
+    );
+  } finally {
+    await controller.dispose();
+  }
 });

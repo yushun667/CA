@@ -347,43 +347,72 @@ export function resolveConfig(options = {}) {
 }
 
 /**
- * Load the persisted sparse patch. A missing file is normal; a corrupt file is
- * reported so the manager can log it and fall back to defaults.
+ * Load the persisted sparse patch plus the project store.
+ *
+ * A missing file is normal; a corrupt file is reported so the manager can log
+ * it and fall back to defaults. `projects === null` means the file predates the
+ * project model (legacy config that the manager migrates on first load);
+ * `projects === []` means the user explicitly has no projects.
  *
  * @param {{settingsPath: string}} paths
- * @returns {{patch: Record<string, any>, exists: boolean, error: Error|null}}
+ * @returns {{patch: Record<string, any>, projects: Array<Record<string, any>>|null,
+ *            activeProjectId: string|null, exists: boolean, error: Error|null}}
  */
 export function loadStoredSettings(paths) {
   const result = readJsonFile(paths.settingsPath);
-  if (!result.exists) return { patch: {}, exists: false, error: null };
-  if (result.error) return { patch: {}, exists: true, error: result.error };
+  const empty = { patch: {}, projects: null, activeProjectId: null };
+  if (!result.exists) return { ...empty, exists: false, error: null };
+  if (result.error) return { ...empty, exists: true, error: result.error };
   const payload = result.value;
   if (!isPlainObject(payload)) {
     return {
-      patch: {},
+      ...empty,
       exists: true,
       error: new Error('settings.json 顶层必须是对象'),
     };
   }
   if (payload.version !== undefined && payload.version !== CONFIG_VERSION) {
     return {
-      patch: {},
+      ...empty,
       exists: true,
       error: new Error(`settings.json 版本不受支持: ${String(payload.version)}`),
     };
   }
   const patch = isPlainObject(payload.config) ? payload.config : {};
-  return { patch, exists: true, error: null };
+  const projects = Array.isArray(payload.projects)
+    ? payload.projects.filter((project) => isPlainObject(project))
+    : null;
+  const activeProjectId =
+    typeof payload.activeProjectId === 'string' && payload.activeProjectId.length > 0
+      ? payload.activeProjectId
+      : null;
+  return { patch, projects, activeProjectId, exists: true, error: null };
 }
 
 /**
- * Persist the sparse user patch atomically (`settings.json` is 0600).
+ * Persist the sparse user patch and project store atomically
+ * (`settings.json` is 0600). `state.projects`/`state.activeProjectId` are
+ * omitted from the file when undefined so callers that only touch config keep
+ * the previous file shape.
+ *
  * @param {{settingsPath: string}} paths
  * @param {Record<string, any>} patch
+ * @param {{projects?: Array<Record<string, any>>, activeProjectId?: string|null}} [state]
  */
-export function saveStoredSettings(paths, patch) {
+export function saveStoredSettings(paths, patch, state = {}) {
+  /** @type {Record<string, any>} */
+  const payload = { version: CONFIG_VERSION, config: patch ?? {} };
+  if (state.projects !== undefined) {
+    payload.projects = Array.isArray(state.projects) ? state.projects : [];
+  }
+  if (state.activeProjectId !== undefined) {
+    payload.activeProjectId =
+      typeof state.activeProjectId === 'string' && state.activeProjectId.length > 0
+        ? state.activeProjectId
+        : null;
+  }
   try {
-    atomicWriteJson(paths.settingsPath, { version: CONFIG_VERSION, config: patch ?? {} }, { mode: 0o600 });
+    atomicWriteJson(paths.settingsPath, payload, { mode: 0o600 });
   } catch (error) {
     throw new BackendError(
       'CONFIG_WRITE_FAILED',

@@ -42,9 +42,18 @@ export function createFakeBackend(options = {}) {
     probeLocal: 0,
     probeRemote: [],
     configure: [],
+    listProjects: 0,
+    saveProject: [],
+    deleteProject: [],
+    activateProject: [],
   }
   /** @type {Array<{spec: any, options: any, resolve: (value: any) => void, reject: (error: any) => void}>} */
   const pending = []
+  let projects = (Array.isArray(options.projects) ? options.projects : []).map((project) => ({ ...project }))
+  let activeProjectId =
+    options.activeProjectId !== undefined
+      ? options.activeProjectId
+      : projects.find((project) => project.active === true)?.id ?? null
 
   const backend = {
     calls,
@@ -111,6 +120,56 @@ export function createFakeBackend(options = {}) {
       calls.configure.push(patch)
       backend.config = { ...backend.config, ...patch }
       return { config: backend.config, changed: true, restartRequired: false }
+    },
+    async listProjects() {
+      calls.listProjects += 1
+      return {
+        projects: projects.map((project) => ({
+          ...project,
+          active: project.id === activeProjectId || project.active === true,
+        })),
+        activeProjectId,
+      }
+    },
+    async getActiveProject() {
+      return projects.find((project) => project.id === activeProjectId) ?? null
+    },
+    async saveProject(input) {
+      calls.saveProject.push(input)
+      const existing = input.id ? projects.find((project) => project.id === input.id) : null
+      const project = {
+        ...(existing ?? {}),
+        ...input,
+        id: input.id ?? `proj-${projects.length + 1}`,
+      }
+      projects = existing
+        ? projects.map((item) => (item.id === project.id ? project : item))
+        : [...projects, project]
+      return { project, projects, activeProjectId }
+    },
+    async deleteProject(id) {
+      calls.deleteProject.push(id)
+      const project = projects.find((item) => item.id === id)
+      if (!project) {
+        const error = new Error(`project not found: ${id}`)
+        error.code = 'PROJECT_NOT_FOUND'
+        throw error
+      }
+      const activeCleared = activeProjectId === id
+      projects = projects.filter((item) => item.id !== id)
+      if (activeCleared) activeProjectId = null
+      return { deleted: project, projects, activeProjectId, activeCleared }
+    },
+    async activateProject(id) {
+      calls.activateProject.push(id)
+      const project = projects.find((item) => item.id === id)
+      if (!project) {
+        const error = new Error(`project not found: ${id}`)
+        error.code = 'PROJECT_NOT_FOUND'
+        throw error
+      }
+      activeProjectId = id
+      return { project, config: backend.config, status: backend.getStatus() }
     },
     async startRemoteInstall(installOptions) {
       return { started: true, startedAt: Date.now(), installOptions }

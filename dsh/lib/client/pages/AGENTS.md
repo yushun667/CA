@@ -5,7 +5,8 @@
 ## 文件
 
 - `search.js`：`#/search` 符号搜索，下拉结果 + 键盘导航，选中打开函数页。
-- `backend.js`：`#/backend` 后端状态/配置/本地探测/远程安装（轮询 `backend.installStatus`）。
+- `projects.js`：`#/projects` 项目管理页（源码根 + db/dbDir + local/remote 后端位置；手动创建/编辑/激活/删除，无扫描）。
+- `backend.js`：`#/backend` 低层后端状态/配置/本地探测/远程安装（轮询 `backend.installStatus`）；索引管理提示去项目页。
 - `tasks.js`：`#/tasks` 长任务列表/启动/日志增量轮询/取消。
 - `graph.js`：`#/graph` 独立调用图页。
 - `stats.js`：`#/stats` 表行数/DB 大小/schema/回调统计/联邦 shard。

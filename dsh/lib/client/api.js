@@ -42,6 +42,10 @@ export const Endpoints = Object.freeze({
   tasksLogs: 'tasks.logs',
   tasksCancel: 'tasks.cancel',
   explain: 'explain',
+  projectsList: 'projects.list',
+  projectsSave: 'projects.save',
+  projectsRemove: 'projects.remove',
+  projectsActivate: 'projects.activate',
 })
 
 const CA_METHODS = new Set(['GET', 'HEAD', 'POST'])
@@ -369,6 +373,16 @@ export function createApi(ctx) {
     cancel: (id, signal) => rpc(Endpoints.tasksCancel, { id }, signal),
   }
 
+  // Project = source tree + database (single DB or shard dir) + backend target,
+  // created and named by the user. The UI treats projects as the primary model;
+  // database discovery is only a low-level fallback on the backend page.
+  const projects = {
+    list: (signal) => rpc(Endpoints.projectsList, {}, signal),
+    save: (project, signal) => rpc(Endpoints.projectsSave, { project: project || {} }, signal),
+    remove: (id, signal) => rpc(Endpoints.projectsRemove, { id }, signal),
+    activate: (id, signal) => rpc(Endpoints.projectsActivate, { id }, signal),
+  }
+
   const explain = (params, signal) => rpc(Endpoints.explain, params || {}, signal)
 
   // -- active variant store -------------------------------------------------- //
@@ -441,6 +455,7 @@ export function createApi(ctx) {
     ping,
     backend,
     tasks,
+    projects,
     explain,
     variant: {
       get: () => variantState,

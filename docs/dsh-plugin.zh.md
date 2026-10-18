@@ -1,7 +1,7 @@
 # DSH 插件（`@local/dsh-ca`）
 
 CA 同时以 [DeepSeek Harness](https://github.com/deepseek-ai) bundle 形式提供：在
-Harness Web UI 内嵌完整 CA 页面、给 agent 的 11 个原生 `ca_*` 工具、本地或远程
+Harness Web UI 内嵌完整 CA 页面、给 agent 的 12 个原生 `ca_*` 工具、本地或远程
 Linux `ca serve` 后端、长索引任务与 AI 解释。CA 本体不变：插件只调用 CA 既有的
 只读 HTTP API 与 CLI，也不改变 CA 的测试基线（写作时为 497 passed / 4 skipped）。
 
@@ -33,6 +33,7 @@ bundle）；改 `dsh/lib/host/bootstrap.js` 必须完整重启 Harness。
 |---|---|---|
 | `backend` | `auto` | `auto` 优先已配置的远程主机，否则本地 DB；`local`/`remote` 强制模式 |
 | `autoStart` | `true` | 插件激活时自动启动后端 |
+| `projects` / `activeProjectId` | `[]` / `null` | 已保存的项目（见上）；active 项目决定后端目标 |
 | `requestTimeoutMs` | `30000` | CA HTTP 请求超时 |
 | `readyTimeoutMs` | `20000` | 等待 `ca serve` 就绪上限 |
 | `local.repoRoot` | 自动 | CA 检出根目录（未设置时从 cwd 向上发现） |
@@ -51,14 +52,24 @@ bundle）；改 `dsh/lib/host/bootstrap.js` 必须完整重启 Harness。
 | `local.env` / `remote.env` | `{}` | 子进程附加环境变量 |
 | `log.*` | 有界 | 插件自身日志轮转与内存环形缓冲设置 |
 
-### 选择数据库 / 项目
+### 项目（源码根 + 数据库 + 后端位置）
 
-顶栏始终显示当前数据库（单个 `.db` 文件或联邦 shard 目录，tooltip 给出完整路径）。
-选择器列出后端主机上发现的数据库——远程后端通过一次 SSH 往返扫描配置目录——以及
-CA registry 数据库暴露的 workspace/project/variant 条目。后端页面的「可用数据库」
-重复同一列表。选中一项会调用 `backend.useDatabase`：把新目标持久化到用户 patch、
-重启 `ca serve`（远程目标同时重启 SSH 隧道）并重新加载页面；切换失败保留原数据库。
-插件不内置任何被查询的索引：它始终是配置的本地路径，或经 SSH 到达的远端路径。
+CA 是通用分析器，因此插件围绕**项目**组织，与在 DSH 中打开项目一致。一个项目把三件
+始终成对的东西绑定在一起：
+
+| 字段 | 含义 |
+|---|---|
+| `name` | 唯一、用户起的名字 |
+| `sourceRoot` | 建索引所用源码树（后端主机上的绝对路径） |
+| `db` **或** `dbDir` | 单个 SQLite 索引，或联邦 shard 目录 |
+| `backend` + `ssh` | 本地运行，或运行在远程 Linux 主机（SSH 目标） |
+| `compdb`、`python`、`caRepoPath` | 可选：compile database 与 CA/venv 位置 |
+
+项目在 `#/projects` 页面**手动**创建、编辑、删除并持久化到用户 patch；不从扫描到的
+目录推断任何东西。顶栏始终显示当前项目；切换项目会调用 `projects.activate`，重新配置
+后端、重启 `ca serve`（及 SSH 隧道）并重新加载页面；切换失败回滚到之前的配置。从旧的
+单目标配置升级时，插件会把它迁移成一个以数据库命名的默认项目；请检查其 `sourceRoot`，
+若源码树在别处就编辑它。
 
 远端路径必须是绝对路径或以 `~/` 开头。
 
@@ -112,17 +123,20 @@ CA registry 数据库暴露的 workspace/project/variant 条目。后端页面�
 - `#/stats` — 表行数、数据库大小、schema/SQLite 版本、回调统计与联邦 shard 信息。
 - `#/callbacks` — 跨 TU 回调注册，支持 path/field/module/kind 过滤与分页。
 - `#/tasks` — 长任务列表、启动、增量日志与取消。
-- `#/backend` — 后端状态、启动/停止/重启、本地/远程探测、远程安装、可编辑配置与
+- `#/projects` — 创建/编辑/删除/激活项目（名称、后端、源码根、`db`/`dbDir`、
+  compile database、SSH 目标）。管理索引的主要入口。
+- `#/backend` — 后端状态、启动/停止/重启、本地/远程探测、远程安装、底层可编辑配置与
   `/api/health` 检查。
 - 函数页 → **Explain with AI** 面板，见下文。
 
 ## 原生工具
 
-agent 可见 11 个工具；每个返回有界文本并响应工具调用取消信号。
+agent 可见 12 个工具；每个返回有界文本并响应工具调用取消信号。
 
 | 工具 | 用途 |
 |---|---|
-| `ca_status` | 后端状态、健康、数据库路径、索引计数、任务摘要 |
+| `ca_status` | 后端状态、健康、当前项目、数据库路径、索引计数、任务摘要 |
+| `ca_project` | 项目 list/use/status；`use` 激活已存在项目（创建与编辑仍在 UI） |
 | `ca_search` | 解析函数名/id/限定名/子串（分页） |
 | `ca_symbol` | 单个函数/类型记录与深析事实计数、关键条件 |
 | `ca_graph` | 符号的调用者/被调用者/双向图，候选边有标记 |
@@ -169,6 +183,9 @@ resources、findings），并要求模型只依据这些证据、按请求语言
   Client 改动后重建 `client.js` 并刷新页面。
 - **AI 解释不可用** — 在 Harness 中选择默认模型，或改用
   `ca_symbol`/`ca_facts`/`ca_source` 手工分析。
+
+- **未选择项目 / 迁移项目指向 CA 检出目录** — 打开 `#/projects`，把 `sourceRoot`
+  改成真实源码树并选择 `db`/`dbDir`，然后激活；在你修改前迁移项目仍按旧目标工作。
 
 ## 安全边界
 

@@ -1,6 +1,6 @@
 # AGENTS.md — Host 半
 
-Cordis 插件服务端：组装 backend/tasks/explain 服务，向 DSH 注册 `/dsh-ca` 通道、11 个原生 tools 与系统提示词；不修改 CA。
+Cordis 插件服务端：组装 backend/tasks/explain 服务，向 DSH 注册 `/dsh-ca` 通道、12 个原生 tools 与系统提示词；不修改 CA。
 
 ## 关键文件
 
@@ -13,7 +13,7 @@ Cordis 插件服务端：组装 backend/tasks/explain 服务，向 DSH 注册 `/
 
 - [backend/AGENTS.md](backend/AGENTS.md)：本地/远程 CA 后端生命周期与 HTTP 客户端。
 - [rpc/AGENTS.md](rpc/AGENTS.md)：`/dsh-ca` 同源 HTTP 通道与端点分发。
-- [tools/AGENTS.md](tools/AGENTS.md)：11 个模型可见工具与输出格式化。
+- [tools/AGENTS.md](tools/AGENTS.md)：12 个模型可见工具（含 `ca_project`）与输出格式化。
 - [tasks/AGENTS.md](tasks/AGENTS.md)：CA CLI 长任务队列。
 - [explain/AGENTS.md](explain/AGENTS.md)：DSH 原生模型驱动的 AI 解释。
 

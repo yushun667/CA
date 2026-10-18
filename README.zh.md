@@ -98,8 +98,9 @@ SVG 调用图、回调注册事实与统计）。默认绑定 `127.0.0.1:8766`�
 ## DSH 插件（DeepSeek Harness）
 
 `dsh/` 把 CA 打包为 DeepSeek Harness bundle（`@local/dsh-ca`）：在 Harness Web UI
-内提供完整 CA 页面、给 agent 的 11 个原生 `ca_*` 工具、本地或远程 Linux `ca serve`
-后端、长索引任务，以及由会话模型驱动的 AI 解释（CA 本身保持无 LLM）。插件是纯增量：
+内提供完整 CA 页面、给 agent 的 12 个原生 `ca_*` 工具、本地或远程 Linux `ca serve`
+后端、长索引任务，以及由会话模型驱动的 AI 解释（CA 本身保持无 LLM）。项目把一份源码根、一个数据库（或 shard 目录）与一个后端位置绑定，用户在 CA
+面板里手动创建。插件是纯增量：
 CLI、`ca ui`、`ca mcp` 与 MCP 协议均不变，插件代码也不改变 CA 的测试基线。通过
 Harness plugin manager 从本地 `dsh/` 目录安装；安装、配置、远程后端、UI 页面、工具、
 故障排查与安全边界见 [docs/dsh-plugin.zh.md](docs/dsh-plugin.zh.md)。
