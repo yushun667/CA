@@ -14097,8 +14097,10 @@ function renderStyles() {
   if (!element) return
   const parts = []
   for (const key of styleStore.order) {
-    const css = styleStore.blocks.get(key)
-    if (css !== undefined) parts.push(css)
+    // `blocks` maps each CSS string to its reference count; the key is the CSS
+    // itself. (Pushing the value here wrote the count, e.g. "1", into the
+    // <style> element, so no plugin stylesheet ever applied.)
+    if (styleStore.blocks.has(key)) parts.push(key)
   }
   element.textContent = parts.join('\n')
 }
