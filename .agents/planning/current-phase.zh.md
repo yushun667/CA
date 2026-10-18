@@ -4,8 +4,8 @@ Current phase: 3. OpenHarmony 优先的 Agent 平台
 
 Goal: 让 CA 能面向真实 OpenHarmony C/C++ 源码服务 AI agent 与人：离线 + 增量索引、
 回调/函数指针解析与调用图查询、多仓 workspace/variant 数据模型、以及运行在源码机上
-的 MCP 查询服务。阶段 3 在核心功能实现并**在代表性 OH 语料上完成功能验证**后收口。
-按用户要求，全量验收推迟到全部功能完成之后；OH 是功能验证语料，不是阶段 3 的验收门槛。
+的 MCP 查询服务。阶段 3 在核心功能实现并**在 OpenHarmony dsoftbus 与 camera 仓库上完成功能验证**后收口。
+按用户要求，全量验收推迟到全部功能完成之后；这些仓库是功能验证语料，不是阶段 3 的验收门槛。
 
 ## 完成条件
 
@@ -20,8 +20,8 @@ Goal: 让 CA 能面向真实 OpenHarmony C/C++ 源码服务 AI agent 与人：�
   上下文查询（18 个只读工具）；stdio、HTTP 与 `--serve-url` 代理已验证。
 - **数据模型**：持久化 `CallTargetRecord`；存储 workspace/project/variant 元数据并
   记录分片/联邦路径。用户可用的 workspace/variant 选择入口为可选增强。
-- **质量门禁**：测试与 qizai 校验通过；README/文档记录当前功能数字与限制。全量验收
-  是后续独立里程碑。
+- **质量门禁**：测试与 qizai 校验通过；README/文档记录当前功能数字与限制。功能验证
+  只用 OpenHarmony dsoftbus 与 camera 仓库；全量验收是后续独立里程碑。
 
 ## 步骤
 
@@ -37,7 +37,7 @@ Goal: 让 CA 能面向真实 OpenHarmony C/C++ 源码服务 AI agent 与人：�
 | 8 | C++ 虚函数/动态派发 + 通用间接调用候选 | 待做 | 无 |
 | 9 | header 依赖感知的增量索引/watch | 待做 | 无 |
 | 10 | workspace/project/variant CLI/MCP 入口（可选） | 待做 | 无 |
-| 11 | 代表性 OH 语料功能验证 + 文档数字 | 待做 | 步骤 8-9 |
+| 11 | OH dsoftbus + camera 仓库功能验证 + 文档数字 | 待做 | 步骤 8-9 |
 
 ## 剩余缺口的实施方案
 
@@ -48,8 +48,8 @@ Goal: 让 CA 能面向真实 OpenHarmony C/C++ 源码服务 AI agent 与人：�
   `update`/`watch` 把变更文件映射到依赖 TU，只失效并重解析这些 TU。功能测试：改 header
   会重解析依赖者，改无关 header 不重解析。
 - **workspace/variant 入口（可选）**：CLI/MCP 增加 project/variant 过滤；无需改存储。
-- **功能验证**：使用代表性 OH shard/子集，不跑全量 8-shard 验收；在 README/文档记录命令、
-  数字与限制。
+- **功能验证**：只用 OH dsoftbus 与 camera 仓库，不跑全量 8-shard 验收；在 README/文档
+  记录命令、数字与限制。
 
 全量分片验收、S2/S6/S8 补完与最终验收报告**推迟**，不再作为阶段 3 功能门槛。
 阶段 4+（其他 OS 树/语言、DWARF、更多 UI）需要单独确认范围。

@@ -3,8 +3,8 @@
 Overall: phase 3 functional completion is in progress (OpenHarmony first).
 Phase 1/2 are archived and delivered; the local suite is 421 passed / 3 skipped.
 Full-corpus acceptance is deferred until all features are complete, per user
-direction; OH is the representative functional-verification corpus, not a
-phase-3 acceptance gate.
+direction; functional verification uses only the OH dsoftbus and camera
+repositories, not a phase-3 acceptance gate.
 
 ## Done
 
@@ -34,14 +34,14 @@ phase-3 acceptance gate.
   main TU source, so header edits miss dependent TUs.
 - Optional workspace/project/variant CLI/MCP selector; the store model exists
   but has no user-facing surface.
-- Deploy the latest code to the source server and run functional checks against
-  an OH shard subset (not full acceptance).
+- Deploy the latest code to the source server and run functional checks on the
+  OH dsoftbus and camera repositories (not full acceptance).
 
 ## Next
 
-Implement the two required gaps, functionally verify them on representative OH
-corpora, update README/docs numbers, then confirm phase 4 scope (other OS trees
-and languages). Full 8-shard acceptance stays deferred until all features are
+Implement the two required gaps, functionally verify them on the OH dsoftbus and
+camera repositories, update README/docs numbers, then confirm phase 4 scope
+(other OS trees and languages). Full 8-shard acceptance stays deferred until all features are
 complete.
 
 ## Risks and blockers

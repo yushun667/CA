@@ -6,9 +6,10 @@ Goal: make CA usable by AI agents and humans against real OpenHarmony C/C++
 sources: offline + incremental indexing, callback/function-pointer resolution and
 call-graph queries, a multi-repo workspace/variant data model, and an MCP query
 server on the source machine. Phase 3 closes when its core functions are
-implemented and **functionally verified** on representative OH corpora. Per user
-direction, full-corpus acceptance is deferred until all features are complete;
-OH is the functional-verification corpus, not a phase-3 acceptance gate.
+implemented and **functionally verified** on the OpenHarmony dsoftbus and camera
+repositories. Per user direction, full-corpus acceptance is deferred until all
+features are complete; those repositories are the functional-verification corpus,
+not a phase-3 acceptance gate.
 
 ## Completion conditions
 
@@ -28,8 +29,8 @@ OH is the functional-verification corpus, not a phase-3 acceptance gate.
   metadata stored with a documented sharding/federation path. A user-facing
   workspace/variant selector is optional but preferred.
 - **Quality gates**: tests and qizai validator pass; README/docs record current
-  functional numbers and limits. Full-corpus acceptance is a later, separate
-  milestone.
+  functional numbers and limits. Functional verification uses only the OpenHarmony
+  dsoftbus and camera repositories; full-corpus acceptance is a later milestone.
 
 ## Steps
 
@@ -45,7 +46,7 @@ OH is the functional-verification corpus, not a phase-3 acceptance gate.
 | 8 | C++ virtual/dynamic dispatch + general indirect-call candidates | pending | - |
 | 9 | Header-dependency-aware incremental indexing/watch | pending | - |
 | 10 | Workspace/project/variant CLI/MCP exposure (optional) | pending | - |
-| 11 | Functional verification on OH representative corpora + docs numbers | pending | steps 8-9 |
+| 11 | Functional verification on OH dsoftbus + camera repositories + docs numbers | pending | steps 8-9 |
 
 ## Implementation plan for the remaining gaps
 
@@ -62,8 +63,8 @@ OH is the functional-verification corpus, not a phase-3 acceptance gate.
   unrelated header skips them.
 - **Workspace/variant surface (optional)**: CLI/MCP filters for project and
   variant; no storage change needed.
-- **Functional verification**: use representative OH shards/subsets, not the
-  full 8-shard acceptance run; record command, counts and limits in README/docs.
+- **Functional verification**: use only the OH dsoftbus and camera repositories,
+  not the full 8-shard acceptance run; record command, counts and limits in README/docs.
 
 Full-corpus sharded acceptance, S2/S6/S8 completion and the final acceptance
 report are **deferred**; they are not phase-3 functional gates. Phase 4+ (other
