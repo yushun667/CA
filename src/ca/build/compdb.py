@@ -13,6 +13,8 @@ Normalization rules (see also ``ca.core.schema.CompilationUnit``):
   from ``arguments``; ccache/distcc style prefixes are unwrapped one level.
 - ``language`` is derived from the file extension.
 - ``source`` is ``"compile_commands"``.
+- ``@response-file`` arguments are expanded relative to the entry directory
+  (CMake/Ninja put include paths there); missing files are kept verbatim.
 - ``id`` comes from :func:`ca.core.ids.tu_id` over (file, directory, argv).
 
 Entries that cannot be interpreted (missing file/command, bad JSON types,
@@ -223,6 +225,45 @@ def _entry_directory(entry: Mapping[str, Any], base_dir: Path) -> Path:
     return Path(os.path.abspath(directory))
 
 
+_MAX_RESPONSE_FILE_DEPTH = 8
+
+
+def _expand_response_files(
+    argv: Iterable[str], directory: Path, depth: int = 0
+) -> list[str]:
+    """Expand ``@file`` argument tokens relative to the compile directory.
+
+    CMake/Ninja response files are common for include flags; libclang cannot
+    interpret them, so they must become ordinary argv entries. Missing or
+    unreadable files are left untouched; nested response files are bounded.
+    """
+
+    expanded: list[str] = []
+    for token in argv:
+        if (
+            not token.startswith("@")
+            or len(token) == 1
+            or depth >= _MAX_RESPONSE_FILE_DEPTH
+        ):
+            expanded.append(token)
+            continue
+        path = Path(token[1:])
+        if not path.is_absolute():
+            path = directory / path
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            expanded.append(token)
+            continue
+        try:
+            nested = shlex.split(content)
+        except ValueError:
+            expanded.append(token)
+            continue
+        expanded.extend(_expand_response_files(nested, directory, depth + 1))
+    return expanded
+
+
 def _entry_to_unit(
     entry: Any,
     *,
@@ -250,7 +291,7 @@ def _entry_to_unit(
     if not argv:
         raise _BadEntry("empty-command")
     driver = argv[0]
-    arguments = tuple(argv[1:])
+    arguments = tuple(_expand_response_files(argv[1:], directory))
     directory_str = str(directory)
     return CompilationUnit(
         id=tu_id(str(source), directory_str, arguments),

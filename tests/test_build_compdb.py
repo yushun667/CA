@@ -207,3 +207,65 @@ def test_tu_id_is_stable_across_loads_and_round_trip(tmp_path: Path) -> None:
 
     entries = units_to_entries(first)
     assert entries[0]["arguments"][0] == first[0].driver
+
+
+def test_compile_commands_expands_response_files(tmp_path: Path) -> None:
+    """CMake/Ninja include response files must become ordinary arguments."""
+
+    build = tmp_path / "build"
+    build.mkdir()
+    source = tmp_path / "src" / "unit.c"
+    source.parent.mkdir()
+    source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    rsp = build / "CMakeFiles" / "obj.dir" / "includes_C.rsp"
+    rsp.parent.mkdir(parents=True)
+    rsp.write_text("-I" + str(tmp_path / "include") + " -DTEST_MACRO=1\n", encoding="utf-8")
+    compdb = build / "compile_commands.json"
+    compdb.write_text(
+        json.dumps(
+            [
+                {
+                    "directory": str(build),
+                    "file": str(source),
+                    "arguments": [
+                        "clang",
+                        "-c",
+                        str(source),
+                        "@CMakeFiles/obj.dir/includes_C.rsp",
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    units = load_compilation_database(str(compdb), str(tmp_path))
+
+    assert len(units) == 1
+    assert "-I" + str(tmp_path / "include") in units[0].arguments
+    assert "-DTEST_MACRO=1" in units[0].arguments
+    assert "@CMakeFiles/obj.dir/includes_C.rsp" not in units[0].arguments
+
+
+def test_compile_commands_keeps_missing_response_file(tmp_path: Path) -> None:
+    """A missing response file is preserved instead of silently dropped."""
+
+    source = tmp_path / "unit.c"
+    source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    compdb = tmp_path / "compile_commands.json"
+    compdb.write_text(
+        json.dumps(
+            [
+                {
+                    "directory": str(tmp_path),
+                    "file": str(source),
+                    "arguments": ["clang", "-c", str(source), "@missing.rsp"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    units = load_compilation_database(str(compdb), str(tmp_path))
+
+    assert "@missing.rsp" in units[0].arguments
