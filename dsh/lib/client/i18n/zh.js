@@ -736,6 +736,8 @@ export const zh = {
   'projects.add': '添加项目',
   'projects.thisComputer': '本机',
   'projects.remoteServer': '远程服务器',
+  'projects.chooseDirTitle': '选择本机目录',
+  'projects.useThisDir': '使用此目录',
   'projects.pickDirectory': '选择目录…',
   'projects.directory': '目录',
   'projects.user': '用户名',

@@ -7,6 +7,7 @@
 - `manager.js`：单一入口；解析设置、路由 local/remote、项目存储与安装状态、统一 status/log 事件流。
 - `projects.js`：项目定义校验/迁移/映射为后端配置（产品主模型，契约见 `../../CONTRACT.md`）。
 - `local.js`：本地 `ca serve` 启动/就绪/健康检查/崩溃重启/停止。
+- `localbrowse.js`：本地目录浏览（项目页“选择目录”弹窗，只返回子目录）。
 - `discover.js`：CA 仓库、Python 解释器、DB 发现与探测报告。
 - `http.js`：CA `/api/*` 客户端（超时/取消）；`process.js`：子进程与行解码；`log.js`：环形+文件日志。
 - `ca-protocol.js`：就绪行正则与版本解析（local/remote 共用）；`errors.js`：稳定错误码 `BackendError`；`util.js`：纯函数工具；`index.js`：汇总导出。

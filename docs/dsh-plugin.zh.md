@@ -224,7 +224,8 @@ CA wheel 副本 + `manifest.json`）；`--tar` 还会写出 `<platform>.tar.gz`�
 - `#/stats` — 表行数、数据库大小、schema/SQLite 版本、回调统计与联邦 shard 信息。
 - `#/callbacks` — 跨 TU 回调注册，支持 path/field/module/kind 过滤与分页。
 - `#/tasks` — 长任务列表、启动、增量日志与取消。
-- `#/projects` — 唯一的新建/管理项目入口：**本机=选一个目录**；**远程=用户名/IP/密码或
+- `#/projects` — 唯一的新建/管理项目入口：**本机=选一个目录**（插件内置目录浏览，
+  Host 提供 `local.browse`）；**远程=用户名/IP/密码或
   密钥 → 登录 → 浏览服务器目录并选择**。后端、数据库路径与激活全自动；没有项目时作为
   落地页。
 - 函数页 → **Explain with AI** 面板，见下文。

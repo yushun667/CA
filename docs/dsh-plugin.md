@@ -262,7 +262,8 @@ entry in the `sidebar.panellist` sidebar. Routes:
 - `#/callbacks` — cross-TU callback registrations with path/field/module/kind filters
   and pagination.
 - `#/tasks` — long-task list, start, incremental logs and cancel.
-- `#/projects` — the only place to add or manage projects: **local = choose a directory**;
+- `#/projects` — the only place to add or manage projects: **local = choose a directory**
+  (in-app directory browser served by the Host, `local.browse`);
   **remote = username/IP/password or key → log in → browse the server and choose a
   directory**. The backend, database path and activation are automatic; the page is the
   landing page when no project exists.

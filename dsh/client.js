@@ -10002,6 +10002,7 @@ const Endpoints = Object.freeze({
   projectsPrepare: 'projects.prepare',
   remoteConnect: 'remote.connect',
   remoteBrowse: 'remote.browse',
+  localBrowse: 'local.browse',
 })
 
 const CA_METHODS = new Set(['GET', 'HEAD', 'POST'])
@@ -10375,7 +10376,14 @@ function createApi(ctx) {
       ),
   }
 
-  /** Host-side workspace directory picker (`ctx.get('uiWorkspace')`). */
+  // Local directory browser used by the project page. Implemented by the Host
+  // (`local.browse`) instead of the optional native workspace picker so it
+  // works in every host combination.
+  const local = {
+    browse: (dir, signal) => rpc(Endpoints.localBrowse, dir === undefined || dir === null ? {} : { path: dir }, signal),
+  }
+
+  /** Legacy optional native picker (kept for compatibility; unused by the UI). */
   async function pickDirectory() {
     let workspace = null
     try {
@@ -10450,6 +10458,7 @@ function createApi(ctx) {
   const api = {
     channel,
     rpc,
+    local,
     request,
     caRequest,
     caGet,
@@ -10517,6 +10526,18 @@ __exports["Endpoints"] = Endpoints;
 const { toApiError } = __m("api.js")
 
 const PROJECTS_CSS = `
+.ca-dir-overlay { position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.42)); }
+.ca-dir-modal { display: flex; flex-direction: column; gap: 10px; width: min(560px, calc(100vw - 32px)); max-height: min(70vh, 620px); padding: 14px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-lg, 10px); background: var(--dsw-alias-bg-layer-1, #ffffff); box-shadow: var(--dsw-elevation-panel, 0 10px 30px rgba(0, 0, 0, 0.16)); }
+.ca-dir-head { display: flex; align-items: center; gap: 8px; }
+.ca-dir-title { font-size: 14px; font-weight: 600; }
+.ca-dir-head .ca-icon-btn { margin-left: auto; }
+.ca-dir-pathrow { display: flex; align-items: center; gap: 6px; }
+.ca-dir-pathrow .ca-input { flex: 1 1 auto; }
+.ca-dir-list { display: flex; flex-direction: column; gap: 1px; overflow: auto; min-height: 120px; max-height: 46vh; padding: 2px; border: 1px solid var(--dsw-alias-border-l1, #eaeef2); border-radius: var(--dsw-radius-sm, 6px); }
+.ca-dir-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--dsw-radius-sm, 6px); background: transparent; color: inherit; font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.ca-dir-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.1)); }
+.ca-dir-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ca-dir-foot { display: flex; justify-content: flex-end; gap: 6px; }
 .ca-projects-page { gap: 12px; overflow: auto; padding: 18px; }
 .ca-projects-inner { width: 100%; max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
 .ca-projects-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -10681,6 +10702,7 @@ function createProjectsPage(React, bag) {
     const [notice, setNotice] = React.useState('')
     const [actionError, setActionError] = React.useState(null)
     const [pickerUnavailable, setPickerUnavailable] = React.useState(false)
+    const [dirBrowser, setDirBrowser] = React.useState(null) // {loading,path,parent,home,entries,error}
 
     const mountedRef = React.useRef(true)
     const noticeTimer = React.useRef(null)
@@ -10738,21 +10760,38 @@ function createProjectsPage(React, bag) {
 
     // -- local flow -------------------------------------------------------- //
 
-    async function chooseLocalDirectory() {
+    async function openLocalDirectoryBrowser(target) {
       setActionError(null)
+      setDirBrowser({ loading: true, path: target || '', parent: null, home: '', entries: [], error: null })
+      await loadLocalDirectoryBrowser(target)
+    }
+
+    async function loadLocalDirectoryBrowser(target) {
+      setDirBrowser((current) => Object.assign({}, current || { entries: [] }, { loading: true, error: null }))
       try {
-        const picked = await api.pickDirectory()
-        if (picked && typeof picked === 'string') {
-          setLocalPath(picked)
-          setPickerUnavailable(false)
-          return
-        }
-        setPickerUnavailable(true)
+        const value = await api.local.browse(target)
+        setDirBrowser({
+          loading: false,
+          path: value.path,
+          parent: value.parent,
+          home: value.home,
+          entries: Array.isArray(value.entries) ? value.entries : [],
+          truncated: Boolean(value.truncated),
+          error: null,
+        })
       } catch (error) {
-        setPickerUnavailable(true)
         const apiError = toApiError(error)
-        if (apiError.code !== 'ABORTED') setActionError(apiError)
+        setDirBrowser((current) => Object.assign({}, current || { entries: [] }, { loading: false, error: apiError }))
       }
+    }
+
+    function useBrowserDirectory() {
+      const current = dirBrowser && dirBrowser.path
+      if (current) {
+        setLocalPath(current)
+        setPickerUnavailable(false)
+      }
+      setDirBrowser(null)
     }
 
     function createLocalProject() {
@@ -11273,7 +11312,7 @@ function createProjectsPage(React, bag) {
           ),
           h(
             ui.Button,
-            { variant: 'secondary', onClick: () => void chooseLocalDirectory() },
+            { variant: 'secondary', onClick: () => void openLocalDirectoryBrowser(localPath.trim() || undefined) },
             h(ui.Icon, { name: 'folder', size: 13 }),
             t('projects.pickDirectory', null, 'Choose directory…'),
           ),
@@ -11612,6 +11651,93 @@ function createProjectsPage(React, bag) {
       )
     }
 
+    function localDirectoryModal() {
+      const browser = dirBrowser
+      if (!browser) return null
+      return h(
+        'div',
+        {
+          className: 'ca-dir-overlay',
+          onClick: (event) => {
+            if (event.target === event.currentTarget) setDirBrowser(null)
+          },
+        },
+        h(
+          'div',
+          { className: 'ca-dir-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('projects.chooseDirTitle', null, 'Choose a local directory') },
+          h(
+            'div',
+            { className: 'ca-dir-head' },
+            h('span', { className: 'ca-dir-title' }, t('projects.chooseDirTitle', null, 'Choose a local directory')),
+            h(
+              ui.IconButton,
+              {
+                label: t('common.close', null, 'Close'),
+                title: t('common.close', null, 'Close'),
+                size: 24,
+                onClick: () => setDirBrowser(null),
+              },
+              h(ui.Icon, { name: 'close', size: 12 }),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'ca-dir-pathrow' },
+            h(ui.Input, {
+              value: browser.path || '',
+              ariaLabel: t('projects.directory', null, 'Directory'),
+              onChange: (event) => setDirBrowser((current) => Object.assign({}, current, { path: event.target.value })),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') void loadLocalDirectoryBrowser(event.currentTarget.value)
+              },
+            }),
+            h(
+              ui.Button,
+              { variant: 'secondary', size: 'sm', disabled: !browser.parent, onClick: () => void loadLocalDirectoryBrowser(browser.parent) },
+              t('projects.up', null, 'Up'),
+            ),
+            h(
+              ui.Button,
+              { variant: 'secondary', size: 'sm', disabled: !browser.home, onClick: () => void loadLocalDirectoryBrowser(browser.home) },
+              t('projects.home', null, 'Home'),
+            ),
+          ),
+          browser.error ? h(ui.ErrorBox, { error: browser.error }) : null,
+          h(
+            'div',
+            { className: 'ca-dir-list' },
+            browser.loading
+              ? h(ui.Spinner, { size: 16 })
+              : browser.entries.length > 0
+                ? browser.entries.map((entry) =>
+                    h(
+                      'button',
+                      {
+                        key: entry.path,
+                        type: 'button',
+                        className: 'ca-dir-row',
+                        onClick: () => void loadLocalDirectoryBrowser(entry.path),
+                      },
+                      h(ui.Icon, { name: 'folder', size: 13 }),
+                      h('span', { className: 'ca-dir-row-name' }, entry.name),
+                    ),
+                  )
+                : h('div', { className: 'ca-projects-short' }, t('projects.noSubdirs', null, 'No subdirectories.')),
+          ),
+          h(
+            'div',
+            { className: 'ca-dir-foot' },
+            h(ui.Button, { variant: 'ghost', onClick: () => setDirBrowser(null) }, t('common.cancel', null, 'Cancel')),
+            h(
+              ui.Button,
+              { variant: 'primary', disabled: !browser.path || browser.loading, onClick: useBrowserDirectory },
+              t('projects.useThisDir', null, 'Use this directory'),
+            ),
+          ),
+        ),
+      )
+    }
+
     return h(
       'div',
       { className: 'ca-page ca-projects-page' },
@@ -11692,6 +11818,7 @@ function createProjectsPage(React, bag) {
             )
           : null,
         listView(),
+        localDirectoryModal(),
       ),
     )
   }
@@ -14746,6 +14873,8 @@ const zh = {
   'projects.add': '添加项目',
   'projects.thisComputer': '本机',
   'projects.remoteServer': '远程服务器',
+  'projects.chooseDirTitle': '选择本机目录',
+  'projects.useThisDir': '使用此目录',
   'projects.pickDirectory': '选择目录…',
   'projects.directory': '目录',
   'projects.user': '用户名',
@@ -15708,6 +15837,8 @@ const en = {
   'projects.add': 'Add project',
   'projects.thisComputer': 'This computer',
   'projects.remoteServer': 'Remote server',
+  'projects.chooseDirTitle': 'Choose a local directory',
+  'projects.useThisDir': 'Use this directory',
   'projects.pickDirectory': 'Choose directory…',
   'projects.directory': 'Directory',
   'projects.user': 'Username',

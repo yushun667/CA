@@ -26,6 +26,7 @@ import path from 'node:path'
 import { BackendError, isAbortError, isBackendError, normalizeError } from '../backend/errors.js'
 import { atomicWriteJson, clampInt, isPlainObject } from '../backend/util.js'
 import { fetchActiveProject } from '../tools/projects.js'
+import { browseLocalDirs, MAX_LOCAL_PATH_LENGTH } from '../backend/localbrowse.js'
 
 export const CHANNEL = '/dsh-ca'
 export const PLUGIN_VERSION = '0.1.0'
@@ -54,6 +55,7 @@ export const RPC_ENDPOINTS = Object.freeze([
   'projects.prepare',
   'remote.connect',
   'remote.browse',
+  'local.browse',
   'ui.selftest.pending',
   'ui.selftest.report',
   'tasks.start',
@@ -1609,6 +1611,22 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
         throw remoteFailure(error)
       }
       return normalizeRemoteBrowse(result)
+    },
+
+    async 'local.browse'(payload) {
+      const rawPath = payload.path
+      if (rawPath !== undefined && rawPath !== null && typeof rawPath !== 'string') {
+        fail('INVALID_ARGUMENT', 'payload.path must be a string')
+      }
+      if (typeof rawPath === 'string' && rawPath.length > MAX_LOCAL_PATH_LENGTH) {
+        fail('INVALID_ARGUMENT', `payload.path is too long (maximum ${MAX_LOCAL_PATH_LENGTH} characters)`)
+      }
+      try {
+        return await browseLocalDirs({ path: rawPath === undefined || rawPath === null ? undefined : rawPath })
+      } catch (error) {
+        if (isBackendError(error)) throw error
+        throw new BackendError('LOCAL_BROWSE_FAILED', error && error.message ? error.message : String(error))
+      }
     },
 
     async 'projects.createSimple'(payload) {

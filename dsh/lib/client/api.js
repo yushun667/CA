@@ -51,6 +51,7 @@ export const Endpoints = Object.freeze({
   projectsPrepare: 'projects.prepare',
   remoteConnect: 'remote.connect',
   remoteBrowse: 'remote.browse',
+  localBrowse: 'local.browse',
 })
 
 const CA_METHODS = new Set(['GET', 'HEAD', 'POST'])
@@ -424,7 +425,14 @@ export function createApi(ctx) {
       ),
   }
 
-  /** Host-side workspace directory picker (`ctx.get('uiWorkspace')`). */
+  // Local directory browser used by the project page. Implemented by the Host
+  // (`local.browse`) instead of the optional native workspace picker so it
+  // works in every host combination.
+  const local = {
+    browse: (dir, signal) => rpc(Endpoints.localBrowse, dir === undefined || dir === null ? {} : { path: dir }, signal),
+  }
+
+  /** Legacy optional native picker (kept for compatibility; unused by the UI). */
   async function pickDirectory() {
     let workspace = null
     try {
@@ -499,6 +507,7 @@ export function createApi(ctx) {
   const api = {
     channel,
     rpc,
+    local,
     request,
     caRequest,
     caGet,

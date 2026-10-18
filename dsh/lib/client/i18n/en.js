@@ -736,6 +736,8 @@ export const en = {
   'projects.add': 'Add project',
   'projects.thisComputer': 'This computer',
   'projects.remoteServer': 'Remote server',
+  'projects.chooseDirTitle': 'Choose a local directory',
+  'projects.useThisDir': 'Use this directory',
   'projects.pickDirectory': 'Choose directory…',
   'projects.directory': 'Directory',
   'projects.user': 'Username',
