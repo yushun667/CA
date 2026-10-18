@@ -1,6 +1,6 @@
 # 统一后端（`ca serve`）
 
-Status: 阶段 4；AI 解释功能已移除（见
+Status: 已交付（阶段 3/4 基础设施）；AI 解释功能已移除（见
 `../decisions/active/2026-10-18-remove-ai-explain.md`）。
 
 ## 组件

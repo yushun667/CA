@@ -1,6 +1,6 @@
 # Agent 平台与服务器部署
 
-Status: 阶段 3 验收进行中（OpenHarmony 优先）；阶段 4 以统一 `ca serve` 后端起步。
+Status: 阶段 3 功能收口进行中（OpenHarmony 优先）；统一后端/UI 已交付；AI 解释已移除。
 
 本文件描述 CA 在源码机上如何部署、如何被 AI agent 查询；理由见
 `../decisions/active/`。
@@ -50,11 +50,11 @@ L0 基础查询立即返回并带 `deep_ready=0`；深析事实按请求函数/�
 - `/home/yu/CA_OH/ca`：部署的 CA checkout（editable install）。
 - `/home/yu/CA_OH/venv`：Python 3.11 环境与固定依赖。
 - `/home/yu/CA_OH/pylib15`：隔离的 clang-15 bindings；配合 `run_ca_oh15.sh`
-  用于 OpenHarmony 解析验收。
+  用于 OpenHarmony 解析运行。
 - `/home/yu/CA_OH/corpus/openharmony/`：`compile_commands*.json`、shard compdb
   与 `metadata.json`（product、board、manifest revision、工具版本、生成头目标、
   稳定性 profile）。
-- `/home/yu/CA_OH/index/`：每 shard 验收 DB（`oh_sN.db`）、日志、
+- `/home/yu/CA_OH/index/`：每 shard 索引 DB（`oh_sN.db`）、日志、
   `acceptance_summary.json`、失败/partial 归档与 EVIDENCE。
 
 ## 接口与依赖边界
@@ -67,8 +67,8 @@ L0 基础查询立即返回并带 `deep_ready=0`；深析事实按请求函数/�
 
 ## 限制
 
-- 跨 TU 回调候选需要全程序符号表（尚未产出）；struct-array 回调、整数地址函数
-  指针、C++ 成员指针未建模。
-- 候选目标按调用点/函数有界、带置信度；跨 TU 注册/全局回调表仍是已知覆盖缺口。
-- 深析覆盖按设计是部分的（L1/L2）；验收分别报告深析覆盖与完整的 L0 基础覆盖。
-- 全量验收索引是长时间离线分片批处理；实时更新只处理变更 TU。人类 UI 留到后续阶段。
+- 跨 TU 回调通过注册表解析（同 TU 与跨 TU）；struct-array 回调、整数地址函数指针、
+  C++ 成员指针与虚函数/动态派发未建模。
+- 候选目标按调用点/函数有界、带置信度。
+- 深析覆盖按设计是部分的（L1/L2），与完整 L0 基础覆盖分开报告。
+- 全量运行/验收推迟到全部功能完成之后；实时更新只处理变更 TU。只读人类 UI 已交付。

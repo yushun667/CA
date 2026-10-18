@@ -1,9 +1,8 @@
 # Agent platform and server deployment
 
-Status: phase 3 acceptance in progress; phase 4 adds the unified backend.
+Status: phase 3 functional completion in progress; unified backend/UI delivered; AI explanation removed.
 
-Deployment and agent query path on the source machine; current structure only,
-rationale lives in `../decisions/active/`.
+Deployment and agent query path on the source machine; rationale in `../decisions/active/`.
 
 ## Purpose and users
 
@@ -52,11 +51,11 @@ changed TUs and invalidate their rows; never a realtime full parse.
 - `/home/yu/CA_OH/ca`: deployed CA checkout (editable install).
 - `/home/yu/CA_OH/venv`: Python 3.11 environment with pinned dependencies.
 - `/home/yu/CA_OH/pylib15`: isolated matched clang-15 bindings; used with
-  `run_ca_oh15.sh` for OpenHarmony parse acceptance.
+  `run_ca_oh15.sh` for OpenHarmony parse runs.
 - `/home/yu/CA_OH/corpus/openharmony/`: `compile_commands*.json`, shard
   compdbs and `metadata.json` (product, board, manifest revision, tool
   versions, generated-header targets, stability profile).
-- `/home/yu/CA_OH/index/`: per-shard acceptance DBs (`oh_sN.db`), logs,
+- `/home/yu/CA_OH/index/`: per-shard index DBs (`oh_sN.db`), logs,
   `acceptance_summary.json`, failed/partial archives and EVIDENCE files.
 
 ## Interface and dependency boundaries
@@ -71,12 +70,10 @@ changed TUs and invalidate their rows; never a realtime full parse.
 
 ## Limits
 
-- Cross-TU callback candidates need a whole-program symbol table (not yet
-  produced); struct-array callbacks, integer-address function pointers and C++
-  member pointers are not modelled.
-- Candidate targets are bounded per call site/function and carry confidence;
-  cross-TU registration/global callback tables remain a known coverage gap.
-- Deep coverage is partial by design; acceptance reports it separately from
-  complete L0 coverage.
-- Full-corpus acceptance is a long offline sharded batch; incremental updates are
-  per changed TU.
+- Cross-TU callbacks are resolved via registration tables (same-TU and
+  cross-TU); struct-array callbacks, integer-address function pointers, C++
+  member pointers and virtual/dynamic dispatch are not modelled.
+- Candidate targets are bounded per call site/function and carry confidence.
+- Deep coverage is partial by design and reported separately from complete L0.
+- Full-corpus runs/acceptance are deferred until all features are complete;
+  incremental updates are per changed TU. The read-only human UI is delivered.

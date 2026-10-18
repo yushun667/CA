@@ -3,44 +3,68 @@
 Current phase: 3. OpenHarmony-first agent platform
 
 Goal: make CA usable by AI agents and humans against real OpenHarmony C/C++
-sources: offline full indexing plus realtime incremental updates, callback /
-function-pointer resolution and call-graph queries, a multi-repo
-workspace/variant data model, and an MCP query server running on the source
-machine. The human UI is deliberately last.
+sources: offline + incremental indexing, callback/function-pointer resolution and
+call-graph queries, a multi-repo workspace/variant data model, and an MCP query
+server on the source machine. Phase 3 closes when its core functions are
+implemented and **functionally verified** on representative OH corpora. Per user
+direction, full-corpus acceptance is deferred until all features are complete;
+OH is the functional-verification corpus, not a phase-3 acceptance gate.
 
 ## Completion conditions
 
-- **OpenHarmony corpus**: a real C/C++ `compile_commands.json` is generated from
-  the current OpenHarmony snapshot (product opi5plus / board rk3588) inside the
-  working copy `/home/yu/CA_OH/openharmony`; the original `~/OH_6.1/src` stays
-  read-only. Dev validation uses a subset of repos; acceptance uses the full
-  C/C++ corpus.
-- **Offline full + realtime incremental**: an offline batch index builds the
-  full baseline snapshot; a realtime update path reparses only changed
-  translation units against that snapshot. No realtime full-tree parsing.
-- **Call intelligence**: indirect calls get callback/function-pointer candidate
-  targets with confidence; `ca graph` answers forward/reverse/path/depth
-  queries in table/JSON/DOT form, merging direct and candidate edges.
-- **Agent interface**: an MCP server (`ca mcp`) runs on the source machine and
-  exposes symbol/reference/call-graph/context queries to debug, coding and
-  test-generation agents; a minimal MCP client test and bilingual docs exist.
-- **Data model**: `CallTargetRecord` is persisted; workspace/project/variant
-  metadata is stored (500 OpenHarmony projects, product/board/version) with a
-  documented sharding/federation path for full-corpus scale.
-- **Quality gates**: all tests pass, the qizai validator is green, and
-  docs/README carry the phase-3 numbers and limits.
+- **OpenHarmony corpus**: real C/C++ `compile_commands.json` from the working
+  copy `/home/yu/CA_OH/openharmony`; original `~/OH_6.1/src` stays read-only.
+- **Offline + realtime incremental**: offline batch builds the snapshot;
+  realtime update reparses only affected TUs. Header dependencies must invalidate
+  dependent TUs, not just the main TU source.
+- **Call intelligence**: indirect calls get callback/function-pointer candidates
+  with confidence; `ca graph` merges direct + candidate edges for
+  forward/reverse/path/depth queries in table/JSON/DOT. C++ virtual/dynamic
+  dispatch must be covered in addition to registration-style callbacks.
+- **Agent interface**: `ca mcp` exposes symbol/reference/call-graph/context
+  queries (18 read-only tools) to debug/coding/test-generation agents; stdio,
+  HTTP and `--serve-url` proxy verified.
+- **Data model**: `CallTargetRecord` persisted; workspace/project/variant
+  metadata stored with a documented sharding/federation path. A user-facing
+  workspace/variant selector is optional but preferred.
+- **Quality gates**: tests and qizai validator pass; README/docs record current
+  functional numbers and limits. Full-corpus acceptance is a later, separate
+  milestone.
 
 ## Steps
 
 | Step | Deliverable | Status | Blocked by |
 |---|---|---|---|
-| 1 | Server reconnaissance, working copy, CA venv and `CallTargetRecord` contract (Lead) | done | - |
-| 2 | OpenHarmony real C/C++ compdb and corpus (task-11) | done | - |
-| 3 | MCP server, `ca graph`, offline/incremental interaction (task-12) | done | - |
-| 4 | Callback/function-pointer candidate resolution (task-13) | done | - |
-| 5 | `call_targets` persistence, graph queries, workspace/variant model (task-14) | done | - |
-| 6 | OpenHarmony C/C++ parse compatibility (task-15) | done | - |
-| 7 | Integration, sharded acceptance batch, governance (Lead) | in progress | - |
+| 1 | Server reconnaissance, working copy, CA venv, `CallTargetRecord` contract | done | - |
+| 2 | OpenHarmony real C/C++ compdb and corpus | done | - |
+| 3 | MCP server, `ca graph`, offline/incremental interaction | done | - |
+| 4 | Callback/function-pointer candidate resolution (registration patterns) | done | - |
+| 5 | `call_targets`, graph queries, workspace/variant model | done | - |
+| 6 | OpenHarmony C/C++ parse compatibility (matched libclang backend) | done | - |
+| 7 | Integration, unified backend, read-only UI, P0 query UX, agent evaluation | done | - |
+| 8 | C++ virtual/dynamic dispatch + general indirect-call candidates | pending | - |
+| 9 | Header-dependency-aware incremental indexing/watch | pending | - |
+| 10 | Workspace/project/variant CLI/MCP exposure (optional) | pending | - |
+| 11 | Functional verification on OH representative corpora + docs numbers | pending | steps 8-9 |
 
-Phase 4+ (human UI last, other OS trees and languages) is proposed in
-[roadmap.md](roadmap.md) and needs a separate scope confirmation.
+## Implementation plan for the remaining gaps
+
+- **C++ virtual/dynamic dispatch**: extend type extraction with base classes and
+  virtual method/override relationships; persist overrides; when a call target
+  is a virtual method, emit candidate edges to statically resolvable overrides
+  (same-TU and cross-TU), with lower confidence than direct calls; merge into
+  `call_targets` and graph queries. Multi-inheritance and unresolved dynamic
+  types remain bounded heuristics.
+- **Header-dependency incremental**: record direct includes per TU during
+  parsing and persist a TU→header dependency map; on `update`/`watch`, resolve
+  changed files to dependent TUs and invalidate only those cache entries before
+  reparsing. Functional test: editing a header reparses dependents, while an
+  unrelated header skips them.
+- **Workspace/variant surface (optional)**: CLI/MCP filters for project and
+  variant; no storage change needed.
+- **Functional verification**: use representative OH shards/subsets, not the
+  full 8-shard acceptance run; record command, counts and limits in README/docs.
+
+Full-corpus sharded acceptance, S2/S6/S8 completion and the final acceptance
+report are **deferred**; they are not phase-3 functional gates. Phase 4+ (other
+OS trees/languages, DWARF, additional UI) needs separate scope confirmation.

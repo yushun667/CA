@@ -1,79 +1,56 @@
 # Phase progress
 
-Overall: phase 3 acceptance in progress (OpenHarmony-first). Phase 1/2 are
-archived and delivered; local suite is 288 passed / 3 skipped and server tests
-stay green while acceptance runs.
+Overall: phase 3 functional completion is in progress (OpenHarmony first).
+Phase 1/2 are archived and delivered; the local suite is 421 passed / 3 skipped.
+Full-corpus acceptance is deferred until all features are complete, per user
+direction; OH is the representative functional-verification corpus, not a
+phase-3 acceptance gate.
 
-## Done in phase 3
+## Done
 
-- Server reconnaissance: OpenHarmony 6.1 tree (`~/OH_6.1/src`, 500 repo
-  projects, product opi5plus/board rk3588, 105 GB source, original read-only),
-  Ubuntu 22.04 host with 24 cores / 62 GB RAM / 1.2 TB free, Docker builder
-  images and prebuilt gn/ninja/clang available.
-- Working copy started at `/home/yu/CA_OH/openharmony` (rsync from the original
-  tree, excluding build output and repo object store); original tree untouched.
-- CA deployed to `/home/yu/CA_OH/ca`; server venv at `/home/yu/CA_OH/venv`
-  (Python 3.11) with libclang working and `ca` console script installed.
-- Contract extension: `CallTargetRecord`, `AnalysisResult.call_targets` and
-  `call_target_id` added for callback/function-pointer candidate edges.
-- Phase-3 task board created (tasks 11-15) and five agents restarted with
-  disjoint scopes.
-- Callback/function-pointer candidate resolution delivered: registration,
-  arrays/designated initializers, parameter passing, typedef chains and returned
-  pointers; labeled fixture precision = recall = 1.0; xv6 yields 22 candidate
-  edges from the syscall table (confidence 0.65, may-call semantics).
-- Call-graph CLI delivered: forward/reverse/both traversal, depth/path/cycle
-  queries, table/JSON/DOT; xv6 `main` depth1 = 54 nodes/178 edges, depth2 =
-  94/375 with one cycle; direct and candidate edges are merged with
-  kind/confidence/source.
-- `call_targets`, `workspaces/projects/variants`, graph query helpers and
-  `store_schema_version=2` delivered with idempotent old-DB upgrade;
-  100k-node/300k-edge graph queries stay sub-millisecond at depth 1 and
-  ~0.33 ms for both-direction depth 2.
-- MCP server delivered and verified on the source server: stdio + HTTP
-  JSON-RPC, 12 read-only tools, stable envelopes/pagination/error codes;
-  `scripts/server_bootstrap.sh` reports SERVER_OK.
-- Offline + incremental interaction delivered: `ca update --changed-files`
-  reparses only changed TUs, per-TU cache hits for unchanged ones, header
-  changes clear the cache; watcher/daemon design documented.
-- Linux portability fix: tests no longer hard-code a macOS `.dylib`; server
-  pytest is 242 passed / 1 expected relocation failure / 3 skipped.
-- Local suite: 246 tests pass; server bootstrap and MCP smoke pass.
+- Server setup and read-only OH working copy at `/home/yu/CA_OH/openharmony`;
+  real compdb (214,543 commands / 3.4 GB) and matched libclang 15 backend.
+- Offline index pipeline ran on 5/8 shards as **functional evidence only**
+  (41,897 TUs, 82 failures, 11.23 GB); this is not acceptance.
+- AST extraction: functions/types/fields/calls/source locations; CFG, branches,
+  assignments, returns and resource operations stored in SQLite (schema v5).
+- Cross-TU callback candidates and direct/candidate call-graph queries;
+  workspace/project/variant model and federated shard reads.
+- Layered L0/L1/L2 deep facts (`ensure_deep`/`prewarm`/`deep_status`); polling
+  `ca watch` and `ca update --changed-files` with main-TU incremental cache.
+- MCP server: 18 read-only tools, stdio/HTTP and `--serve-url` proxy.
+- Unified `ca serve` backend (query API, generic jobs/SSE, `/mcp`); read-only
+  web UI with query explorer, call graph, source/CFG panes and remote mode.
+- P0 query UX (`brief`, compact/fields, batch, header declarations); 45-run
+  real-agent matrix on xv6 with zero hallucinated locations.
+- AI explanation feature was added and then removed end to end; no explain or
+  sampling endpoints/tools remain.
 
-## In progress
+## Remaining phase-3 core functions
 
-- Phase-3 acceptance: sharded offline index of the unique-source corpus
-  (65,023 source TUs / 70,346 unique files; 204,422 source commands) with the
-  matched libclang 15 backend, `--record-scope main_file --analyze-scope main`,
-  2 shards x jobs6 and wave-level pool recycling; ETA about 3.6 h. A shard counts
-  only when it has `.done` + exit 0 + stats.
-- Failure classification: S4 has a stable ~27-29% failed/degraded band (missing
-  generated headers, systemic); S3's rate is being attributed. The final report
-  groups failures into target/environment, not silently dropped.
-- Completed capabilities: real compdb (214,543 commands; 3.4 GB), matched
-  backend, call graph/callbacks, schema v3 + deep_status, MCP 15 tools, layered
-  L0/L1/L2, 45-run real-agent matrix (0 hallucinated locations), decisions and
-  the OOM/recycle incident record.
-- Remaining: 8-shard stats/graph/MCP summary, acceptance report, commit, then the
-  agent-driven P0 optimization and OH agent-eval extension.
+- C++ virtual/dynamic dispatch and general function-pointer candidates beyond
+  registration-style callbacks.
+- Header-dependency-aware incremental indexing: current cache tracks only the
+  main TU source, so header edits miss dependent TUs.
+- Optional workspace/project/variant CLI/MCP selector; the store model exists
+  but has no user-facing surface.
+- Deploy the latest code to the source server and run functional checks against
+  an OH shard subset (not full acceptance).
 
 ## Next
 
-- After acceptance: commit phase-3 baseline (code/tests, then docs/acceptance
-  results), implement P0 improvements (compact/projection, batch queries,
-  `ca brief`, header declarations, returns/dominance/constants) and re-run the
-  same 45-run matrix with a context-median <=23.8 KB and no F1 regression gate.
-- Then confirm phase 4 scope (other OS trees/languages; human UI last; optional
-  PCH/native indexer).
+Implement the two required gaps, functionally verify them on representative OH
+corpora, update README/docs numbers, then confirm phase 4 scope (other OS trees
+and languages). Full 8-shard acceptance stays deferred until all features are
+complete.
 
 ## Risks and blockers
 
-- Deep analysis of every TU is infeasible; the layered lazy path is the
-  architecture, and deep coverage is reported separately from complete L0.
-- The real-agent matrix shows CA improves structured fact coverage but does not
-  consistently reduce context: `detail` verbosity, missing header declarations,
-  collapsed return blocks, missing lock dominance/constants/refcounts/IRQ are
-  known gaps.
-- Callback candidates cover same-TU registrations only; cross-TU tables and
-  C++ virtual dispatch remain open.
-- MCP is LAN/SSH-only with no authentication; human UI is a later phase.
+- C++ virtual dispatch needs class hierarchy/override data and new candidate
+  generation; large C++ code may produce noisy candidates.
+- Header dependency tracking needs include-graph storage and cache invalidation;
+  false negatives are correctness bugs for incremental indexing.
+- OH giant C++/IDL TUs are slow and memory-heavy (S2 partial archive exists).
+- Deep coverage is partial by design; findings are intra-function heuristics.
+- Callback candidates are registration-based; MCP/UI have no auth; SQLite has a
+  single writer.

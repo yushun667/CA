@@ -1,6 +1,6 @@
 # Unified backend (`ca serve`)
 
-Status: phase 4; the AI explain feature has been removed (see
+Status: delivered (phase 3/4 infrastructure); the AI explain feature has been removed (see
 `../decisions/active/2026-10-18-remove-ai-explain.md`).
 
 ## Components
