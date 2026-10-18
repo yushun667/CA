@@ -197,11 +197,6 @@
     return `${scaled.toFixed(scaled >= 10 ? 0 : 1)} ${units[index]}`;
   };
 
-  const confidence = (value) => {
-    const numeric = Number(value);
-    return Number.isFinite(numeric) ? numeric.toFixed(2) : "—";
-  };
-
   const truncate = (value, max) => {
     const text = String(value === null || value === undefined ? "" : value);
     if (text.length <= max) return text;
@@ -938,12 +933,11 @@
               )}</td>
               <td class="mono muted">${escapeHtml(location(row, "call_") || "—")}</td>
               <td>${escapeHtml(row.kind || "")}</td>
-              <td class="num">${isCandidate(row) ? confidence(row.confidence) : "1.00"}</td>
               <td>${edgeBadge(row)} ${shardBadge(row)}</td>
             </tr>`;
           })
           .join("")
-      : emptyRow(6, emptyMessage);
+      : emptyRow(5, emptyMessage);
     panel.innerHTML = `<section class="section"><div class="section-head"><h3>${escapeHtml(
       title
     )}</h3><span class="note">${escapeHtml(
@@ -954,7 +948,6 @@
         t("table.location"),
         t("table.callSite"),
         t("table.kind"),
-        t("table.confidence"),
         t("table.edge"),
       ],
       [body]
@@ -1132,7 +1125,7 @@
           t("graph.legendCycle")
         )}</span>
         <span class="legend-item legend-note">${escapeHtml(
-          t("graph.legendConfidence")
+          t("graph.legendTargetSet")
         )}</span>
         <span class="legend-item">${escapeHtml(t("graph.legendClick"))}</span>
       </div>
@@ -2139,14 +2132,8 @@
         }${cycle ? " cycle" : ""}"><path d="${path}" marker-end="url(#${marker})"><title>${escapeHtml(
           `${edge.caller_name || edge.caller_id} → ${
             edge.callee_name || edge.callee_id
-          }${candidate ? ` (${edge.kind || "candidate"} ${confidence(edge.confidence)})` : ""}`
-        )}</title></path>${
-          candidate
-            ? `<text x="${(x1 + x2) / 2}" y="${
-                (y1 + y2) / 2 - 5
-              }" text-anchor="middle">${escapeHtml(confidence(edge.confidence))}</text>`
-            : ""
-        }</g>`
+          }${candidate ? ` (${edge.kind || "candidate"}; possible target)` : ""}`
+        )}</title></path></g>`
       );
     });
 
@@ -2462,7 +2449,6 @@
               )}</td>
               <td>${functionLink(row.target_function_name, row.target_function_id)}</td>
               <td>${escapeHtml(row.registration_kind || "")}</td>
-              <td class="num">${confidence(row.confidence)}</td>
               <td class="mono muted">${escapeHtml(
                 row.file ? `${row.file}:${row.line || 0}` : "—"
               )}</td>
@@ -2472,7 +2458,7 @@
             </tr>`;
           })
           .join("")
-      : emptyRow(8, t("empty.callbacks"));
+      : emptyRow(7, t("empty.callbacks"));
     const note = [
       data.federated ? t("common.federated") : t("common.singleDatabase"),
       t("note.rowsShown", { count: number(data.count) }),
@@ -2493,7 +2479,6 @@
           t("table.objectPath"),
           t("table.target"),
           t("table.kind"),
-          t("table.confidence"),
           t("table.location"),
           t("table.module"),
           t("table.registrar"),

@@ -124,9 +124,9 @@ What you can inspect:
   databases only carry symbols and calls until `ca ensure-deep` runs).
 - **Call graph** — SVG traversal (direction `both`/forward/reverse, depth 1–6).
   Edge colours encode type: direct calls solid grey, indirect callback candidates
-  purple dashed, virtual candidates teal dashed, cycles red. Candidate edges show
-  only the confidence number (0–1, heuristic); the legend explains it as the
-  candidate confidence, not a probability. **Single-clicking** a node (or pressing Enter on it)
+  purple dashed, virtual candidates teal dashed, cycles red. Candidate edges are
+  possible targets for runtime dispatch; the UI does not show a probability or
+  confidence number. Direct calls remain deterministic. **Single-clicking** a node (or pressing Enter on it)
   opens that function's **complete source in the right panel** without leaving
   the page: line numbers, a `file:line` header, the owning shard badge,
   independent scrolling, plus Close and Open-detail buttons; when the node's
