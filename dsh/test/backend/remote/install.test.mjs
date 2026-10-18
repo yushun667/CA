@@ -116,6 +116,7 @@ test('performRemoteInstall rsyncs a fresh checkout, installs editable and verifi
     assert.ok(rsyncCall.args[rsyncCall.args.length - 1].includes('linux-box:/home/yu/ca-install'));
     const sshScripts = runner.calls.filter((call) => call.command === 'ssh').map((call) => call.script);
     assert.ok(sshScripts.some((script) => script.includes('CA_PROBE:begin')));
+    assert.ok(sshScripts.some((script) => script.includes('mkdir -p /home/yu/ca-install')));
     assert.ok(sshScripts.some((script) => script.includes('-m venv')));
     assert.ok(sshScripts.some((script) => script.includes('pip install') && script.includes('requirements.txt')));
     assert.ok(sshScripts.some((script) => script.includes('pip install') && script.includes('-e /home/yu/ca-install')));

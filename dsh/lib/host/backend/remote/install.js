@@ -29,6 +29,7 @@ import {
   buildRsyncArgv,
   classifySshFailure,
   outputTailOf,
+  shellQuote,
 } from './commands.js';
 import { probeRemote } from './probe.js';
 
@@ -356,6 +357,14 @@ export async function performRemoteInstall(options) {
     if (mode !== 'rsync') {
       skipStep('rsync', '使用远端已有检出，无需 rsync');
     } else {
+      // rsync does not create the destination path chain; `--mkpath` is not
+      // available on every remote rsync, so create the directory over SSH first.
+      await runSshStep(
+        'rsync',
+        '创建远端安装目录',
+        `mkdir -p ${shellQuote(remoteRepoPath)}`,
+        INSTALL_TIMEOUTS.probe,
+      );
       const localSource = resolveLocalSource({ overrides, effective, localCwd });
       const argv = buildRsyncArgv({
         ssh: effective.remote.ssh,
