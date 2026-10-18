@@ -6,6 +6,9 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 import { RPC_ENDPOINTS, registerRpc } from '../../lib/host/rpc/index.js'
 import {
@@ -1058,6 +1061,88 @@ test('status includes the active project summary', async () => {
 })
 
 // --------------------------------------------------------------------------- //
+// ui.selftest.*
+// --------------------------------------------------------------------------- //
+
+function tempState(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-ca-selftest-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  return { dir, config: { paths: { stateDir: dir } } }
+}
+
+test('ui.selftest.pending reports the handshake file', async (t) => {
+  const { dir, config } = tempState(t)
+  const context = setup({ config })
+  assert.deepEqual(valueOf(await context.call('ui.selftest.pending')), { pending: false })
+
+  fs.writeFileSync(path.join(dir, 'selftest-pending.json'), '{}')
+  assert.deepEqual(valueOf(await context.call('ui.selftest.pending')), { pending: true })
+})
+
+test('ui.selftest.report writes a 0600 report, clears pending and returns the path', async (t) => {
+  const { dir, config } = tempState(t)
+  fs.writeFileSync(path.join(dir, 'selftest-pending.json'), '{}')
+  const context = setup({ config })
+  const report = {
+    checks: [{ id: 'page.main', status: 'pass', detail: 'panel rendered' }],
+    summary: { pass: 1, fail: 0 },
+  }
+  const response = await context.call('ui.selftest.report', { report })
+  assert.equal(response.status, 200)
+  const value = valueOf(response)
+  assert.equal(value.saved, true)
+  assert.equal(value.path, path.join(dir, 'selftest-report.json'))
+  assert.equal(value.pendingCleared, true)
+  assert.ok(value.bytes > 0)
+
+  const stat = fs.statSync(value.path)
+  assert.equal(stat.mode & 0o777, 0o600, 'report file is 0600')
+  const document = JSON.parse(fs.readFileSync(value.path, 'utf8'))
+  assert.match(document.receivedAt, /^\d{4}-\d{2}-\d{2}T/)
+  assert.deepEqual(document.report, report)
+  assert.equal(fs.existsSync(path.join(dir, 'selftest-pending.json')), false)
+
+  // A later report without a pending handshake still saves, and reports that
+  // it did not clear anything.
+  const again = valueOf(await context.call('ui.selftest.report', { report: { summary: { pass: 0 } } }))
+  assert.equal(again.saved, true)
+  assert.equal(again.pendingCleared, false)
+  assert.deepEqual(JSON.parse(fs.readFileSync(again.path, 'utf8')).report, { summary: { pass: 0 } })
+})
+
+test('ui.selftest.report validates the report shape and size', async (t) => {
+  const { dir, config } = tempState(t)
+  fs.writeFileSync(path.join(dir, 'selftest-pending.json'), '{}')
+  const context = setup({ config })
+
+  for (const payload of [{ report: [] }, { report: 'text' }, { report: 42 }, {}]) {
+    const response = await context.call('ui.selftest.report', payload)
+    assert.equal(response.status, 400, JSON.stringify(payload))
+    assert.equal(errorOf(response).code, 'INVALID_ARGUMENT')
+  }
+
+  const oversized = await context.call('ui.selftest.report', {
+    report: { blob: 'x'.repeat(600 * 1024) },
+  })
+  assert.equal(oversized.status, 413)
+  assert.equal(errorOf(oversized).code, 'PAYLOAD_TOO_LARGE')
+
+  // Failed attempts must not create a report or consume the handshake file.
+  assert.equal(fs.existsSync(path.join(dir, 'selftest-report.json')), false)
+  assert.equal(fs.existsSync(path.join(dir, 'selftest-pending.json')), true)
+})
+
+test('ui.selftest endpoints are listed and tolerate empty payloads', async (t) => {
+  assert.ok(RPC_ENDPOINTS.includes('ui.selftest.pending'))
+  assert.ok(RPC_ENDPOINTS.includes('ui.selftest.report'))
+  const { config } = tempState(t)
+  const context = setup({ config })
+  const pending = await context.call('ui.selftest.pending')
+  assert.equal(pending.status, 200)
+  assert.equal(typeof valueOf(pending).pending, 'boolean')
+})
+
+// --------------------------------------------------------------------------- //
 // robustness
 // --------------------------------------------------------------------------- //
 
@@ -1074,6 +1159,8 @@ test('the route handler never throws, for any endpoint or body shape', async () 
     'projects.save',
     'projects.remove',
     'projects.activate',
+    'ui.selftest.pending',
+    'ui.selftest.report',
     'tasks.list',
     'explain',
     '???',

@@ -19,8 +19,12 @@
  * bodies 413, unknown endpoints 404, non-POST 405, trust rejection 401/403.
  */
 
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
 import { BackendError, isAbortError, isBackendError, normalizeError } from '../backend/errors.js'
-import { clampInt, isPlainObject } from '../backend/util.js'
+import { atomicWriteJson, clampInt, isPlainObject } from '../backend/util.js'
 import { fetchActiveProject } from '../tools/projects.js'
 
 export const CHANNEL = '/dsh-ca'
@@ -45,6 +49,8 @@ export const RPC_ENDPOINTS = Object.freeze([
   'projects.save',
   'projects.remove',
   'projects.activate',
+  'ui.selftest.pending',
+  'ui.selftest.report',
   'tasks.start',
   'tasks.list',
   'tasks.get',
@@ -68,6 +74,7 @@ const MAX_QUESTION_LENGTH = 4000
 const MAX_ID_LENGTH = 128
 const MAX_DB_PATH_LENGTH = 4096
 const MAX_PROJECT_ID_LENGTH = 256
+const SELFTEST_REPORT_MAX_BYTES = 512 * 1024
 
 /** Stable RPC error carrying a machine-readable code. */
 export class RpcError extends Error {
@@ -218,6 +225,25 @@ function backendMutationFailure(error) {
     return new RpcError('INVALID_ARGUMENT', message, details)
   }
   return new RpcError('BACKEND_ERROR', message, { ...details, backendCode: error.code })
+}
+
+/** Directory holding CA plugin state (settings/selftest files). */
+function resolveStateDir(backend, config) {
+  for (const candidate of [backend?.paths?.stateDir, config?.paths?.stateDir]) {
+    if (typeof candidate === 'string' && candidate.length > 0) return candidate
+  }
+  const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
+  return path.join(dshHome, 'plugin-data', 'dsh-ca')
+}
+
+/** Absolute paths used by the in-page UI self-test handshake. */
+function selftestPaths(backend, config) {
+  const stateDir = resolveStateDir(backend, config)
+  return {
+    stateDir,
+    pendingPath: path.join(stateDir, 'selftest-pending.json'),
+    reportPath: path.join(stateDir, 'selftest-report.json'),
+  }
 }
 
 /** Normalize a project list/save/remove/activate manager result. */
@@ -884,6 +910,54 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
         config: publicConfig(safe.config ?? backend.config ?? config) ?? {},
         status: safeStatus(backend),
       }
+    },
+
+    async 'ui.selftest.pending'() {
+      const { pendingPath } = selftestPaths(backend, config)
+      let pending = false
+      try {
+        pending = fs.existsSync(pendingPath)
+      } catch {
+        pending = false
+      }
+      return { pending }
+    },
+
+    async 'ui.selftest.report'(payload) {
+      if (!isPlainObject(payload.report)) {
+        fail('INVALID_ARGUMENT', 'payload.report must be a JSON object')
+      }
+      const report = payload.report
+      const bytes = jsonBytes(report)
+      if (!Number.isFinite(bytes) || bytes > SELFTEST_REPORT_MAX_BYTES) {
+        fail('PAYLOAD_TOO_LARGE', `selftest report exceeds ${SELFTEST_REPORT_MAX_BYTES} bytes`)
+      }
+      const { pendingPath, reportPath } = selftestPaths(backend, config)
+      const document = {
+        receivedAt: new Date().toISOString(),
+        report,
+      }
+      try {
+        // atomicWriteJson creates the state directory, writes 0600 and renames
+        // over the previous report so the Lead can read a complete file.
+        atomicWriteJson(reportPath, document, { mode: 0o600 })
+      } catch (error) {
+        fail(
+          'SELFTEST_WRITE_FAILED',
+          `cannot write UI self-test report: ${errorMessage(error)}`,
+          { path: reportPath },
+        )
+      }
+      let pendingCleared = false
+      try {
+        if (fs.existsSync(pendingPath)) {
+          fs.rmSync(pendingPath, { force: true })
+          pendingCleared = true
+        }
+      } catch {
+        pendingCleared = false
+      }
+      return { saved: true, path: reportPath, pendingCleared, bytes }
     },
 
     async 'tasks.start'(payload) {

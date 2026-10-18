@@ -5,6 +5,7 @@ DSH Web 页面的 CA 插件：ESM 源码在 `lib/client/`，由 [../../scripts/b
 ## 关键文件
 
 - `index.js`：Lead 维护的 Client 入口，inject `['slots','locale']`，注册 `main` 整页与 `sidebar.panellist` 侧栏项。
+- `selftest.js`：页面内真实 DOM 自测（由 Host 的 `selftest-pending.json` 触发，结果回报 `selftest-report.json`）。
 - `api.js`：所有 Host 调用的同源 `POST /dsh-ca/<endpoint>` 封装（`credentials:'same-origin'`）。
 
 ## 子目录

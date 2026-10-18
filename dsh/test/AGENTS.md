@@ -7,6 +7,7 @@
 - `manifest.test.mjs`：bundle manifest/patch/client 产物/locale/icon 静态检查。
 - `client-bundle.test.mjs`、`client-source.test.mjs`：`client.js` 语法/格式与 Client 源码约束（仅相对 import + react、无禁用语法）。
 - `client-style.test.mjs`：Client 样式桥回归（`<style data-ca-ui>` 写入 CSS 文本而非引用计数）。
+- `ui-selftest.test.mjs`：页面内 DOM 自测的 adapter/fake 编排测试。
 - `host-modules.test.mjs`：Host 模块可加载与纯函数行为。
 
 ## 子目录

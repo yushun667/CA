@@ -31,6 +31,8 @@ import { createStatsPage } from './pages/stats.js'
 import { createCallbacksPage } from './pages/callbacks.js'
 import { createFunctionPage } from './views/function/index.js'
 
+import { maybeRunSelfTest } from './selftest.js'
+
 /** Client services this module needs from the harness. */
 export const inject = ['slots', 'locale']
 
@@ -82,4 +84,11 @@ export function apply(ctx) {
       PanelIcon,
     ),
   )
+
+  // Optional in-page DOM self test: runs only when the Host created the
+  // `selftest-pending.json` marker and this tab has not run it yet. It is
+  // non-blocking; results are reported back through RPC and never thrown.
+  void maybeRunSelfTest(React, ctx, shell, bag).catch((error) => {
+    console.error('[ca] selftest crashed:', error)
+  })
 }
