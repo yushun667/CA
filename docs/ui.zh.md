@@ -58,15 +58,32 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
 - `GET /api/ui`（本地实现）返回 `{mode:"remote", serve_url, features}`；旧的内嵌
   server 返回 `{mode:"embedded"}`。
 - 查询端点（`/api/search`、`/api/function`、`/api/graph`、`/api/cfg`、
-  `/api/source` 等）原样代理；非白名单 POST 返回
-  `405 READ_ONLY`；查询代理超时 30s。后端不可达时 UI 返回统一错误信封
-  `502 SERVE_UNAVAILABLE`。
+  `/api/source`、`/api/registry` 等）原样代理；UI 代理只放行 `/api/jobs*` 与
+  `/api/registry/active` 的 POST（其余返回 `405 READ_ONLY`）；查询代理超时 30s。
+  后端不可达时 UI 返回统一错误信封 `502 SERVE_UNAVAILABLE`。
 - `GET /events` 仍可经代理**流式透传**（不缓冲、heartbeat、`Last-Event-ID` 重放），
   供其它 job 类型/未来客户端使用。
 - 顶栏连接徽章显示 连接中/已连接/重连中/已断开，由 `/api/ui` 与 API 请求成功/失败
   推导；点击徽章可手动重试连接。前端不再使用 EventSource。
 - 全程只读，UI 代理不会写索引。远程 `--serve-url` 建议仅用回环或可信隧道；本里程碑
   后端无认证。
+
+## 工作区 / 项目 / 变体选择
+
+后端提供 registry API 时（`ca serve` 启动在 registry 数据库上），工具栏显示工作区/
+项目/变体选择器：
+
+- 工作区与项目元数据只读；变体 `<select>` 以 `name · product · board · version`
+  列出全部已注册变体，tooltip 为 `db_path`，标出当前 active；没有可读数据库的变体
+  禁用并显示“未建库”。
+- 选择变体会发送 `POST /api/registry/active {variant_id}` 切换后端的只读查询库；页面
+  随后刷新顶栏、统计、搜索结果、当前函数的详情/调用图/CFG/源码窗口，并保留当前
+  tab；切换失败显示错误且不改变当前视图。
+- 选择记录在 `localStorage`（`ca.ui.registry.variant`）与可分享的
+  `?variant=<id>` URL 参数中。加载时显式 `?variant=` 会应用一次（URL 优先）；
+  仅 localStorage 的偏好以“最近使用”按钮提示，绝不静默切换。
+- 端点缺失时（embedded `ca ui --db`、旧 `ca serve`）选择器隐藏，行为与之前一致。
+  registry 列表固定读取后端初始 registry 库，切换变体不改变列表。
 
 ## 页面
 
@@ -176,6 +193,8 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
 | `GET /api/callbacks` | `path`（前缀）、`field`、`module`、`kind`、`limit`、`offset` | 注册事实（目标、evidence、注册类型） |
 | `GET /api/source` | `symbol`（必填）、`context`（0–10，默认 3） | 只读源码窗口：`{symbol, function{id,name,qualified_name,kind,file,line,end_line,signature}, file, language, start, end, total_lines, function_start, function_end, context, truncated, lines[{line,text}], shard, path, repo_root}` |
 | `GET /api/cfg` | `symbol`（必填） | 只读控制流图：`{symbol, function{id,name,qualified_name,kind,file,line,end_line}, deep_ready, shard, federated, blocks[], edges[], branches[], truncated, stats}`；blocks 含 `index/kind/terminator/line/end_line/statement_count`、分支标注（`condition`、`branch_kind`、`true_block`、`false_block`）与 `is_entry`/`is_exit`；edges 含展示用 `label`（分支边为 `true`/`false`） |
+| `GET /api/registry` | — | workspace/project/variant registry：`{available, registry_db, workspaces[], projects[], variants[{id, workspace_id, name, product, board, version, db_path, db_exists, is_active}], active_variant_id, active_variant?, database{paths,federated}}`；始终读取后端初始 registry 库，不随 active 变体变化 |
+| `POST /api/registry/active` | JSON body `{variant_id}` | 切换后端只读查询库：`200 {active_variant_id, active_variant, variant, database, health}`；错误 400 `INVALID_ARGUMENT`、404 `NOT_FOUND`、503 `DB_UNAVAILABLE`；原子切换（失败保留旧库）、仅内存生效（不持久化、不写库） |
 | `GET /api/branches`、`/api/assignments`、`/api/returns`、`/api/resources` | `symbol`（必填） | 按函数的事实行（附加的便捷端点） |
 
 `/api/cfg` 通过常规详情查询解析函数，返回其 CFG 块/边以及解码后的分支行（联邦模式

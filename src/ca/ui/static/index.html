@@ -43,6 +43,12 @@
       <p id="results-empty" class="empty" data-i18n="search.startHint">Search for a function to begin. Substring matches work too, e.g. proc_ or sys_.</p>
     </div>
   </div>
+  <div class="registry-bar" id="registry-bar" hidden>
+    <label class="registry-label" for="variant-select" data-i18n="registry.variant">Variant</label>
+    <select id="variant-select" class="registry-select" data-i18n-aria-label="registry.aria" aria-label="Workspace variant"></select>
+    <span class="registry-meta" id="registry-meta"></span>
+    <button type="button" class="ghost registry-resume" id="registry-resume" hidden></button>
+  </div>
   <nav class="toolbar-actions" data-i18n-aria-label="nav.views" aria-label="Views">
     <button type="button" class="ghost" id="stats-button" data-i18n="button.stats">Stats</button>
     <button type="button" class="ghost" id="callbacks-button" data-i18n="button.callbacks">Callbacks</button>

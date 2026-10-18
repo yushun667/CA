@@ -83,7 +83,7 @@ data: {"type":"job.updated","event":"done","event_id":3,"job":{...}}
 ## MCP endpoint (stateless)
 
 `/mcp` is a standard stateless JSON-RPC endpoint (initialize/tools/list/tools/call)
-with the same 18 read-only tools as `ca mcp --db`. `ca mcp --serve-url URL` proxies
+with the same 21 read-only tools as `ca mcp --db`. `ca mcp --serve-url URL` proxies
 stdio JSON-RPC lines to it; no session state or server-initiated requests exist.
 
 ```sh
@@ -92,7 +92,7 @@ ca mcp --serve-url http://127.0.0.1:8765
 
 ## Verification and performance
 
-- `tests/test_server_serve.py`: health/query endpoints, stateless MCP (18 tools),
+- `tests/test_server_serve.py`: health/query endpoints, stateless MCP (21 tools),
   generic job loop + SSE replay, restart requeue, stdio proxy, federated shard
   stats, removed-explain CLI/API checks.
 - Full suite: see the project test summary (locally `pytest -q`).

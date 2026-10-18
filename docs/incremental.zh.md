@@ -28,15 +28,19 @@ ca update --repo /src/proj --compdb /src/proj/compile_commands.json \
 
 `ca update` 把每个变更路径映射到编译单元，然后用 per-TU 缓存重新跑流水线：
 
-- 变更 TU 缓存未命中，重新 parse/analyze；
-- 未变更 TU 命中缓存，直接回放记录；
-- 数据库用“缓存 + 新记录”一次性重建。
+- 变更/受影响 TU 缓存未命中，重新 parse/analyze；
+- 未变更 TU 保持数据库现有行（缓存命中，不解析、不回放、不重写）；
+- 只对受影响 TU 原地替换行（`remove_units` 级联 + 单事务重新插入），FTS5
+  增量维护；
+- 存在回调注册或间接调用点时，写入后刷新跨 TU 回调候选。
 
 命令会打印计划与缓存统计：
 
 ```text
 [update] affected 2/1682 TUs (header_change=False), cache=/data/.ca-cache
-[update] cache hits=1680/1682 misses=2; database rebuilt from cache
+[update] db_write: incremental tus=2 rows -136/+141 fts -9/+10
+[update] callback_refresh: rerun units=1682 registrations=391 candidate_edges=196 links=196
+[update] cache hits=1680/1682 misses=2 (unaffected TUs left untouched)
 ```
 
 ## 缓存语义
@@ -75,7 +79,7 @@ store 把传递闭包持久化到 `tu_includes`（`include_path -> tu_id`），�
 ```text
 [update] include dependencies: 2/1682 TUs include the changed header(s)
 [update] dependency-aware: invalidated 2 cache entries for 2 dependent TUs
-[update] cache hits=1680/1682 misses=2; database rebuilt from cache
+[update] cache hits=1680/1682 misses=2 (unaffected TUs left untouched)
 ```
 
 没有被任何已索引 TU include 的头文件变更是 no-op（`ca update` 退出 2，提示
@@ -83,14 +87,38 @@ store 把传递闭包持久化到 `tu_includes`（`include_path -> tu_id`），�
 回退旧的全缓存清理行为并告警。`ca watch` 使用同一映射，并在每轮 JSON 中报告
 `dependency_aware`、`fallback_full`、`affected_count`、`cache_hits`、`cache_misses`。
 
-## 当前限制：数据库行仍是全量重写
+## 数据库原地增量写入
 
-store 尚未提供 per-TU delete/replace，所以每次 `update` 都会用“缓存 + 新记录”重建
-整个数据库文件（`ca update` 先删除旧库）。增量只发生在 parse/analyze，数据库写入
-不是增量。计划中的 store API 是 `remove_units(tu_ids)`：级联删除
-tus/functions/types/fields/calls、函数级事实（CFG、分支、赋值、返回、资源操作、
-call_targets/findings），最后 finalize 重建 FTS 索引。就绪后 `ca update` 将切换为
-“受影响 TU 先删后插”，不再重写未变更行。
+`ca update` 不再删除并重建数据库：只解析/分析受影响的 TU，并用 store 的
+per-TU delete+insert 原语（`remove_units`/`replace_units`）原地替换。级联删除该
+TU 的 `tus`/functions/types/fields/calls/CFG/数据流事实/call targets/callbacks/
+links/deep_status/includes，然后在同一事务中写回新记录。未受影响 TU 的行 id 与
+内容保持不变，FTS5 只对受影响函数做增量 delete/insert（不跑整库 `finalize()`）。
+
+构建文件、没有 include 事实的旧库以及 `analyze_scope=all` 仍走保守的全量重建路径
+（后者因为 definition ownership 是语料级的）。header 内联定义归属于首个写入它的
+TU，因此 update 除依赖计划中的 TU 外，还会重索引“拥有该 header 行”的贡献 TU。
+
+写入后，若数据库存在回调注册或间接调用点，会刷新跨 TU 回调候选：复用现有回调
+pass（`finalize=False`），并在之前删除仅关联被替换注册的旧候选边，保证不残留；
+没有回调数据时跳过。该 pass 为了 AST 级事实会重新解析 TU。
+
+指标：
+
+```json
+{"db_write": {"mode": "incremental", "tu_count": 2,
+              "removed_rows": 136, "added_rows": 141,
+              "fts_deleted": 9, "fts_inserted": 10},
+ "incremental_rows": {"removed": 136, "added": 141},
+ "callback_refresh": {"mode": "rerun", "units": 1682, "registrations": 391,
+                      "candidate_edges": 196, "links": 196}}
+```
+
+`db_write.mode` 为 `incremental`、`full_rebuild`、`noop` 或错误时缺省；
+`incremental_rows` 是受影响 TU 的行增减；`callback_refresh.mode` 为
+`rerun`/`skipped`/`error`，附带计数与耗时。增量写入失败会回滚事务、保留旧行；
+回调刷新失败只告警，索引行仍有效，可下次全量 `ca index`/`ca resolve-callbacks`
+修复候选集合。
 
 ## Watcher：`ca watch`
 
@@ -116,6 +144,10 @@ ca watch --repo <repo> --db ca.db --compdb <compdb> --changed-files kernel/a.c
  "header_change": false, "affected_count": 1, "updated": true,
  "skipped": false, "skip_reason": "", "compdb_stale": false,
  "cache_hits": 45, "cache_misses": 1, "db_size": 4702208,
+ "db_write": {"mode": "incremental", "tu_count": 1, "removed_rows": 63,
+              "added_rows": 64, "fts_deleted": 3, "fts_inserted": 3},
+ "incremental_rows": {"removed": 63, "added": 64},
+ "callback_refresh": {"mode": "skipped", "reason": "no callback registrations or indirect calls"},
  "deep_invalidated": true, "elapsed_seconds": 0.359, "errors": []}
 ```
 
@@ -130,9 +162,9 @@ ca watch --repo <repo> --db ca.db --compdb <compdb> --changed-files kernel/a.c
   回退清全缓存全量重建。
 - **新增/删除文件不在 compile database 中**：compdb 无法知道它们，轮询报告
   `compdb_stale` 并跳过更新、记录错误；重新生成 compile database 后重启 watcher。
-- **数据库整库重写**：store 的 per-TU replace 尚未实现，所以每轮会从缓存记录重写
-  整个数据库文件（parse/analyze 增量，写入不是）。超大数据库上请把
-  `--interval`/`--debounce` 设得合理；大规模变更直接用 `ca index`。
+- **数据库原地写入**：每轮只替换受影响 TU 的行，未受影响行的 id/内容保持稳定。
+  有回调注册/间接调用时会触发回调刷新 pass（为 AST 事实重新解析 TU），否则
+  跳过；大规模变更/构建文件仍走全量重建，建议直接 `ca index`。
 - **失败隔离**：每轮异常写入 `errors`，不杀死 daemon；SIGINT/SIGTERM 在当前轮询
   结束后退出并释放锁。
 
@@ -171,9 +203,11 @@ WantedBy=multi-user.target
 
 ## 验证
 
-`ca update` 由端到端测试覆盖：dry-run 计划、变更 TU 重解析而其余走缓存、头文件
-依赖感知失效。`tests/test_e2e_includes.py` 覆盖直接/传递 include、仅依赖 TU
+`ca update` 由端到端测试覆盖：dry-run 计划、`replace_units` 原地写入、仅受影响
+TU 变化且未变 TU 行/id 不变、更新后 FTS 可搜索、回调候选与全新全量索引一致、
+header 依赖感知失效与全量回退。`tests/test_e2e_includes.py` 覆盖直接/传递 include、仅依赖 TU
 重解析（无关 TU 缓存命中）、无关 header no-op、无 include 信息回退与
-`ca watch --once` 依赖指标。`tests/test_e2e_watch.py` 覆盖基线快照、改源码后增量
+`ca watch --once` 依赖指标；`tests/test_e2e_incremental_write.py` 覆盖原地写、
+FTS、回调刷新与 watch 指标。`tests/test_e2e_watch.py` 覆盖基线快照、改源码后增量
 更新、头文件更新、compdb 缺新文件时 `compdb_stale` 跳过、deep 状态失效、锁冲突、
 失败不推进快照。另见 `tests/test_e2e_graph_mcp.py` 与 `tests/test_e2e_pipeline.py`。

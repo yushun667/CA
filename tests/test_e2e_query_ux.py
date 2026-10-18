@@ -241,7 +241,7 @@ def test_mcp_query_ux_tools(indexed: dict[str, Path]) -> None:
         return json.loads(responses[response_id]["result"]["content"][0]["text"])
 
     tools = {tool["name"] for tool in responses[2]["result"]["tools"]}
-    assert len(tools) == 18
+    assert len(tools) == 21
     assert {"batch", "brief"} <= tools
     compact = envelope(3)["data"]
     assert {"function", "counts", "deep_ready"} <= set(compact)

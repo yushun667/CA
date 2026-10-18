@@ -138,7 +138,7 @@ def test_health_query_and_stateless_mcp(db_path: Path, tmp_path: Path) -> None:
             base + "/mcp", {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
         )
         names = [tool["name"] for tool in tools["result"]["tools"]]
-        assert len(names) == 18
+        assert len(names) == 21
         assert not {"explain_function", "explain_jobs", "submit_explanation"} & set(names)
         status, call = _post_json(
             base + "/mcp",
@@ -273,7 +273,7 @@ def test_mcp_serve_url_proxy(db_path: Path, tmp_path: Path) -> None:
         assert result.returncode == 0, result.stderr[-2000:]
         responses = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
         by_id = {item["id"]: item for item in responses}
-        assert len(by_id[2]["result"]["tools"]) == 18
+        assert len(by_id[2]["result"]["tools"]) == 21
 
 
 def test_federated_serve_reports_shards(db_path: Path, tmp_path: Path) -> None:

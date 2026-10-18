@@ -161,6 +161,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="measure ParseResult pickle bytes per TU and report them on stderr",
     )
+    index.add_argument(
+        "--workspace-path", default=None,
+        help="registry: workspace root to register after a successful index",
+    )
+    index.add_argument("--workspace-name", default=None, help="registry: workspace display name")
+    index.add_argument("--project-path", default=None, help="registry: project path to register")
+    index.add_argument("--project-name", default=None, help="registry: project display name")
+    index.add_argument("--project-repo", default=None, help="registry: project repo name")
+    index.add_argument("--project-product", default=None, help="registry: project product")
+    index.add_argument("--project-board", default=None, help="registry: project board")
+    index.add_argument("--project-version", default=None, help="registry: project version")
+    index.add_argument("--variant-name", default=None, help="registry: variant name to register")
+    index.add_argument("--variant-product", default=None, help="registry: variant product")
+    index.add_argument("--variant-board", default=None, help="registry: variant board")
+    index.add_argument("--variant-version", default=None, help="registry: variant version")
+    index.add_argument(
+        "--variant-db", default=None,
+        help="registry: variant index DB (default: this --db path)",
+    )
     index.set_defaults(func=commands.cmd_index)
 
     query = sub.add_parser(
@@ -208,6 +227,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE|-",
         help="batch mode: query many symbols from a file or stdin ('-'), one per line",
+    )
+    query.add_argument(
+        "--variant", default=None,
+        help="query a registered variant's db_path (requires one --db registry database)",
     )
     query.add_argument("--json", action="store_true", dest="json_output", help="emit JSON")
     query.set_defaults(func=commands.cmd_query)
@@ -260,6 +283,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     graph.add_argument("--db-dir", default=None,
                        help="directory of shard *.db files (federated graph)")
+    graph.add_argument(
+        "--variant", default=None,
+        help="graph a registered variant's db_path (requires one --db registry database)",
+    )
     graph.set_defaults(func=commands.cmd_graph)
 
     update = sub.add_parser(
@@ -495,6 +522,62 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--compdb", default=None,
                               help="compile_commands.json for deep tools (optional)")
     serve_parser.set_defaults(func=commands.cmd_serve)
+
+    # -- workspace / project / variant registry --------------------------- #
+    for group_name, help_text in (
+        ("workspace", "register and inspect workspace metadata"),
+        ("project", "register and inspect projects inside a workspace"),
+        ("variant", "register, inspect and switch build variants"),
+    ):
+        group = sub.add_parser(group_name, help=help_text)
+        actions = group.add_subparsers(dest="registry_action", metavar="<action>")
+        actions.required = True
+        add = actions.add_parser("add")
+        add.add_argument("--db", required=True, help="registry database")
+        add.add_argument("--json", action="store_true", dest="json_output")
+        listing = actions.add_parser("list")
+        listing.add_argument("--db", required=True, help="registry database")
+        listing.add_argument("--json", action="store_true", dest="json_output")
+        remove = actions.add_parser("remove")
+        remove.add_argument("--db", required=True, help="registry database")
+        remove.add_argument("--json", action="store_true", dest="json_output")
+        target = remove.add_argument("target", help="registry id or path/name")
+        target.help = "registry id or path/name"
+        if group_name == "workspace":
+            add.add_argument("--path", required=True, help="workspace root path")
+            add.add_argument("--name", default=None, help="display name")
+            add.add_argument("--kind", default="local", help="workspace kind (default: local)")
+            listing.add_argument("--limit", type=int, default=0, help="maximum rows")
+            show = actions.add_parser("show")
+            show.add_argument("--db", required=True, help="registry database")
+            show.add_argument("--json", action="store_true", dest="json_output")
+            show.add_argument("target", help="workspace id or path")
+        elif group_name == "project":
+            add.add_argument("--workspace", required=True, help="workspace id or path")
+            add.add_argument("--path", required=True, help="project path")
+            add.add_argument("--name", default=None, help="project name")
+            add.add_argument("--repo", default=None, help="repo name")
+            add.add_argument("--product", default=None, help="product")
+            add.add_argument("--board", default=None, help="board")
+            add.add_argument("--version", default=None, help="version")
+            listing.add_argument("--workspace", default=None, help="filter by workspace")
+        else:
+            add.add_argument("--workspace", required=True, help="workspace id or path")
+            add.add_argument("--name", required=True, help="variant name")
+            add.add_argument("--product", default=None, help="product")
+            add.add_argument("--board", default=None, help="board")
+            add.add_argument("--version", default=None, help="version")
+            add.add_argument("--db-path", default=None, help="variant index database")
+            listing.add_argument("--workspace", default=None, help="filter by workspace")
+            show = actions.add_parser("show")
+            show.add_argument("--db", required=True, help="registry database")
+            show.add_argument("--json", action="store_true", dest="json_output")
+            show.add_argument("target", help="variant id or name")
+            use = actions.add_parser("use")
+            use.add_argument("--db", required=True, help="registry database")
+            use.add_argument("--json", action="store_true", dest="json_output")
+            use.add_argument("target", help="variant id or name")
+        group.set_defaults(func=commands.cmd_registry)
 
     version = sub.add_parser("version", help="print tool and schema versions")
     version.add_argument(

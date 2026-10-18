@@ -1324,6 +1324,51 @@ def run_index(
     return summary
 
 
+def collect_unit_outcomes(
+    units: Sequence[CompilationUnit],
+    *,
+    jobs: int = 8,
+    cache_dir: str | None = None,
+    analyze_scope: str = "main",
+    record_scope: str = "all",
+    transport_filter: str = "none",
+    measure_transport: bool = False,
+    header_declarations: bool | None = None,
+    metrics: dict[str, object] | None = None,
+) -> list[_UnitOutcome]:
+    """Parse/analyze ``units`` and return outcomes without touching SQLite.
+
+    Used by ``ca update``/``ca watch`` for in-place writes: callers pass only the
+    affected translation units, then apply the outcomes with
+    :meth:`SqliteStore.replace_units`. ``_iter_results`` already implements
+    worker fan-out, cache hits, retries and analyze-scope ownership; this wrapper
+    only handles the ``CA_HEADER_DECLARATIONS`` environment around the run.
+    """
+
+    previous = os.environ.get("CA_HEADER_DECLARATIONS")
+    if header_declarations is not None:
+        os.environ["CA_HEADER_DECLARATIONS"] = "1" if header_declarations else "0"
+    try:
+        return list(
+            _iter_results(
+                units,
+                int(jobs),
+                cache_dir,
+                analyze_scope,
+                transport_filter,
+                measure_transport,
+                metrics,
+                record_scope,
+            )
+        )
+    finally:
+        if header_declarations is not None:
+            if previous is None:
+                os.environ.pop("CA_HEADER_DECLARATIONS", None)
+            else:
+                os.environ["CA_HEADER_DECLARATIONS"] = previous
+
+
 def index_repository(
     repo_root: str,
     db_path: str,

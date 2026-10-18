@@ -32,6 +32,21 @@ non-destructive: ``open()`` applies ``CREATE TABLE IF NOT EXISTS`` and
 ``finalize()`` adds indexes, so a phase-2 database stays queryable before
 ``finalize()`` and gains the new tables/indexes afterwards.
 
+Incremental maintenance (``ca.store.incremental``; used by ``ca update`` /
+``ca watch``): ``remove_units(tu_ids) -> {table: deleted_rows}`` cascades one or
+more translation units out of every dependent table in one transaction
+(tus/functions/types/fields/calls/CFG/branches/assignments/returns/resource_ops/
+findings/call_targets/callback registrations+links/deep_status/tu_includes) and
+maintains ``functions_fts`` incrementally; ``replace_units(units, *,
+deep_ready=True) -> {tu_ids, removed, added, fts_deleted, fts_inserted,
+deep_ready}`` deletes and re-inserts TUs in one transaction (units are
+``{parse, analyses, callbacks, include_paths}`` mappings or
+``(parse_result, analyses[, callbacks[, include_paths]])`` tuples);
+``replace_unit(parse_result, analyses=(), *, callbacks=(), include_paths=None,
+deep_ready=True)`` is the single-TU wrapper. No ``finalize()`` full rebuild is
+required; FTS5 rows are updated with the external-content delete/insert
+commands when ``meta.fts_ready='1'``. Unknown TU ids are idempotent no-ops.
+
 Query result keys (CLI/benchmark contract, flattened ``Sloc``):
 ``file, line, col, end_line, end_col``.
 
@@ -125,6 +140,7 @@ from ca.store import (
     callbacks,
     deep,
     graph,
+    incremental,
     jobs as job_queue,
     migrations,
     queries,
@@ -317,6 +333,39 @@ class SqliteStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    # ------------------------------------------------------------------ #
+    # Incremental TU maintenance (ca update / ca watch)
+    # ------------------------------------------------------------------ #
+    def remove_units(self, tu_ids: Any) -> dict[str, int]:
+        """Cascade-delete all rows owned by ``tu_ids`` (atomic, idempotent)."""
+
+        return incremental.remove_units(self, tu_ids)
+
+    def replace_units(self, units: Any, *, deep_ready: bool = True) -> dict[str, Any]:
+        """Delete + re-insert TUs in one transaction (incremental write-back)."""
+
+        return incremental.replace_units(self, units, deep_ready=deep_ready)
+
+    def replace_unit(
+        self,
+        parse_result: Any,
+        analyses: Any = (),
+        *,
+        callbacks: Any = (),
+        include_paths: Any = None,
+        deep_ready: bool = True,
+    ) -> dict[str, Any]:
+        """Single-TU wrapper around :meth:`replace_units`."""
+
+        return incremental.replace_unit(
+            self,
+            parse_result,
+            analyses,
+            callbacks=callbacks,
+            include_paths=include_paths,
+            deep_ready=deep_ready,
+        )
+
     def add_call_targets(self, records: Any) -> int:
         """Insert candidate call edges directly (post-processing passes)."""
 
@@ -328,6 +377,16 @@ class SqliteStore:
             return
         self._connection.execute("COMMIT")
         self._in_transaction = False
+
+    def rollback(self) -> None:
+        """Roll back the current explicit transaction (idempotent no-op)."""
+
+        if not self._in_transaction or self._connection is None:
+            return
+        try:
+            self._connection.execute("ROLLBACK")
+        finally:
+            self._in_transaction = False
 
     def finalize(self) -> None:
         """Finish ingest: placeholder callees, secondary indexes, ANALYZE."""
@@ -466,6 +525,18 @@ class SqliteStore:
 
     def get_variant(self, variant_id: str) -> dict[str, Any] | None:
         return self._require_registry().get_variant(variant_id)
+
+    def set_active_variant(self, workspace_id: str, variant_id: str) -> str | None:
+        return self._require_registry().set_active_variant(workspace_id, variant_id)
+
+    def remove_variant(self, variant_id: str) -> bool:
+        return self._require_registry().remove_variant(variant_id)
+
+    def remove_project(self, project_id: str) -> bool:
+        return self._require_registry().remove_project(project_id)
+
+    def remove_workspace(self, identifier: str) -> dict[str, int] | None:
+        return self._require_registry().remove_workspace(identifier)
 
     def workspace_summary(self, identifier: str) -> dict[str, Any]:
         return self._require_registry().workspace_summary(identifier)

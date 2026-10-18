@@ -142,6 +142,52 @@ PYTHONPATH=src .venv/bin/python -m ca index \
 不会中断整体运行：失败会列在摘要里，只要至少一个 TU 解析成功就返回 `0`；返回
 `1` 表示参数/运行错误，或没有任何 TU 解析成功。
 
+## Workspace、project 与 variant
+
+workspace 表示一棵签出的多仓树；project 是其中的仓库/子树；variant 是可构建的
+配置（product/board/version），可指向自己的索引数据库。`workspaces`/`projects`/
+`variants` 三张表位于索引数据库（schema v8），只是元数据，查询不会创建它们，也
+不会改变代码记录。
+
+```sh
+# 在已有索引 DB 中登记元数据
+ca workspace add --db ca.db --path /src/openharmony --name OpenHarmony
+ca project add --db ca.db --workspace OpenHarmony --path foundation/communication/dsoftbus
+ca variant add --db ca.db --workspace OpenHarmony --name opi5plus     --product opi5plus --board rk3588 --version OpenHarmony-5.0.0-Release     --db-path /src/openharmony/.ca/index-opi5plus.db
+ca variant use --db ca.db opi5plus          # 在 registry 中标记 active
+ca workspace list --db ca.db --json
+ca project list --db ca.db --workspace OpenHarmony --json
+ca variant list --db ca.db --json
+ca workspace show OpenHarmony --db ca.db --json
+ca variant remove opi5plus --db ca.db
+```
+
+`ca index` 也可以把本次结果登记进刚建好的数据库：
+
+```sh
+ca index --repo /src/openharmony --db .ca/index-opi5plus.db   --compdb out/rk3588/compile_commands.json --jobs 6   --workspace-path /src/openharmony --workspace-name OpenHarmony   --project-path foundation/communication/dsoftbus --project-name dsoftbus   --variant-name opi5plus --variant-product opi5plus --variant-board rk3588   --variant-version OpenHarmony-5.0.0-Release
+```
+
+registry 参数在索引前校验（variant 选项必须带 `--variant-name`；project/variant
+选项必须带 `--workspace-path`），登记失败会在索引写完后报错。`--variant-db` 默认
+为本次索引的 DB。
+
+query/graph 可通过 registry 的 variant 数据库路由；这两个命令的 `--db` 是
+registry DB，且只能传一个：
+
+```sh
+ca query functions kalloc --db .ca/registry.db --variant opi5plus --json
+ca graph --from kalloc --db .ca/registry.db --variant var:... --depth 1 --format json
+```
+
+目标库以只读方式打开（`PRAGMA query_only=ON`）；variant 未注册、db_path 为空或
+文件不存在都会报错。MCP 暴露只读 `workspaces`/`projects`/`variants` 工具（共 21
+个），读取当前 MCP 数据库的 registry。`ca serve` 另有 `GET /api/registry`
+（workspaces/projects/variants + `active_variant` + `registry_source`）与
+`POST /api/registry/active {"variant_id": "var:..."}`：在锁内先打开新
+QueryService，再原子替换查询/MCP 会话；只切换内存，失败保持旧库；registry 数据源
+固定为启动时的 DB，因此切换后 selector 数据不变。
+
 ## 查询
 
 所有查询都接受 `--db`、可选 `--limit N` 和 `--json`：
@@ -391,8 +437,8 @@ parse 约 2–5s/TU CPU，之后还有分析；建议分层从少量 TU 开始�
 19,060 个分支、28,037 条赋值、14,286 条返回、1,457 个资源操作、18 条 findings。
 每个内核 TU 会展开大量头文件，100 TU 即触发约 14 万次函数分析；该规模下分析、
 写入与内存（父进程峰值约 6 GB）成为主要成本。全量 1,682 TU 属于数十分钟级批处理，
-适合夜间 CI 而非交互使用。增量重建对未变化代码树的重复跑有效，但修改头文件后仍需
-全量重建。
+适合夜间 CI 而非交互使用。增量重建对未变化代码树有效；header 变更通过
+`tu_includes` 只重解析依赖 TU，`ca update`/`ca watch` 原地替换行。
 
 ### OpenHarmony 规模验证
 
@@ -451,9 +497,9 @@ jobs=8 时 191.8s wall / 3.39 CPU/TU / 7.53MB pickle/TU / 358.9MB DB；jobs=20 �
 - **不建模跨函数数据流**：泄漏结论描述单函数内的资源路径，不代表函数之间
   资源所有权的转移。
 - **分析失败按函数隔离、解析失败按 TU 隔离。** 部分结果请查看摘要中的错误行。
-- **增量缓存只跟踪 TU 主源文件与编译参数。** 它复用未变化 TU 的解析/分析结果，
-  但不检测头文件变化：改过头文件后请不加 `--incremental` 全量重建。数据库本身
-  每次 `index` 仍会重建，只是跳过昂贵的 parse/analyze 工作。
+- **增量缓存跟踪 TU 主源文件与编译参数；** header 变更通过 `tu_includes` 映射
+  到依赖 TU，`ca update`/`ca watch` 只原地替换受影响 TU 的行（不重建整库）。
+  无 include 事实的旧库和构建文件变更回退全量重建；普通 `ca index` 仍整库构建。
 - **单写者。** 并行 worker 只做解析/分析，SQLite 写入在父进程完成。
 - 索引只覆盖 `--repo` 下的文件，且只覆盖 compile database 列出的翻译单元
   （合成模式下为发现的 `*.c`）。

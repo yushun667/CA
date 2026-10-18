@@ -63,6 +63,9 @@ slicing (queries are indexed, so this stays cheap for modest offsets).
 | `brief` | `symbol` (required) | compact summary: signature/location, caller/callee counts, branch/return/resource counts, key condition, deep_ready |
 | `batch` | `kind` (required), `symbols` or `symbols_file`, `limit` | one call for several symbols; per-symbol results in stable order |
 | `stats` | – | table row counts, database size, schema version, `callbacks` registration/link stats |
+| `workspaces` | `workspace` (id/path, optional), `limit`, `offset` | registered workspaces (list or one workspace record) |
+| `projects` | `workspace` (required), `limit`, `offset` | registered projects in a workspace |
+| `variants` | `workspace` (optional), `variant` (id/name, optional), `limit`, `offset` | registered build variants (list, or one with its workspace) |
 | `callbacks` | `path` (object_path prefix), `field`, `module`, `limit` | cross-TU callback registration facts (object path, target function, registration kind, evidence) |
 | `ensure_deep` | `symbols` (required), `jobs`, `wait` (default true) | L1 lazy deep analysis: parse owning TUs, analyze the requested functions, mark deep_ready; per-symbol status/latency/facts |
 | `deep_status` | `symbols` (optional) | deep_ready coverage (`total_functions/deep_ready/pending/failed/coverage`) and per-symbol status |
@@ -72,7 +75,7 @@ slicing (queries are indexed, so this stays cheap for modest offsets).
 
 Instead of opening the database per process, agents can proxy stdio MCP to a
 long-lived backend: `ca mcp --serve-url http://127.0.0.1:8765`. The backend
-`/mcp` is a stateless MCP HTTP JSON-RPC endpoint with the same 18 read-only tools
+`/mcp` is a stateless MCP HTTP JSON-RPC endpoint with the same 21 read-only tools
 as `ca mcp --db`; there is no session state, server-initiated request or AI
 explanation feature.
 
@@ -83,7 +86,7 @@ over all shard databases in the directory; every merged row adds a `shard`
 field and `stats` returns aggregate totals plus `shards`/`skipped`. `graph`
 merges nodes/edges across shards and candidate edges keep
 `source/candidate/kind` plus `shard`; dashed candidate edges are the possible-target set. The server still exposes the
-same 18 tools. Write-oriented deep tools are rejected with
+same 21 tools. Write-oriented deep tools are rejected with
 `FEDERATED_READ_ONLY` because deep state is shard-local: start a single-`--db`
 server for `ensure_deep`/`prewarm`; `deep_status` returns read-only per-symbol
 `deep_ready`/`shard` information. Unreadable shard files are skipped (with

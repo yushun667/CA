@@ -35,6 +35,15 @@ repositories, not a phase-3 acceptance gate.
 - Header-dependency-aware incremental: `tu_includes` transitive closure,
   `ca update`/`ca watch` invalidate only dependent TUs; measured 6 dependent TUs
   per header, unrelated headers no-op, MCP/CLI/graph verified.
+- In-place incremental DB writes: `ca update`/`ca watch` use
+  `remove_units`/`replace_units` for affected TUs (untouched rows keep ids),
+  incremental FTS5 maintenance, callback-candidate refresh when registrations or
+  indirect calls exist, and `db_write`/`incremental_rows`/`callback_refresh`
+  cycle metrics; build files/old indexes fall back to full rebuild.
+- Workspace/project/variant registry: CLI CRUD + index registration, query/graph
+  `--variant` routing to registered read-only DBs, MCP `workspaces`/`projects`/
+  `variants` (21 tools), serve `GET /api/registry` + `POST /api/registry/active`
+  atomic in-memory switching; UI selector is task-47.
 - Functional verification on dsoftbus (1,287 TU), camera (475 TU) and combined
   (1,762 TU): baseline stats/search/detail/graph, MCP 18 tools, virtual/indirect
   candidates and header-incremental update/watch all pass; write-up in
@@ -42,8 +51,8 @@ repositories, not a phase-3 acceptance gate.
 
 ## Deferred / optional
 
-- Optional workspace/project/variant CLI/MCP selector; the store model exists
-  but has no user-facing surface. Not a phase-3 gate.
+- Optional workspace/project/variant UI selector (task-47); CLI/MCP/serve
+  registry APIs are implemented. Not a phase-3 gate.
 - Full 8-shard acceptance remains deferred by user direction; S2/S6/S8
   completion and the final acceptance report are not phase-3 functional gates.
 

@@ -4,16 +4,17 @@
 
 ## 关键文件（实现后登记）
 
-- `schema.sql`：25 张表；列对应 `ca.core.schema`（sloc 平铺、tuple JSON）；FTS 由 finalize 建。
-- `writer.py`：批量写、`finalize()`（占位/41 索引/FTS5/ANALYZE/深析回填/tu_includes）；`STORE_SCHEMA_VERSION=8`。
+- `schema.sql`：25 张表；列对应 `ca.core.schema`（sloc 平铺）；FTS 由 finalize 建。
+- `writer.py`：批量写、`finalize()`（占位/索引/FTS5/深析回填）；`STORE_SCHEMA_VERSION=8`。
 - `migrations.py`：v8 删 confidence（DROP→安全重建→保留旧列+warning；open 幂等调用）。
-- `queries.py`：查询/导出；callers/callees 合并 direct/call_target/virtual（natural-key/reason 合并，无 confidence）。
-- `graph.py`：图 BFS/路径/环；`virtual_dispatch.py`：虚分派+virtual_candidate。
-- `deep.py`：deep_status；`callbacks.py`：callback_registrations/links、add_call_targets。
-- `federated.py`：FederatedStore（shard 只读并联/去重/分页）。
+- `queries.py`：查询/导出；callers/callees 合并 direct/call_target/virtual（natural-key/reason 合并）。
+- `graph.py`：图 BFS/路径/环；`virtual_dispatch.py`：虚分派。
+- `deep.py`：deep_status；`callbacks.py`：callbacks/links。
+- `federated.py`：FederatedStore（shard 只读）。
 - `workspace.py`：三表 CRUD；`sqlite_store.py`：生命周期/迁移/API 委托；docstring 是键名契约。
+- `incremental.py`：`remove_units`/`replace_units`/`replace_unit`（按 TU 级联删/单事务替换 + FTS5 增量维护）。
 - `jobs.py`：JobQueue（jobs/job_events、claim/lease、重放、open）。
-- `tests/test_store*.py`：round-trip/FTS/graph/deep/callbacks/virtual/jobs/federated/迁移。
+- `tests/test_store*.py`：round-trip/FTS/graph/deep/callbacks/virtual/jobs/federated/incremental/迁移。
 
 ## 局部规则
 

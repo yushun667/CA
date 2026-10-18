@@ -29,6 +29,14 @@ Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上�
   combined 语料 3,784 条候选边覆盖 1,531 个 call（20%）。
 - header 依赖感知增量：`tu_includes` 传递闭包，`ca update`/`ca watch` 只失效
   依赖 TU；实测每个 header 6 个依赖 TU、无关 header no-op，MCP/CLI/graph 验证。
+- 数据库原地增量写入：`ca update`/`ca watch` 用 `remove_units`/`replace_units`
+  只替换受影响 TU（未变行 id 保持），FTS5 增量维护；有回调注册/间接调用时刷新
+  候选；cycle 指标 `db_write`/`incremental_rows`/`callback_refresh`；构建文件/
+  旧库回退全量重建。
+- workspace/project/variant registry：CLI CRUD + index 注册、query/graph
+  `--variant` 路由到已注册只读库、MCP `workspaces`/`projects`/`variants`
+  （21 工具）、serve `GET /api/registry` + `POST /api/registry/active` 原子内存
+  切换；UI selector 由 task-47 接。
 - OH dsoftbus（1,287 TU）、camera（475 TU）与 combined（1,762 TU）功能验证：
   stats/search/detail/graph、MCP 18 工具、virtual/indirect 候选与 header 增量
   update/watch 全部通过；见 docs/functional-verification.zh.md。

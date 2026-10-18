@@ -17,6 +17,7 @@
 ## 局部规则
 
 - UI 不含 AI 解释入口/请求（该功能已删除）；远程模式只保留薄客户端 `/api/ui` 探测、连接徽章/手动重试与 `/events` 透传（其它 jobs 用），代理 POST 仅放行 `/api/jobs*`；详见 `docs/ui.md`。
+- workspace/project/variant 选择器：读 `GET /api/registry`；唯一写操作是 `POST /api/registry/active`（仅切后端内存查询库）。URL `?variant=` 优先、localStorage 只提示“最近使用”；无 registry/embedded 时隐藏；切换失败回滚且不改视图。
 - 改 API 或页面行为同步 `docs/ui.md`/`.zh.md`/`.i18n.yaml` 与 `docs/usage.*` 入口。
 - 前端不引入构建工具或外部依赖；所有数据文本必须转义后再插入 DOM。
 - 测试：`.venv/bin/python -m pytest tests/test_ui.py -q`；手工验证 `ca ui --db <db>`。

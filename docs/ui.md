@@ -64,8 +64,9 @@ forwards queries and events to a long-lived [`ca serve`](server.md) process:
 - `GET /api/ui` (local) reports `{mode:"remote", serve_url, features}`; older
   embedded servers return `{mode:"embedded"}`.
 - Query endpoints (`/api/search`, `/api/function`, `/api/graph`, `/api/cfg`,
-  `/api/source`, …) are proxied verbatim; non-whitelisted POSTs
-  return `405 READ_ONLY`, and a query timeout is 30 s. If the backend is down,
+  `/api/source`, `/api/registry`, …) are proxied verbatim; the only POSTs the UI
+  proxy forwards are `/api/jobs*` and `/api/registry/active` (everything else
+  returns `405 READ_ONLY`), and a query timeout is 30 s. If the backend is down,
   the UI answers `502 SERVE_UNAVAILABLE` with the standard error envelope.
 - `GET /events` remains available through the proxy (no buffering, heartbeat,
   `Last-Event-ID` replay) for other job types/future clients.
@@ -76,6 +77,29 @@ forwards queries and events to a long-lived [`ca serve`](server.md) process:
 - Everything stays read-only; the UI proxy cannot write to the index. Remote
   `--serve-url` values should be loopback or a trusted tunnel; the backend has no
   authentication in this milestone.
+
+## Workspace / project / variant selection
+
+When the backend exposes the registry API (`ca serve` started on a registry
+database) the toolbar shows a workspace/project/variant selector:
+
+- Workspace and project metadata are read-only; the variant `<select>` lists
+  every registered variant as `name · product · board · version`, uses its
+  `db_path` as tooltip, marks the active one and disables variants without a
+  readable database (`no database built`).
+- Choosing a variant sends `POST /api/registry/active {variant_id}` and switches
+  the backend's read-only query database. The page then refreshes the header,
+  statistics, search results, the open function's detail, call graph, CFG and
+  source windows while keeping the current tab. A failed switch shows an error
+  and leaves the current view unchanged.
+- The choice is remembered in `localStorage` (`ca.ui.registry.variant`) and in
+  the shareable `?variant=<id>` URL parameter. On load an explicit `?variant=`
+  is applied once (the URL wins); a preference stored only in `localStorage` is
+  offered as a `Recently used` button and never switches silently.
+- The selector is hidden when the endpoint is missing (embedded `ca ui --db`,
+  older `ca serve`), so the previous behaviour is unchanged. Registry reads
+  always come from the backend's initial registry database; switching a variant
+  does not change the registry list.
 
 ## Pages
 
@@ -217,6 +241,8 @@ All endpoints return the same envelope and are `GET`-only:
 | `GET /api/callbacks` | `path` (prefix), `field`, `module`, `kind`, `limit`, `offset` | registration facts (target, evidence, registration kind) |
 | `GET /api/source` | `symbol` (required), `context` (0–10, default 3) | read-only source window: `{symbol, function{id,name,qualified_name,kind,file,line,end_line,signature}, file, language, start, end, total_lines, function_start, function_end, context, truncated, lines[{line,text}], shard, path, repo_root}` |
 | `GET /api/cfg` | `symbol` (required) | read-only control-flow graph: `{symbol, function{id,name,qualified_name,kind,file,line,end_line}, deep_ready, shard, federated, blocks[], edges[], branches[], truncated, stats}`; blocks carry `index/kind/terminator/line/end_line/statement_count`, branch annotations (`condition`, `branch_kind`, `true_block`, `false_block`) and `is_entry`/`is_exit`; edges carry a display `label` (`true`/`false` for branch edges) |
+| `GET /api/registry` | — | workspace/project/variant registry: `{available, registry_db, workspaces[], projects[], variants[{id, workspace_id, name, product, board, version, db_path, db_exists, is_active}], active_variant_id, active_variant?, database{paths,federated}}`; always read from the backend's initial registry database, independent of the active variant |
+| `POST /api/registry/active` | JSON body `{variant_id}` | switch the backend's active read-only query database: `200 {active_variant_id, active_variant, variant, database, health}`; errors 400 `INVALID_ARGUMENT`, 404 `NOT_FOUND`, 503 `DB_UNAVAILABLE`; atomic (old database kept on failure), in-memory only (not persisted, no database writes) |
 | `GET /api/branches`, `/api/assignments`, `/api/returns`, `/api/resources` | `symbol` (required) | per-function fact rows (additive convenience endpoints) |
 
 `/api/cfg` resolves the function through the normal detail query and returns its

@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: current-phase.md
-  sha256: cf09f6deeacb1a647e02586213893cd11441828511db6a7873be9f8da56d18be
+  sha256: be9e5e92e059d1df36d260042a61050f367936579a29fb07451a733c0b2b5537
 zh:
   file: current-phase.zh.md
-  sha256: 761c3d9bbd91d9fe72c4641d6691690961b345bfd9bfdedab5de8629cd6c7298
+  sha256: e67ee8ad2df8187413d4b969eef1c207d3938fea592956fc1995b5310fbb4cc7

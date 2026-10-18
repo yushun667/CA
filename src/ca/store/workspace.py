@@ -224,6 +224,63 @@ class WorkspaceRegistry:
         )
         return identifier
 
+    def set_active_variant(self, workspace_id_value: str, variant_identifier: str) -> str | None:
+        """Mark one variant active and clear the flag on its siblings.
+
+        Returns the variant id, or ``None`` when it does not belong to the
+        workspace. The registry is metadata-only, so this does not touch index
+        rows or databases.
+        """
+
+        row = self._conn.execute(
+            "SELECT id FROM variants WHERE id = ? AND workspace_id = ?",
+            (variant_identifier, workspace_id_value),
+        ).fetchone()
+        if row is None:
+            return None
+        self._conn.execute(
+            "UPDATE variants SET is_active = CASE WHEN id = ? THEN 1 ELSE 0 END "
+            "WHERE workspace_id = ?",
+            (variant_identifier, workspace_id_value),
+        )
+        return str(row[0])
+
+    def remove_variant(self, variant_identifier: str) -> bool:
+        """Delete a variant by ``var:`` id; unknown ids are a no-op."""
+
+        cursor = self._conn.execute(
+            "DELETE FROM variants WHERE id = ?", (variant_identifier,)
+        )
+        return cursor.rowcount > 0
+
+    def remove_project(self, project_identifier: str) -> bool:
+        """Delete a project by ``prj:`` id; unknown ids are a no-op."""
+
+        cursor = self._conn.execute(
+            "DELETE FROM projects WHERE id = ?", (project_identifier,)
+        )
+        return cursor.rowcount > 0
+
+    def remove_workspace(self, identifier: str) -> dict[str, int] | None:
+        """Delete a workspace and its projects/variants by id or path.
+
+        Returns the deleted row counts, or ``None`` when the workspace does not
+        exist. ``variants.db_path`` files are never touched by the registry.
+        """
+
+        workspace = self.get_workspace(identifier)
+        if workspace is None:
+            return None
+        identifier = workspace["id"]
+        variants = self._conn.execute(
+            "DELETE FROM variants WHERE workspace_id = ?", (identifier,)
+        ).rowcount
+        projects = self._conn.execute(
+            "DELETE FROM projects WHERE workspace_id = ?", (identifier,)
+        ).rowcount
+        self._conn.execute("DELETE FROM workspaces WHERE id = ?", (identifier,))
+        return {"workspaces": 1, "projects": int(projects), "variants": int(variants)}
+
     # ------------------------------------------------------------------ #
     # Reads
     # ------------------------------------------------------------------ #

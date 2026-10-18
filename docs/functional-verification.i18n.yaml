@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: functional-verification.md
-  sha256: f29229654dc496e9d8bdcf33fdd9a66ded760f794e177f3ade88c170496098c8
+  sha256: e00b8a0a7670ba4a3aba12f4cdf4127637e29b2b3245f09142c922bed45580f2
 zh:
   file: functional-verification.zh.md
-  sha256: 27d59e18530675d4bd7a16d17640113ceef14a1d26b4fc1720ba113f4f5f0c4e
+  sha256: d0b4c68918177d54fc61e34c9b190a9dd8fd1dc7e6fd9348dfca83a648e2e270

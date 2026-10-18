@@ -59,6 +59,9 @@ scripts/bootstrap.sh                       # venv + 固定依赖 + editable 安�
 | `brief` | `symbol`（必填） | 紧凑摘要：签名/位置、调用者/被调者计数、分支/返回/资源计数、关键条件、deep_ready |
 | `batch` | `kind`（必填）、`symbols` 或 `symbols_file`、`limit` | 一次查询多个符号；按稳定顺序返回逐符号结果 |
 | `stats` | – | 各表行数、数据库大小、schema 版本，以及 `callbacks` 注册/连边统计 |
+| `workspaces` | `workspace`（id/path，可选）、`limit`、`offset` | 已注册 workspace（列表或单个记录） |
+| `projects` | `workspace`（必填）、`limit`、`offset` | workspace 下已注册 project |
+| `variants` | `workspace`（可选）、`variant`（id/name，可选）、`limit`、`offset` | 已注册 build variant（列表或单个及其 workspace） |
 | `callbacks` | `path`（object_path 前缀）、`field`、`module`、`limit` | 跨 TU 回调注册事实（对象路径、目标函数、注册 kind、evidence） |
 | `ensure_deep` | `symbols`（必填）、`jobs`、`wait`（默认 true） | L1 按需深析：解析所属 TU、分析请求函数、标记 deep_ready；返回每符号状态/延迟/事实 |
 | `deep_status` | `symbols`（可选） | deep_ready 覆盖率（`total_functions/deep_ready/pending/failed/coverage`）与每符号状态 |
@@ -68,7 +71,7 @@ scripts/bootstrap.sh                       # venv + 固定依赖 + editable 安�
 
 agent 可通过 stdio 代理连接常驻后端，而不必每进程打开数据库：
 `ca mcp --serve-url http://127.0.0.1:8765`。后端 `/mcp` 是无状态 MCP HTTP
-JSON-RPC 端点，工具与 `ca mcp --db` 相同的 18 个只读工具；没有会话状态、服务端
+JSON-RPC 端点，工具与 `ca mcp --db` 相同的 21 个只读工具；没有会话状态、服务端
 反向请求或 AI 解释功能。
 
 ### 联邦模式（`--db-dir`）
@@ -76,7 +79,7 @@ JSON-RPC 端点，工具与 `ca mcp --db` 相同的 18 个只读工具；没有�
 `ca mcp --db-dir <dir>`（或重复 `--db`）以只读联邦方式暴露目录下所有 shard 数据库；
 合并后的每行增加 `shard` 字段，`stats` 返回汇总 totals 加 `shards`/`skipped`；`graph`
 跨 shard 合并节点/边，候选边保留 `source/candidate/kind` 并带 `shard`；候选虚线边表示可能目标集合。
-server 仍暴露同样 18 个工具。写型深析工具返回 `FEDERATED_READ_ONLY`（深析状态是
+server 仍暴露同样 21 个工具。写型深析工具返回 `FEDERATED_READ_ONLY`（深析状态是
 分片本地的）：`ensure_deep`/`prewarm` 需用单 `--db` server；`deep_status` 以只读方式
 返回每个符号的 `deep_ready`/`shard` 信息。不可读 shard 跳过并 stderr 警告；没有可读
 shard 时 server exit 1。shard 可原地提供（带 `-wal`/`-shm`）或单文件副本（只读
@@ -202,7 +205,7 @@ ssh -N -L 8765:127.0.0.1:8765 yu@192.168.0.100
 
 可用
 `python scripts/verify_shard_mcp.py --db <shard.db> --repo <repo> --compdb <shard.json> --out <report.json>`
-快速验证分片：脚本用纯 stdlib 客户端驱动真实 stdio server（18 个工具、
+快速验证分片：脚本用纯 stdlib 客户端驱动真实 stdio server（21 个工具、
 `deep_status`、`ensure_deep` 首次与命中延迟、`graph`）以及 HTTP server
 （`/health` + `POST /mcp` tools/list）。候选边抽样用
 `python scripts/sample_candidates.py --db <shard.db> ...`（总量、分层样本、

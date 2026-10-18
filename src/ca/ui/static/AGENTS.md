@@ -20,4 +20,5 @@
 - 三区布局尺寸/折叠状态存 `localStorage` 的 `ca.ui.layout`；改布局、splitter 或
   快捷键时同步 `docs/ui.*` 与 `tests/test_ui.py` 的静态断言。
 - 远程模式代码（`/api/ui` 模式探测、连接徽章/手动重试）不得引入外部脚本；UI 不含 AI 解释 tab/请求，前端不使用 EventSource。
+- 变体选择器（`registry-bar`/`variant-select`）仅在 registry 可用时显示；切换 POST `/api/registry/active` 后刷新数据视图；URL/localStorage 与 i18n 规则见 docs/ui。
 - 改样式或交互后手工用 `ca ui --db <db>` 在浏览器验证亮/暗色、窄屏与中英切换。

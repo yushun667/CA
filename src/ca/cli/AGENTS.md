@@ -10,7 +10,8 @@
 - `serve`/`cmd_serve`（见 `ca/server/`）：常驻后端；`ca mcp --serve-url` 代理 stdio 到 `/mcp`。
 - `format.py`：表格/JSON/KV 输出与 `IndexSummary` 渲染；列优先 schema 字段名，缺失回退行键。
 - `graph.py`：调用图遍历（`query_call_graph` 优先，旧库回退 calls BFS）、稳定排序/环/上限、DOT；CLI/MCP 共用。
-- `mcp.py`：MCP JSON-RPC server（stdio/HTTP）、18 个只读工具、`--serve-url` 代理、稳定信封/错误码。
+- `mcp.py`：MCP JSON-RPC server（stdio/HTTP）、21 个只读工具、`--serve-url` 代理、稳定信封/错误码。
+- `registry.py`：workspace/project/variant registry CLI、index 注册选项、query/graph `--variant` 路由；见 `docs/usage.md`。
 - `watcher.py`：离线/增量规划辅助（`plan_changes`/`snapshot`/`diff_snapshots`）。
 - `watch.py`：`ca watch` 轮询增量 daemon（状态/锁/防抖/重试/`compdb_stale` 跳过、header include 依赖感知），见 `docs/incremental.md`。
 - `callbacks.py`：跨 TU 回调后处理（`ca resolve-callbacks`/索引 `--resolve-callbacks`）：提取注册事实/间接调用点、写 callback 表。

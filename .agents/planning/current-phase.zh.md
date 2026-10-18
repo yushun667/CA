@@ -51,7 +51,7 @@ Status: **阶段 3 功能范围已完成（2026-10-18）**。下一步确认阶�
 - **header 依赖增量**：解析时记录每个 TU 的直接 include，持久化 TU→header 依赖图；
   `update`/`watch` 把变更文件映射到依赖 TU，只失效并重解析这些 TU。功能测试：改 header
   会重解析依赖者，改无关 header 不重解析。
-- **workspace/variant 入口（可选）**：CLI/MCP 增加 project/variant 过滤；无需改存储。
+- **workspace/variant 入口**：已实现 CLI workspace/project/variant 命令、index 注册选项、query/graph `--variant` 路由、MCP `workspaces`/`projects`/`variants`（21 工具）与 serve `GET /api/registry` + `POST /api/registry/active`；UI selector 由 task-47 接。
 - **功能验证**：只用 OH dsoftbus 与 camera 仓库，不跑全量 8-shard 验收；在 README/文档
   记录命令、数字与限制。
 

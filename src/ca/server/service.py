@@ -8,6 +8,8 @@ jobs are generic background tasks consumed through ``/api/jobs``/``/events``.
 
 from __future__ import annotations
 
+import sqlite3
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,9 +45,16 @@ class ServeService:
 
     def __init__(self, config: ServeConfig) -> None:
         self.config = config
+        self._lock = threading.RLock()
         self.query: QueryService = resolve_service(config.db_values, config.db_dir)
         self.paths = list(self.query.paths)
         self.federated = bool(self.query.federated)
+        # The registry is fixed to the startup database: switching an active
+        # variant must not make GET /api/registry read a different (possibly
+        # empty) registry from the new variant DB.
+        self.registry_path: str = self.paths[0] if self.paths else ""
+        self.active_variant: dict[str, Any] | None = None
+        self._detect_initial_active()
         self.started_at = time.time()
         self.state_db = self._resolve_state_db()
         self.jobs = JobService(self.state_db)
@@ -88,10 +97,167 @@ class ServeService:
                 "federated": self.federated,
                 "state_db": self.state_db,
             },
+            "variant": self.active_variant,
+            "registry_source": self.registry_path,
             "jobs": self.jobs.job_stats(),
             "mcp_endpoint": "/mcp",
             "events_endpoint": "/events",
         }
+
+    # -- workspace registry + active variant ---------------------------- #
+    def _read_registry(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Read workspaces/projects/variants from the fixed registry DB."""
+
+        from ca.store.workspace import WorkspaceRegistry
+
+        path = self.registry_path
+        if not path or not Path(path).expanduser().is_file():
+            return [], [], []
+        connection = sqlite3.connect(f"file:{Path(path).expanduser()}?mode=ro", uri=True, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+        try:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if not {"workspaces", "projects", "variants"} <= tables:
+                return [], [], []
+            registry = WorkspaceRegistry(connection)
+            workspaces = registry.list_workspaces()
+            projects: list[dict[str, Any]] = []
+            variants: list[dict[str, Any]] = []
+            base = Path(path).expanduser().resolve().parent
+            for workspace in workspaces:
+                projects.extend(registry.list_projects(workspace["id"]))
+                for variant in registry.list_variants(workspace["id"]):
+                    raw = str(variant.get("db_path") or "").strip()
+                    target = Path(raw).expanduser() if raw else None
+                    if target is not None and not target.is_absolute():
+                        target = base / target
+                    item = dict(variant)
+                    item["db_exists"] = bool(target and target.is_file())
+                    variants.append(item)
+            return workspaces, projects, variants
+        except sqlite3.Error:
+            return [], [], []
+        finally:
+            connection.close()
+
+    def _detect_initial_active(self) -> None:
+        """Mark a registered variant active when it points at the startup DB."""
+
+        current = {
+            str(Path(path).expanduser().resolve()) for path in self.paths
+        }
+        if not current:
+            return
+        try:
+            _workspaces, _projects, variants = self._read_registry()
+        except Exception:
+            return
+        base = Path(self.registry_path).expanduser().resolve().parent
+        for variant in variants:
+            raw = str(variant.get("db_path") or "").strip()
+            if not raw:
+                continue
+            target = Path(raw).expanduser()
+            if not target.is_absolute():
+                target = base / target
+            if str(target.resolve()) in current:
+                self.active_variant = dict(variant)
+                return
+
+    def registry(self) -> dict[str, Any]:
+        """Registry snapshot used by the UI selector (read-only, fixed source)."""
+
+        with self._lock:
+            workspaces, projects, variants = self._read_registry()
+            active = dict(self.active_variant) if self.active_variant else None
+            return {
+                "workspaces": workspaces,
+                "projects": projects,
+                "variants": variants,
+                "active_variant": active,
+                "active_variant_id": (active or {}).get("id"),
+                "registry_source": self.registry_path,
+                "registry_db": self.registry_path,
+                "available": bool(workspaces or projects or variants),
+                "database": {"paths": list(self.paths), "federated": self.federated},
+            }
+
+    def set_active_variant(self, variant_identifier: Any) -> dict[str, Any]:
+        """Switch query/MCP to a registered variant DB, atomically and read-only.
+
+        The new :class:`QueryService` is opened and exercised before the swap;
+        failures leave the previous database/session untouched. The switch is
+        in-memory only (no registry row or index DB is written).
+        """
+
+        selector = str(variant_identifier or "").strip()
+        if not selector:
+            raise ServeError("INVALID_ARGUMENT", "variant_id is required")
+        with self._lock:
+            _workspaces, _projects, variants = self._read_registry()
+            matches = [
+                variant
+                for variant in variants
+                if variant["id"] == selector or variant["name"] == selector
+            ]
+            if not matches:
+                raise ServeError("NOT_FOUND", f"variant not found: {selector}")
+            if len(matches) > 1:
+                ids = ", ".join(variant["id"] for variant in matches)
+                raise ServeError(
+                    "INVALID_ARGUMENT",
+                    f"variant name {selector!r} is ambiguous; use one of: {ids}",
+                )
+            variant = matches[0]
+            raw_path = str(variant.get("db_path") or "").strip()
+            if not raw_path:
+                raise ServeError(
+                    "DB_UNAVAILABLE",
+                    f"variant {variant['id']} has no db_path; build its index first",
+                )
+            target = Path(raw_path).expanduser()
+            if not target.is_absolute():
+                target = Path(self.registry_path).expanduser().resolve().parent / target
+            target = target.resolve()
+            if not target.is_file():
+                raise ServeError(
+                    "DB_UNAVAILABLE",
+                    f"variant database not found for {variant['id']}: {target}",
+                )
+            candidate = QueryService([str(target)], federated=False)
+            try:
+                with candidate.open() as store:
+                    store.stats()
+            except Exception as exc:
+                raise ServeError(
+                    "DB_UNAVAILABLE",
+                    f"cannot read variant database {target}: {type(exc).__name__}: {exc}",
+                ) from exc
+            active = dict(variant)
+            active["db_path"] = str(target)
+            active["db_exists"] = True
+            self.query = candidate
+            self.paths = [str(target)]
+            self.federated = False
+            self.active_variant = active
+            self.mcp = McpSession(
+                self.paths,
+                repo=self.config.repo,
+                compdb=self.config.compdb,
+                federated=False,
+            )
+            return {
+                "active_variant": active,
+                "variant": active,
+                "active_variant_id": active["id"],
+                "database": {"paths": list(self.paths), "federated": False},
+                "health": self.health(),
+            }
 
     # -- generic jobs ---------------------------------------------------- #
     def create_job(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -169,7 +335,7 @@ class ServeService:
 
     # -- stateless MCP /mcp ---------------------------------------------- #
     def handle_mcp(self, message: Any) -> dict[str, Any] | None:
-        """Handle one stateless MCP JSON-RPC message (18 tools)."""
+        """Handle one stateless MCP JSON-RPC message (21 tools)."""
 
         if not isinstance(message, dict):
             raise ServeError("INVALID_ARGUMENT", "expected a JSON-RPC object")

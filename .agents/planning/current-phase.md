@@ -48,7 +48,7 @@ repositories, not a phase-3 acceptance gate.
 | 7 | Integration, unified backend, read-only UI, P0 query UX, agent evaluation | done | - |
 | 8 | C++ virtual/dynamic dispatch + general indirect-call candidates | done | - |
 | 9 | Header-dependency-aware incremental indexing/watch | done | - |
-| 10 | Workspace/project/variant CLI/MCP exposure (optional) | pending (not a phase-3 gate) | - |
+| 10 | Workspace/project/variant CLI/MCP exposure (optional) | done (CLI/MCP/serve; UI task-47) | - |
 | 11 | Functional verification on OH dsoftbus + camera repositories + docs numbers | done | - |
 
 Functional verification (2026-10-18) used only dsoftbus (1,287 TU), camera (475
@@ -58,8 +58,6 @@ virtual `Command::Do`→`Executing` returns 29 candidates with direct edges kept
 16 registration-table candidate edges; header dependency-aware update/watch
 re-parses only the 6 dependent TUs, unrelated headers are no-ops, MCP (18 tools)
 was verified on all three DBs. See [../docs/functional-verification.md](../../docs/functional-verification.md).
-The optional workspace/variant selector is not implemented; full-corpus
-acceptance is still deferred.
 
 ## Implementation status
 
@@ -72,7 +70,9 @@ acceptance is still deferred.
   plus header→header edges, store persists the transitive closure in
   `tu_includes` (schema v6→7), `ca update`/`ca watch` invalidate only dependent
   TUs and fall back safely for old indexes/build files (docs/incremental.md).
-- **Workspace/variant surface (optional)**: not implemented; store model exists.
+- **Workspace/variant surface**: CLI/index/query/graph registry support, MCP
+  `workspaces`/`projects`/`variants` (21 tools) and serve registry/active API
+  implemented; UI selector task-47.
 - **Functional verification**: completed on dsoftbus/camera only
   (docs/functional-verification.md); full-corpus acceptance remains deferred.
 

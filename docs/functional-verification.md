@@ -49,7 +49,7 @@ ca graph --from NetBuilderMessageHandler --db .../dsoftbus.db --depth 1 --format
 function/branches/assignments/returns/resources/findings and `deep_ready=true`
 for the analysed symbol, and `graph` returns bounded nodes/edges. MCP was
 verified on all three DBs with stdio and HTTP (`scripts/verify_shard_mcp.py`):
-18 tools, `detail`/`graph`/`deep_status`/`ensure_deep`/`prewarm` ok; stdio call
+21 tools, `detail`/`graph`/`deep_status`/`ensure_deep`/`prewarm` ok; stdio call
 ≈0.15 s per session (`verify_mcp_{dsoftbus,camera,dsoftbus_camera}.json`).
 
 ## C++ virtual dispatch candidates
@@ -70,7 +70,7 @@ returns:
   caller: `Command::Do` at command.cpp:37.
 - graph: `ca graph --from <Command::Do id> --depth 1 --format json` returns 37
   nodes / 37 edges, 29 candidate edges; MCP `graph` returns the same data
-  (18 tools).
+  (21 tools).
 - no-override control: `IsBframeSupported` → `GetCapability`
   (`dynamic_libs/av_codec/src/av_codec_adapter.cpp:38`) has no override
   metadata; the query returns only the direct virtual edge and **0
@@ -128,7 +128,7 @@ unique declaration, verified, then restored (baseline DBs untouched).
 
 ## MCP / UI
 
-- MCP stdio/HTTP verified on the three DBs: 18 tools; `detail`, `graph`,
+- MCP stdio/HTTP verified on the three DBs: 21 tools; `detail`, `graph`,
   `deep_status`, `ensure_deep`, `prewarm` return stable envelopes; MCP graph on
   camera shows the same 29 virtual candidates as the CLI. No AI explanation
   endpoint/tool exists (removed feature).

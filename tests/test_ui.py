@@ -557,6 +557,75 @@ class FakeServeHandler(BaseHTTPRequestHandler):
         elif path == "/api/slow":
             time.sleep(0.5)
             self._send_json(200, {"ok": True, "data": {"slow": True}})
+        elif path == "/api/registry":
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "data": {
+                        "available": True,
+                        "registry_db": "/tmp/registry.db",
+                        "registry_source": "/tmp/registry.db",
+                        "workspaces": [
+                            {
+                                "id": "ws:1",
+                                "path": "/repo",
+                                "name": "Demo workspace",
+                            }
+                        ],
+                        "projects": [
+                            {
+                                "id": "prj:1",
+                                "workspace_id": "ws:1",
+                                "name": "one",
+                            },
+                            {
+                                "id": "prj:2",
+                                "workspace_id": "ws:1",
+                                "name": "two",
+                            },
+                        ],
+                        "variants": [
+                            {
+                                "id": "var:base",
+                                "workspace_id": "ws:1",
+                                "name": "base",
+                                "product": "base",
+                                "board": "host",
+                                "version": "1.0",
+                                "db_path": "/tmp/base.db",
+                                "db_exists": True,
+                                "is_active": True,
+                            },
+                            {
+                                "id": "var:v2",
+                                "workspace_id": "ws:1",
+                                "name": "v2",
+                                "product": "v2",
+                                "board": "host",
+                                "version": "2.0",
+                                "db_path": "/tmp/v2.db",
+                                "db_exists": True,
+                                "is_active": False,
+                            },
+                            {
+                                "id": "var:unbuilt",
+                                "workspace_id": "ws:1",
+                                "name": "unbuilt",
+                                "db_path": "/tmp/missing.db",
+                                "db_exists": False,
+                                "is_active": False,
+                            },
+                        ],
+                        "active_variant": {"id": "var:base"},
+                        "active_variant_id": "var:base",
+                        "database": {
+                            "paths": ["/tmp/base.db"],
+                            "federated": False,
+                        },
+                    },
+                },
+            )
         elif path == "/api/nope":
             self._send_json(
                 404,
@@ -595,6 +664,74 @@ class FakeServeHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             parsed = {}
         self.server.received.append((self.path, parsed))  # type: ignore[attr-defined]
+        if self.path == "/api/registry/active":
+            variant_id = str(parsed.get("variant_id") or "").strip()
+            if not variant_id:
+                self._send_json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "INVALID_ARGUMENT",
+                            "message": "variant_id is required",
+                        },
+                    },
+                )
+                return
+            if variant_id == "var:unbuilt":
+                self._send_json(
+                    503,
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "DB_UNAVAILABLE",
+                            "message": "variant has no readable database",
+                        },
+                    },
+                )
+                return
+            if variant_id not in ("var:base", "var:v2"):
+                self._send_json(
+                    404,
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "NOT_FOUND",
+                            "message": "variant not found",
+                        },
+                    },
+                )
+                return
+            name = "v2" if variant_id == "var:v2" else "base"
+            db_path = "/tmp/v2.db" if name == "v2" else "/tmp/base.db"
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "data": {
+                        "active_variant_id": variant_id,
+                        "active_variant": {"id": variant_id, "name": name},
+                        "variant": {"id": variant_id, "name": name},
+                        "database": {"paths": [db_path], "federated": False},
+                        "health": {
+                            "status": "ok",
+                            "db_ok": True,
+                            "database": {
+                                "paths": [db_path],
+                                "counts": {
+                                    "functions": 5,
+                                    "calls": 6,
+                                    "branches": 1,
+                                    "returns": 1,
+                                    "resource_ops": 0,
+                                    "callback_registrations": 0,
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+            return
         self._send_json(
             200,
             {
@@ -1002,6 +1139,14 @@ def test_static_single_page_has_no_external_assets(client: UiClient) -> None:
     assert "tab.explain" not in script
     assert "renderExplainSection" not in script
     assert "EventSource" not in script
+    # Workspace/project/variant selector (serve registry).
+    assert 'id="registry-bar"' in html
+    assert 'id="variant-select"' in html
+    assert "/api/registry" in script
+    assert "/api/registry/active" in script
+    assert "loadRegistry" in script
+    assert "switchVariant" in script
+    assert "ca.ui.registry.variant" in script
     # Duplicated callers/callees tabs and the AI explanation tab are gone.
     assert '["callers"' not in script
     assert '["callees"' not in script
@@ -1561,6 +1706,345 @@ console.log(JSON.stringify(html));
 
 
 
+def test_registry_selector_dom_stub() -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not available to execute the registry UI hooks")
+    script = """
+const appPath = __APP_PATH__;
+function makeEl() {
+  return {
+    hidden: false,
+    className: "",
+    textContent: "",
+    innerHTML: "",
+    value: "",
+    disabled: false,
+    title: "",
+    dataset: {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    addEventListener() {},
+    appendChild() {},
+    removeChild() {},
+    querySelectorAll: () => [],
+    setAttribute() {},
+  };
+}
+const elements = new Map();
+const documentStub = {
+  readyState: "loading",
+  addEventListener() {},
+  querySelectorAll: () => [],
+  getElementById: (id) => {
+    if (!elements.has(id)) elements.set(id, makeEl());
+    return elements.get(id);
+  },
+  createElement: () => makeEl(),
+  documentElement: { lang: "en" },
+  title: "",
+  body: makeEl(),
+};
+global.document = documentStub;
+const storage = new Map();
+const memory = {
+  getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+  setItem: (key, value) => storage.set(key, String(value)),
+  removeItem: (key) => storage.delete(key),
+};
+const location = { href: "http://127.0.0.1:8766/", hash: "", search: "" };
+global.window = {
+  sessionStorage: memory,
+  localStorage: memory,
+  location,
+  history: {
+    replaceState(_state, _title, url) {
+      location.href = "http://127.0.0.1:8766" + String(url);
+      const parsed = new URL(location.href);
+      location.search = parsed.search;
+      location.hash = parsed.hash;
+    },
+    pushState() {},
+  },
+  addEventListener() {},
+  setTimeout: () => 0,
+  clearTimeout() {},
+};
+Object.defineProperty(globalThis, "navigator", {
+  value: { languages: ["en"], language: "en" },
+  configurable: true,
+});
+window.CA_I18N = {
+  t: (key, params) =>
+    params && typeof params === "object"
+      ? key + ":" + JSON.stringify(params)
+      : key,
+  getLanguage: () => "en",
+};
+require(appPath);
+const hooks = window.CA_UI_TEST;
+hooks.bindTestDom();
+
+const registryData = {
+  available: true,
+  registry_db: "/tmp/registry.db",
+  registry_source: "/tmp/registry.db",
+  workspaces: [{ id: "ws:1", path: "/repo", name: "Demo workspace" }],
+  projects: [
+    { id: "prj:1", workspace_id: "ws:1", name: "one" },
+    { id: "prj:2", workspace_id: "ws:1", name: "two" },
+  ],
+  variants: [
+    {
+      id: "var:base",
+      workspace_id: "ws:1",
+      name: "base",
+      product: "base",
+      board: "host",
+      version: "1.0",
+      db_path: "/tmp/base.db",
+      db_exists: true,
+      is_active: true,
+    },
+    {
+      id: "var:v2",
+      workspace_id: "ws:1",
+      name: "v2",
+      product: "v2",
+      board: "host",
+      version: "2.0",
+      db_path: "/tmp/v2.db",
+      db_exists: true,
+      is_active: false,
+    },
+    {
+      id: "var:unbuilt",
+      workspace_id: "ws:1",
+      name: "unbuilt",
+      db_path: "/tmp/missing.db",
+      db_exists: false,
+      is_active: false,
+    },
+  ],
+  active_variant_id: "var:base",
+  active_variant: { id: "var:base" },
+  database: { paths: ["/tmp/base.db"], federated: false },
+};
+
+let calls = [];
+function switchPayload() {
+  return {
+    status: 200,
+    json: async () => ({
+      ok: true,
+      data: {
+        active_variant_id: "var:v2",
+        active_variant: { id: "var:v2", name: "v2" },
+        variant: { id: "var:v2", name: "v2" },
+        database: { paths: ["/tmp/v2.db"] },
+        health: {
+          status: "ok",
+          db_ok: true,
+          database: { paths: ["/tmp/v2.db"], counts: {} },
+        },
+      },
+    }),
+  };
+}
+global.fetch = async (path, options = {}) => {
+  calls.push({
+    path: String(path),
+    method: options.method || "GET",
+    body: options.body ? JSON.parse(options.body) : null,
+  });
+  if (String(path) === "/api/registry") {
+    return {
+      status: 200,
+      json: async () => ({ ok: true, data: registryData }),
+    };
+  }
+  if (String(path) === "/api/registry/active") return switchPayload();
+  return {
+    status: 200,
+    json: async () => ({ ok: true, data: { status: "ok", db_ok: true } }),
+  };
+};
+
+(async () => {
+  const out = {};
+  const normalized = hooks.normalizeRegistry(registryData);
+  out.normalized = {
+    variants: normalized.variants.length,
+    active: normalized.activeVariantId,
+    unbuilt: normalized.variants.find((v) => v.id === "var:unbuilt").dbExists,
+    source: normalized.registrySource,
+  };
+  out.planUrl = hooks.planVariantInit(normalized, "var:v2", "");
+  out.planUnbuiltUrl = hooks.planVariantInit(
+    normalized,
+    "var:unbuilt",
+    ""
+  );
+  out.planUnknownUrl = hooks.planVariantInit(normalized, "var:nope", "");
+  out.planStored = hooks.planVariantInit(normalized, "", "var:v2");
+  out.optionLabel = hooks.variantOptionLabel(normalized.variants[1]);
+
+  // URL ?variant= is explicit: one POST during initial load.
+  window.location.href = "http://127.0.0.1:8766/?variant=var%3Av2";
+  window.localStorage.removeItem("ca.ui.registry.variant");
+  calls = [];
+  await hooks.loadRegistry();
+  out.afterUrlInit = {
+    calls: calls.map((call) => call.path + " " + call.method),
+    active: hooks.registryState().active,
+    url: window.location.href,
+    stored: window.localStorage.getItem("ca.ui.registry.variant"),
+  };
+
+  // localStorage-only must not POST; it offers a resume button instead.
+  window.location.href = "http://127.0.0.1:8766/";
+  window.localStorage.setItem("ca.ui.registry.variant", "var:v2");
+  calls = [];
+  await hooks.loadRegistry();
+  out.afterStoredInit = {
+    calls: calls.map((call) => call.path),
+    resume: hooks.registryState().resume,
+    barHidden: documentStub.getElementById("registry-bar").hidden,
+    resumeHidden: documentStub.getElementById("registry-resume").hidden,
+  };
+
+  // Old serve without /api/registry: selector hidden, no exception.
+  global.fetch = async () => ({
+    status: 404,
+    json: async () => ({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "unknown endpoint" },
+    }),
+  });
+  await hooks.loadRegistry();
+  out.oldService = {
+    registry: hooks.registryState().registry,
+    barHidden: documentStub.getElementById("registry-bar").hidden,
+  };
+
+  // Failed switch: error status, active variant and view stay unchanged.
+  global.fetch = async (path) => {
+    if (String(path) === "/api/registry") {
+      return {
+        status: 200,
+        json: async () => ({ ok: true, data: registryData }),
+      };
+    }
+    return {
+      status: 503,
+      json: async () => ({
+        ok: false,
+        error: { code: "DB_UNAVAILABLE", message: "no readable db" },
+      }),
+    };
+  };
+  await hooks.loadRegistry();
+  const failure = await hooks.switchVariant("var:v2");
+  out.switchFailure = {
+    returns: failure,
+    active: hooks.registryState().active,
+    statusClass: documentStub.getElementById("status").className,
+    statusHtml: documentStub.getElementById("status").innerHTML,
+  };
+
+  // Successful switch: POST body, localStorage and ?variant= are written.
+  global.fetch = async (path, options = {}) => {
+    calls.push({
+      path: String(path),
+      method: options.method || "GET",
+      body: options.body ? JSON.parse(options.body) : null,
+    });
+    if (String(path) === "/api/registry") {
+      return {
+        status: 200,
+        json: async () => ({ ok: true, data: registryData }),
+      };
+    }
+    return switchPayload();
+  };
+  calls = [];
+  await hooks.loadRegistry();
+  calls = [];
+  const success = await hooks.switchVariant("var:v2", { init: true });
+  out.switchSuccess = {
+    returns: success,
+    calls: calls.map(
+      (call) => call.path + " " + call.method + " " + JSON.stringify(call.body)
+    ),
+    active: hooks.registryState().active,
+    url: window.location.href,
+    stored: window.localStorage.getItem("ca.ui.registry.variant"),
+    selectValue: documentStub.getElementById("variant-select").value,
+  };
+
+  console.log(JSON.stringify(out));
+})();
+"""
+    script = script.replace(
+        "__APP_PATH__", json.dumps(str(STATIC_DIR / "app.js"))
+    )
+    result = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+
+    normalized = data["normalized"]
+    assert normalized["variants"] == 3
+    assert normalized["active"] == "var:base"
+    assert normalized["unbuilt"] is False
+    assert normalized["source"] == "/tmp/registry.db"
+
+    assert data["planUrl"]["action"] == "post"
+    assert data["planUrl"]["variant"]["id"] == "var:v2"
+    assert data["planUnbuiltUrl"]["action"] == "clear-url"
+    assert data["planUnbuiltUrl"]["reason"] == "noDatabase"
+    assert data["planUnknownUrl"]["action"] == "clear-url"
+    assert data["planUnknownUrl"]["reason"] == "notFound"
+    assert data["planStored"]["action"] == "hint"
+    assert data["planStored"]["variant"]["id"] == "var:v2"
+    assert data["optionLabel"] == "v2 · v2 · host · 2.0"
+
+    url_init = data["afterUrlInit"]
+    assert url_init["calls"] == [
+        "/api/registry GET",
+        "/api/registry/active POST",
+    ]
+    assert url_init["active"] == "var:v2"
+    assert "variant=var%3Av2" in url_init["url"]
+    assert url_init["stored"] == "var:v2"
+
+    stored_init = data["afterStoredInit"]
+    assert stored_init["calls"] == ["/api/registry"]
+    assert stored_init["resume"] == "var:v2"
+    assert stored_init["barHidden"] is False
+    assert stored_init["resumeHidden"] is False
+
+    old_service = data["oldService"]
+    assert old_service["registry"] is None
+    assert old_service["barHidden"] is True
+
+    failure = data["switchFailure"]
+    assert failure["returns"] is False
+    assert failure["active"] == "var:base"
+    assert "error" in failure["statusClass"]
+    assert "registry.error" in failure["statusHtml"]
+
+    success = data["switchSuccess"]
+    assert success["returns"] is True
+    assert success["calls"] == [
+        '/api/registry/active POST {"variant_id":"var:v2"}'
+    ]
+    assert success["active"] == "var:v2"
+    assert "variant=var%3Av2" in success["url"]
+    assert success["stored"] == "var:v2"
+    assert success["selectValue"] == "var:v2"
+
+
 def test_function_jump_history_stack() -> None:
     node = shutil.which("node")
     if not node:
@@ -1688,6 +2172,48 @@ def test_proxy_forwards_get_with_query_string(proxy_client: UiClient) -> None:
     status, payload = proxy_client.json("/api/search?q=proc&limit=3")
     assert status == 200
     assert payload["data"]["upstream"] is True
+
+
+def test_proxy_forwards_registry_get(proxy_client: UiClient) -> None:
+    status, payload = proxy_client.json("/api/registry")
+    assert status == 200
+    data = payload["data"]
+    assert data["available"] is True
+    assert data["active_variant_id"] == "var:base"
+    assert data["registry_source"] == data["registry_db"]
+    variants = {item["id"]: item for item in data["variants"]}
+    assert variants["var:unbuilt"]["db_exists"] is False
+    assert variants["var:base"]["db_exists"] is True
+
+
+def test_proxy_forwards_registry_active_switch(
+    proxy_client: UiClient, fake_serve
+) -> None:
+    body = {"variant_id": "var:v2"}
+    status, payload = _post_json(proxy_client, "/api/registry/active", body)
+    assert status == 200
+    data = payload["data"]
+    assert data["active_variant_id"] == "var:v2"
+    assert data["variant"]["name"] == "v2"
+    assert data["health"]["db_ok"] is True
+    received = fake_serve[1].received  # type: ignore[attr-defined]
+    assert received[-1] == ("/api/registry/active", body)
+
+    status, payload = _post_json(
+        proxy_client, "/api/registry/active", {"variant_id": "var:unbuilt"}
+    )
+    assert status == 503
+    assert payload["error"]["code"] == "DB_UNAVAILABLE"
+
+    status, payload = _post_json(
+        proxy_client, "/api/registry/active", {"variant_id": "var:nope"}
+    )
+    assert status == 404
+    assert payload["error"]["code"] == "NOT_FOUND"
+
+    status, payload = _post_json(proxy_client, "/api/registry/active", {})
+    assert status == 400
+    assert payload["error"]["code"] == "INVALID_ARGUMENT"
 
 
 def test_proxy_forwards_job_post_and_rejects_other_posts(

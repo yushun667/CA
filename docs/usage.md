@@ -163,6 +163,58 @@ abort the run: failures are listed in the summary and the process exits `0` as
 long as at least one TU parsed. Exit code `1` means an argument/runtime error
 or that no TU could be parsed.
 
+## Workspaces, projects and variants
+
+A workspace groups one checked-out multi-repo tree; projects are the repository
+subtrees inside it; a variant is a buildable configuration
+(product/board/version) that may point at its own index database. The
+`workspaces`/`projects`/`variants` tables live in the index database (schema v8)
+and are metadata only — they are never created by querying and they do not
+change code records.
+
+```sh
+# register metadata in an existing index DB
+ca workspace add --db ca.db --path /src/openharmony --name OpenHarmony
+ca project add --db ca.db --workspace OpenHarmony --path foundation/communication/dsoftbus
+ca variant add --db ca.db --workspace OpenHarmony --name opi5plus     --product opi5plus --board rk3588 --version OpenHarmony-5.0.0-Release     --db-path /src/openharmony/.ca/index-opi5plus.db
+ca variant use --db ca.db opi5plus          # active flag in the registry
+ca workspace list --db ca.db --json
+ca project list --db ca.db --workspace OpenHarmony --json
+ca variant list --db ca.db --json
+ca workspace show OpenHarmony --db ca.db --json
+ca variant remove opi5plus --db ca.db
+```
+
+`ca index` can also register its result in the database it just built:
+
+```sh
+ca index --repo /src/openharmony --db .ca/index-opi5plus.db   --compdb out/rk3588/compile_commands.json --jobs 6   --workspace-path /src/openharmony --workspace-name OpenHarmony   --project-path foundation/communication/dsoftbus --project-name dsoftbus   --variant-name opi5plus --variant-product opi5plus --variant-board rk3588   --variant-version OpenHarmony-5.0.0-Release
+```
+
+Registry validation happens before indexing (a variant option requires
+`--variant-name`; project/variant options require `--workspace-path`), and
+registration failures are reported after the index is written. `--variant-db`
+defaults to the index DB being built.
+
+Query and graph can route through a registered variant database; the `--db` on
+these commands is the registry database and a single `--db` is required:
+
+```sh
+ca query functions kalloc --db .ca/registry.db --variant opi5plus --json
+ca graph --from kalloc --db .ca/registry.db --variant var:... --depth 1 --format json
+```
+
+The target database is opened read-only (`PRAGMA query_only=ON`) and an
+unregistered/empty/missing `db_path` is an error. MCP exposes read-only
+`workspaces`, `projects` and `variants` tools (21 tools total); they read the
+registry from the current MCP database. `ca serve` additionally exposes
+`GET /api/registry` (workspaces/projects/variants plus `active_variant` and
+`registry_source`) and `POST /api/registry/active {"variant_id": "var:..."}` to
+switch the query/MCP session to a variant DB atomically; the switch is
+in-memory only and failures leave the previous database active. The registry
+source stays fixed at the startup DB, so switching does not change the
+selector data.
+
 ## Querying
 
 All queries take `--db`, optional `--limit N` and `--json`:
@@ -524,11 +576,11 @@ compile_commands.json` exists.
   paths inside one function, not ownership transferred between functions.
 - **Analysis failures are isolated per function; parse failures per TU.** Check
   the summary's error lines for partial results.
-- **Incremental caching only tracks the main TU source and compile arguments.**
-  It reuses parse/analysis results for unchanged translation units, but header
-  changes are not detected: rebuild without `--incremental` after editing a
-  header. The database itself is still rebuilt on every `index` run; only the
-  expensive parse/analyze work is skipped.
+- **Incremental caching tracks the main TU source and compile arguments;**
+  header changes are mapped through `tu_includes` to dependent TUs, and
+  `ca update`/`ca watch` replace only affected TU rows in place (no whole-DB
+  rebuild). Old indexes without include facts and build-file changes fall back
+  to a full rebuild; a plain `ca index` still builds the database whole.
 - **One writer.** Parallel workers only parse/analyze; SQLite ingestion happens
   in the parent process.
 - The index covers only files under `--repo` and only translation units listed

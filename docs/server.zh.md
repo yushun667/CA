@@ -79,7 +79,7 @@ data: {"type":"job.updated","event":"done","event_id":3,"job":{...}}
 ## MCP 端点（无状态）
 
 `/mcp` 是标准无状态 JSON-RPC 端点（initialize/tools/list/tools/call），工具与
-`ca mcp --db` 相同的 18 个只读工具。`ca mcp --serve-url URL` 把 stdio JSON-RPC
+`ca mcp --db` 相同的 21 个只读工具。`ca mcp --serve-url URL` 把 stdio JSON-RPC
 代理到该端点；没有会话状态，也没有服务端发起的反向请求。
 
 ```sh
@@ -88,7 +88,7 @@ ca mcp --serve-url http://127.0.0.1:8765
 
 ## 验证与性能
 
-- `tests/test_server_serve.py`：健康/查询端点、无状态 MCP（18 工具）、通用 job
+- `tests/test_server_serve.py`：健康/查询端点、无状态 MCP（21 工具）、通用 job
   闭环 + SSE 重放、重启重排、stdio 代理、联邦 shard stats、已移除 explain 的
   CLI/API 断言。
 - 全仓测试：本地 `pytest -q`（见项目测试汇总）。

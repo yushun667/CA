@@ -260,7 +260,7 @@ def test_federated_mcp_tools(federated: dict[str, Path]) -> None:
     def envelope(response_id: int) -> dict:
         return json.loads(responses[response_id]["result"]["content"][0]["text"])
 
-    assert len(responses[2]["result"]["tools"]) == 18
+    assert len(responses[2]["result"]["tools"]) == 21
     functions = envelope(3)
     assert functions["ok"] is True
     assert functions["data"]["items"]

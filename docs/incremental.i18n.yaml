@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: incremental.md
-  sha256: 532075648dc4b2133aba36a8a12b98aed9f4eca11e583e2ed8a908e555a87358
+  sha256: 114806a6d3a44cdbafc68fa3445295f9af7a21af43fab8acfe16345a8212faf8
 zh:
   file: incremental.zh.md
-  sha256: 1c12ef58e56e28794cd8ddbbdba70f01c9935b1a75316f06546b8b1c68e7682a
+  sha256: f4c55aa05f64de1b78b8cbba543d044afc7db983991af266004a651273da402b

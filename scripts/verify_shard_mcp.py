@@ -3,7 +3,7 @@
 
 Checks both transports with a pure-stdlib client:
 
-* stdio: initialize, tools/list (15 tools), detail/graph, deep_status,
+* stdio: initialize, tools/list (21 tools), detail/graph, deep_status,
   ensure_deep first call and cache-hit call latency;
 * HTTP: start the server on a fresh port, poll ``GET /health`` and call
   ``tools/list`` over ``POST /mcp``.

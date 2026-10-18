@@ -4,6 +4,7 @@
 (() => {
   // ------------------------------------------------------------------ state
   const SIDEBAR_KEY = "ca.ui.sidebarCollapsed";
+  const REGISTRY_VARIANT_KEY = "ca.ui.registry.variant";
 
   function readStoredFlag(key) {
     try {
@@ -161,6 +162,11 @@
     mode: "embedded",
     serveUrl: "",
     connection: "embedded",
+    // Workspace/project/variant registry (serve or a registry-capable UI).
+    registry: null,
+    registryActive: "",
+    registrySwitching: false,
+    registryResume: "",
   };
 
   const els = {};
@@ -266,6 +272,7 @@
   }
 
   function setStatus(message, kind = "info") {
+    if (!els.status) return;
     if (!message) {
       els.status.className = "status";
       els.status.textContent = "";
@@ -324,6 +331,40 @@
       throw wrapped;
     }
     return payload.data;
+  }
+
+  async function apiPost(path, payload) {
+    let response;
+    try {
+      response = await fetch(path, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload || {}),
+      });
+    } catch (error) {
+      markConnection(false, 0);
+      throw new Error(t("error.unreachable", { message: error.message }));
+    }
+    markConnection(true, response.status);
+    let body = null;
+    try {
+      body = await response.json();
+    } catch (_error) {
+      body = null;
+    }
+    if (!body || body.ok !== true) {
+      const detail =
+        body && body.error
+          ? `${body.error.code}: ${body.error.message}`
+          : `HTTP ${response.status}`;
+      const wrapped = new Error(detail);
+      wrapped.status = response.status;
+      throw wrapped;
+    }
+    return body.data;
   }
 
   // ------------------------------------------------- remote mode / event stream
@@ -390,6 +431,358 @@
     element.title = `${state.serveUrl || ""} · ${t("conn.retry")}`;
   }
 
+
+  // ----------------------------------------- workspace/project/variant registry
+  function variantFromUrl() {
+    try {
+      return new URL(window.location.href).searchParams.get("variant") || "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function writeVariantToUrl(variantId) {
+    try {
+      const url = new URL(window.location.href);
+      if (variantId) {
+        url.searchParams.set("variant", variantId);
+      } else {
+        url.searchParams.delete("variant");
+      }
+      window.history.replaceState(
+        null,
+        "",
+        url.pathname + url.search + url.hash
+      );
+    } catch (_error) {
+      /* history may be unavailable; the selector still works */
+    }
+  }
+
+  function readStoredVariant() {
+    try {
+      return window.localStorage.getItem(REGISTRY_VARIANT_KEY) || "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function storeVariant(variantId) {
+    try {
+      if (variantId) {
+        window.localStorage.setItem(REGISTRY_VARIANT_KEY, variantId);
+      } else {
+        window.localStorage.removeItem(REGISTRY_VARIANT_KEY);
+      }
+    } catch (_error) {
+      /* storage can be blocked; the choice still works for this page */
+    }
+  }
+
+  function registryVariantById(registry, variantId) {
+    if (!registry || !variantId) return null;
+    return registry.variants.find((variant) => variant.id === variantId) || null;
+  }
+
+  function normalizeRegistry(data) {
+    if (!data || typeof data !== "object" || data.available === false) {
+      return null;
+    }
+    const workspaces = Array.isArray(data.workspaces)
+      ? data.workspaces
+          .filter((workspace) => workspace && workspace.id)
+          .map((workspace) => ({
+            id: String(workspace.id),
+            name: workspace.name || workspace.path || String(workspace.id),
+            path: workspace.path || "",
+          }))
+      : [];
+    const projects = Array.isArray(data.projects)
+      ? data.projects
+          .filter((project) => project && project.id)
+          .map((project) => ({
+            id: String(project.id),
+            workspaceId: project.workspace_id || project.workspaceId || "",
+            name: project.name || project.path || String(project.id),
+            path: project.path || "",
+          }))
+      : [];
+    const variants = Array.isArray(data.variants)
+      ? data.variants
+          .filter((variant) => variant && variant.id)
+          .map((variant) => {
+            const dbPath = variant.db_path || variant.dbPath || "";
+            return {
+              id: String(variant.id),
+              workspaceId:
+                variant.workspace_id || variant.workspaceId || "",
+              name: variant.name || String(variant.id),
+              product: variant.product || "",
+              board: variant.board || "",
+              version: variant.version || "",
+              dbPath,
+              dbExists:
+                typeof variant.db_exists === "boolean"
+                  ? variant.db_exists
+                  : Boolean(dbPath),
+              isActive: Boolean(variant.is_active),
+            };
+          })
+      : [];
+    if (!variants.length) return null;
+    const active = data.active_variant || {};
+    const activeVariantId = String(
+      data.active_variant_id || active.id || ""
+    );
+    const registrySource = String(
+      data.registry_db || data.registry_source || data.registrySource || ""
+    );
+    return {
+      available: data.available !== false,
+      workspaces,
+      projects,
+      variants,
+      activeVariantId,
+      registrySource,
+    };
+  }
+
+  function planVariantInit(registry, urlVariant, storedVariant) {
+    if (!registry) return { action: "none" };
+    const active = registry.activeVariantId || "";
+    if (urlVariant) {
+      const target = registryVariantById(registry, urlVariant);
+      if (!target) return { action: "clear-url", reason: "notFound" };
+      if (!target.dbExists) {
+        return { action: "clear-url", reason: "noDatabase", variant: target };
+      }
+      if (target.id !== active) return { action: "post", variant: target };
+      return { action: "none" };
+    }
+    const stored = registryVariantById(registry, storedVariant);
+    if (stored && stored.id !== active) {
+      if (stored.dbExists) return { action: "hint", variant: stored };
+      return { action: "none" };
+    }
+    return { action: "none" };
+  }
+
+  function variantOptionLabel(variant) {
+    const details = [variant.product, variant.board, variant.version]
+      .filter(Boolean)
+      .join(" · ");
+    return details ? `${variant.name} · ${details}` : variant.name;
+  }
+
+  function registryBasename(path) {
+    const text = String(path || "");
+    const parts = text.split("/");
+    return parts[parts.length - 1] || text;
+  }
+
+  function renderRegistryBar() {
+    const bar = document.getElementById("registry-bar");
+    const select = document.getElementById("variant-select");
+    const meta = document.getElementById("registry-meta");
+    const resume = document.getElementById("registry-resume");
+    if (!bar || !select) return;
+    const registry = state.registry;
+    if (!registry || !registry.variants.length) {
+      bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+    const workspaceById = new Map(
+      registry.workspaces.map((workspace) => [workspace.id, workspace])
+    );
+    const active =
+      registryVariantById(registry, state.registryActive) ||
+      registryVariantById(registry, registry.activeVariantId);
+    const groups = new Map();
+    registry.variants.forEach((variant) => {
+      const key = variant.workspaceId || "";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(variant);
+    });
+    let html = "";
+    groups.forEach((variants, workspaceId) => {
+      const workspace = workspaceById.get(workspaceId);
+      const label = workspace ? workspace.name : t("registry.workspace");
+      html += `<optgroup label="${escapeHtml(label)}">`;
+      variants.forEach((variant) => {
+        const selected = Boolean(active && variant.id === active.id);
+        const suffix = variant.dbExists
+          ? ""
+          : ` (${t("registry.noDatabase")})`;
+        html += `<option value="${escapeHtml(variant.id)}"${
+          variant.dbExists ? "" : " disabled"
+        }${selected ? " selected" : ""} title="${escapeHtml(
+          variant.dbPath
+        )}">${escapeHtml(variantOptionLabel(variant))}${escapeHtml(
+          suffix
+        )}</option>`;
+      });
+      html += "</optgroup>";
+    });
+    select.innerHTML = html;
+    select.value = active ? active.id : state.registryActive;
+    select.disabled =
+      state.registrySwitching ||
+      !registry.variants.some((variant) => variant.dbExists);
+    const workspace = workspaceById.get(active ? active.workspaceId : "");
+    const projectCount = registry.projects.filter(
+      (project) =>
+        !active || !active.workspaceId || project.workspaceId === active.workspaceId
+    ).length;
+    const projectLabel =
+      projectCount === 1
+        ? t("registry.projectOne")
+        : t("registry.projects", { count: projectCount });
+    const dbLabel =
+      active && active.dbPath
+        ? `${t("registry.db")}: ${registryBasename(active.dbPath)}`
+        : t("registry.noDatabase");
+    if (meta) {
+      meta.textContent = [
+        workspace ? `${t("registry.workspace")}: ${workspace.name}` : "",
+        projectLabel,
+        dbLabel,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    if (resume) {
+      const target = registryVariantById(registry, state.registryResume);
+      resume.hidden = !target;
+      if (target) {
+        resume.textContent = t("registry.resume", { name: target.name });
+      }
+    }
+  }
+
+  async function loadRegistry() {
+    let registry = null;
+    try {
+      registry = normalizeRegistry(await api("/api/registry"));
+    } catch (_error) {
+      registry = null;
+    }
+    state.registry = registry;
+    state.registryResume = "";
+    state.registryActive = registry
+      ? registry.activeVariantId ||
+        (registry.variants.find((variant) => variant.isActive) || {}).id ||
+        ""
+      : "";
+    if (!registry) {
+      renderRegistryBar();
+      return;
+    }
+    const plan = planVariantInit(
+      registry,
+      variantFromUrl(),
+      readStoredVariant()
+    );
+    if (plan.action === "post") {
+      await switchVariant(plan.variant.id, { init: true });
+    } else if (plan.action === "hint") {
+      state.registryResume = plan.variant.id;
+    } else if (plan.action === "clear-url") {
+      writeVariantToUrl("");
+      if (plan.reason === "noDatabase") {
+        setStatus(t("registry.noDatabaseHint"), "error");
+      }
+    }
+    renderRegistryBar();
+  }
+
+  async function refreshAfterVariantChange() {
+    const route = parseHash();
+    const searchOpen = Boolean(
+      els.searchDropdown &&
+        !els.searchDropdown.hidden &&
+        els.searchInput &&
+        els.searchInput.value.trim()
+    );
+    state.detail = null;
+    state.callers = [];
+    state.callees = [];
+    state.graph = null;
+    state.cfg = null;
+    state.cfgLoading = false;
+    state.cfgError = "";
+    state.cfgZoom = 1;
+    state.topSource = null;
+    state.nodeSource = null;
+    state.stats = null;
+    state.callbacks = null;
+    state.loadingSymbol = "";
+    if (route.name === "function" && state.selectedSymbol) {
+      await openFunction(state.selectedSymbol, {
+        tab: state.tab || "overview",
+        hash: true,
+      });
+    } else if (route.name === "stats") {
+      await showStats({ hash: true });
+    } else if (route.name === "callbacks") {
+      await showCallbacks(undefined, { hash: true });
+    } else {
+      showWelcome({ hash: true });
+    }
+    if (searchOpen) {
+      await runSearch(els.searchInput.value);
+    }
+  }
+
+  async function switchVariant(variantId, options = {}) {
+    const registry = state.registry;
+    if (!registry || state.registrySwitching) return false;
+    const target = registryVariantById(registry, variantId);
+    if (!target) {
+      setStatus(t("registry.notFound"), "error");
+      return false;
+    }
+    if (!target.dbExists) {
+      setStatus(t("registry.noDatabaseHint"), "error");
+      renderRegistryBar();
+      return false;
+    }
+    if (target.id === state.registryActive) return true;
+    state.registrySwitching = true;
+    renderRegistryBar();
+    try {
+      const data = await apiPost("/api/registry/active", {
+        variant_id: target.id,
+      });
+      const active = data.active_variant || {};
+      state.registryActive = String(
+        data.active_variant_id || active.id || target.id
+      );
+      state.registryResume = "";
+      storeVariant(state.registryActive);
+      writeVariantToUrl(state.registryActive);
+      if (data.health) {
+        state.health = data.health;
+        renderDbInfo(data.health);
+        renderWelcomeCards(data.health);
+      }
+      if (!options.init) {
+        setStatus(t("registry.switching", { name: target.name }), "info");
+        await refreshAfterVariantChange();
+        setStatus(t("registry.switched", { name: target.name }), "ok");
+      }
+      return true;
+    } catch (error) {
+      setStatus(
+        t("registry.error", { message: friendlyError(error) }),
+        "error"
+      );
+      return false;
+    } finally {
+      state.registrySwitching = false;
+      renderRegistryBar();
+    }
+  }
 
   // ---------------------------------------------------------------- routing
   function parseHash() {
@@ -2787,6 +3180,16 @@
     });
     els.statsButton.addEventListener("click", () => showStats());
     els.callbacksButton.addEventListener("click", () => showCallbacks());
+    if (els.variantSelect) {
+      els.variantSelect.addEventListener("change", () => {
+        switchVariant(els.variantSelect.value);
+      });
+    }
+    if (els.registryResume) {
+      els.registryResume.addEventListener("click", () => {
+        if (state.registryResume) switchVariant(state.registryResume);
+      });
+    }
     els.brand.addEventListener("click", (event) => {
       event.preventDefault();
       showWelcome();
@@ -2891,14 +3294,42 @@
     els.statsButton = document.getElementById("stats-button");
     els.callbacksButton = document.getElementById("callbacks-button");
     els.brand = document.getElementById("brand");
+    els.registryBar = document.getElementById("registry-bar");
+    els.variantSelect = document.getElementById("variant-select");
+    els.registryMeta = document.getElementById("registry-meta");
+    els.registryResume = document.getElementById("registry-resume");
     bindEvents();
     await loadUiMode();
     await loadHealth();
+    await loadRegistry();
     await applyRoute();
   }
 
-  // Small read-only hooks so tests can exercise the jump history without a DOM.
+  // Small read-only hooks so tests can exercise the UI without a real browser.
   window.CA_UI_TEST = {
+    normalizeRegistry,
+    planVariantInit,
+    variantOptionLabel,
+    loadRegistry,
+    switchVariant,
+    bindTestDom: () => {
+      els.status = document.getElementById("status");
+      els.view = document.getElementById("view");
+      els.welcome = document.getElementById("welcome");
+      els.welcomeCards = document.getElementById("welcome-cards");
+      els.searchDropdown = document.getElementById("search-dropdown");
+      els.searchInput = document.getElementById("search-input");
+      els.variantSelect = document.getElementById("variant-select");
+      els.registryResume = document.getElementById("registry-resume");
+      els.dbInfo = document.getElementById("db-info");
+      els.footerDb = document.getElementById("footer-db");
+    },
+    registryState: () => ({
+      registry: state.registry,
+      active: state.registryActive,
+      switching: state.registrySwitching,
+      resume: state.registryResume,
+    }),
     pushFunctionHistory,
     popFunctionHistory,
     clearFunctionHistory,

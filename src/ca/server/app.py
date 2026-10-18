@@ -1,4 +1,4 @@
-"""HTTP backend for ``ca serve``: query API + jobs + SSE + MCP endpoint.
+"""HTTP backend for ``ca serve``: query API + jobs + SSE + registry + MCP endpoint.
 
 One long-lived process owns the (optionally federated) read-only query service,
 a writable job state database (``<db-dir>/.ca/jobs.db`` by default) and the
@@ -188,12 +188,16 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
                         "jobs": True,
                         "sse": True,
                         "mcp": True,
+                        "registry": True,
                         "federated": service.federated,
                     }
                     health["jobs"] = service.jobs.job_stats()
                     health["mcp_endpoint"] = "/mcp"
                     health["events_endpoint"] = "/events"
                     self._ok(health)
+                    return
+                if path == "/api/registry":
+                    self._ok(service.registry())
                     return
                 if path == "/api/jobs":
                     data = service.list_jobs(
@@ -283,6 +287,10 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
                 if path == "/mcp":
                     self._handle_mcp()
                     return
+                if path == "/api/registry/active":
+                    body = self._body()
+                    self._ok(service.set_active_variant(body.get("variant_id")))
+                    return
                 if path == "/api/jobs":
                     self._ok({"job": public_job(service.create_job(self._body()))}, HTTPStatus.CREATED)
                     return
@@ -313,9 +321,15 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
                         return
                 self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", f"unknown endpoint: {path}")
             except ServeError as exc:
-                status = HTTPStatus.CONFLICT if exc.code == "CONFLICT" else HTTPStatus.BAD_REQUEST
+                status = HTTPStatus.BAD_REQUEST
                 if exc.code == "NOT_FOUND":
                     status = HTTPStatus.NOT_FOUND
+                elif exc.code == "CONFLICT":
+                    status = HTTPStatus.CONFLICT
+                elif exc.code == "DB_UNAVAILABLE":
+                    status = HTTPStatus.SERVICE_UNAVAILABLE
+                elif exc.code == "INTERNAL":
+                    status = HTTPStatus.INTERNAL_SERVER_ERROR
                 self._error(status, exc.code, exc.message)
             except DatabaseSourceError as exc:
                 self._error(HTTPStatus.SERVICE_UNAVAILABLE, "DB_UNAVAILABLE", str(exc))

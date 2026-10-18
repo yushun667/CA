@@ -159,6 +159,24 @@ TOOLS: list[dict[str, Any]] = [
     ),
     _tool("stats", "Database statistics: table row counts, size, schema version.", {}, []),
     _tool(
+        "workspaces",
+        "Registered workspaces (list, or show one by id/path).",
+        {"workspace": _STRING, "limit": _LIMIT, "offset": _INT},
+        [],
+    ),
+    _tool(
+        "projects",
+        "Registered projects inside one workspace.",
+        {"workspace": _STRING, "limit": _LIMIT, "offset": _INT},
+        ["workspace"],
+    ),
+    _tool(
+        "variants",
+        "Registered build variants for one or all workspaces (list, or show one).",
+        {"workspace": _STRING, "variant": _STRING, "limit": _LIMIT, "offset": _INT},
+        [],
+    ),
+    _tool(
         "batch",
         "Query one kind (callers/callees/branches/detail/...) for many symbols in one call.",
         {
@@ -593,6 +611,82 @@ def _brief(store: Any, arguments: dict[str, Any]) -> dict[str, Any]:
     return query_ux.resolve_brief(store, symbol)
 
 
+def _require_registry_api(store: Any) -> None:
+    if not all(
+        hasattr(store, name)
+        for name in ("list_workspaces", "get_workspace", "list_projects", "list_variants")
+    ):
+        raise ToolError(
+            "REGISTRY_UNAVAILABLE",
+            "workspace registry tables are not available in this store;"
+            " use a single database with the workspace schema",
+        )
+
+
+def _workspaces(store: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    _require_registry_api(store)
+    selector = str(arguments.get("workspace") or "").strip()
+    if selector:
+        workspace = store.get_workspace(selector)
+        if workspace is None:
+            raise ToolError("NOT_FOUND", f"workspace not found: {selector}")
+        return {"workspace": workspace}
+    return _items(
+        list(store.list_workspaces()),
+        _clamp_limit(arguments.get("limit"), 100),
+        _clamp_offset(arguments.get("offset")),
+    )
+
+
+def _projects(store: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    _require_registry_api(store)
+    workspace_selector = _require(arguments, "workspace")
+    workspace = store.get_workspace(workspace_selector)
+    if workspace is None:
+        raise ToolError("NOT_FOUND", f"workspace not found: {workspace_selector}")
+    rows = list(store.list_projects(workspace["id"]))
+    return _items(
+        rows, _clamp_limit(arguments.get("limit"), 200), _clamp_offset(arguments.get("offset"))
+    )
+
+
+def _variants(store: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    _require_registry_api(store)
+    workspace_selector = str(arguments.get("workspace") or "").strip()
+    workspaces = list(store.list_workspaces())
+    if workspace_selector:
+        workspace = store.get_workspace(workspace_selector)
+        if workspace is None:
+            raise ToolError("NOT_FOUND", f"workspace not found: {workspace_selector}")
+        workspaces = [workspace]
+    variant_rows = [
+        (workspace, variant)
+        for workspace in workspaces
+        for variant in store.list_variants(workspace["id"])
+    ]
+    selector = str(arguments.get("variant") or "").strip()
+    if selector:
+        matches = [
+            (workspace, variant)
+            for workspace, variant in variant_rows
+            if variant["id"] == selector or variant["name"] == selector
+        ]
+        if not matches:
+            raise ToolError("NOT_FOUND", f"variant not found: {selector}")
+        if len(matches) > 1:
+            ids = ", ".join(variant["id"] for _workspace, variant in matches)
+            raise ToolError(
+                "INVALID_ARGUMENT",
+                f"variant name {selector!r} is ambiguous; use one of: {ids}",
+            )
+        workspace, variant = matches[0]
+        return {"workspace": workspace, "variant": variant}
+    rows = [variant for _workspace, variant in variant_rows]
+    return _items(
+        rows, _clamp_limit(arguments.get("limit"), 100), _clamp_offset(arguments.get("offset"))
+    )
+
+
 def _record_query(db_path: Any, name: str, arguments: dict[str, Any]) -> None:
     symbol = arguments.get("symbol") or arguments.get("pattern")
     if not symbol or name in {"stats", "ensure_deep", "prewarm", "deep_status"}:
@@ -618,6 +712,9 @@ _TOOL_IMPLEMENTATIONS: dict[str, Any] = {
     "leaks": _leaks,
     "detail": _detail,
     "stats": _stats,
+    "workspaces": _workspaces,
+    "projects": _projects,
+    "variants": _variants,
     "callbacks": _callbacks,
     "batch": _stats,  # dispatched specially (needs the federated flag)
     "brief": _stats,

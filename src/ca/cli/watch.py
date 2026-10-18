@@ -79,6 +79,9 @@ class WatchCycleResult:
     compdb_stale: bool = False
     cache_hits: int = 0
     cache_misses: int = 0
+    db_write: dict[str, Any] = field(default_factory=dict)
+    incremental_rows: dict[str, Any] = field(default_factory=dict)
+    callback_refresh: dict[str, Any] = field(default_factory=dict)
     db_size: int | None = None
     deep_invalidated: bool = False
     elapsed_seconds: float = 0.0
@@ -100,6 +103,9 @@ class WatchCycleResult:
             "compdb_stale": self.compdb_stale,
             "cache_hits": self.cache_hits,
             "cache_misses": self.cache_misses,
+            "db_write": dict(self.db_write),
+            "incremental_rows": dict(self.incremental_rows),
+            "callback_refresh": dict(self.callback_refresh),
             "db_size": self.db_size,
             "deep_invalidated": self.deep_invalidated,
             "elapsed_seconds": round(self.elapsed_seconds, 3),
@@ -373,6 +379,9 @@ def run_cycle(
     cache_stats = dict(getattr(update, "cache_stats", {}) or {})
     result.cache_hits = int(cache_stats.get("hits", 0) or 0)
     result.cache_misses = int(cache_stats.get("misses", 0) or 0)
+    result.db_write = dict(getattr(update, "db_write", {}) or {})
+    result.incremental_rows = dict(getattr(update, "incremental_rows", {}) or {})
+    result.callback_refresh = dict(getattr(update, "callback_refresh", {}) or {})
     result.db_size = getattr(update, "db_size", None)
     result.updated = bool(getattr(update, "ok", False)) and result.affected_count > 0
     result.deep_invalidated = result.updated
@@ -434,6 +443,9 @@ def _run_manual_batch(
     cache_stats = dict(getattr(update, "cache_stats", {}) or {})
     result.cache_hits = int(cache_stats.get("hits", 0) or 0)
     result.cache_misses = int(cache_stats.get("misses", 0) or 0)
+    result.db_write = dict(getattr(update, "db_write", {}) or {})
+    result.incremental_rows = dict(getattr(update, "incremental_rows", {}) or {})
+    result.callback_refresh = dict(getattr(update, "callback_refresh", {}) or {})
     result.db_size = getattr(update, "db_size", None)
     result.updated = bool(getattr(update, "ok", False))
     result.elapsed_seconds = float(getattr(update, "elapsed_seconds", 0.0) or 0.0)

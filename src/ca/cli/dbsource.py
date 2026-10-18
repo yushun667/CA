@@ -80,14 +80,34 @@ def _warn_skipped(skipped: Sequence[dict[str, Any]]) -> None:
 
 @contextmanager
 def open_query_store(
-    db_values: Any, db_dir: str | None = None
+    db_values: Any, db_dir: str | None = None, *, read_only: bool = False
 ) -> Iterator[tuple[Any, QuerySource]]:
-    """Yield ``(store, source)``; single DB keeps ``SqliteStore`` semantics."""
+    """Yield ``(store, source)``.
+
+    Single databases use ``SqliteStore`` by default. ``read_only=True`` uses the
+    UI read-only facade (``PRAGMA query_only=ON``) so variant routing never
+    applies DDL/meta upserts to a target index.
+    """
 
     paths, errors = resolve_paths(db_values, db_dir)
     if not paths:
         raise DatabaseSourceError("no database selected (pass --db or --db-dir)")
     if len(paths) == 1 and not db_dir:
+        if read_only:
+            from ca.ui.server import _ReadOnlySqliteStore
+
+            store: Any = _ReadOnlySqliteStore(paths[0])
+            try:
+                store.open()
+            except Exception as exc:
+                raise DatabaseSourceError(
+                    f"cannot open database {paths[0]}: {exc}"
+                ) from exc
+            try:
+                yield store, QuerySource(paths=paths, federated=False)
+            finally:
+                store.close()
+            return
         from ca.store import SqliteStore
 
         store = SqliteStore(paths[0])

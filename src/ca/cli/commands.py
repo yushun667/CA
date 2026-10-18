@@ -180,6 +180,14 @@ def cmd_index(args: Any) -> int:
         run_index,
     )
 
+    from ca.cli import registry as registry_module
+
+    try:
+        registry_module.validate_index_options(args)
+    except registry_module.RegistryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
     repo = Path(args.repo).expanduser().resolve()
     if not repo.is_dir():
         print(f"error: repository not found: {repo}", file=sys.stderr)
@@ -394,6 +402,17 @@ def cmd_index(args: Any) -> int:
             file=sys.stderr,
         )
         return 1
+    try:
+        registered = registry_module.register_index(db_path, str(repo), args)
+    except registry_module.RegistryError as exc:
+        print(f"error: registry registration failed: {exc}", file=sys.stderr)
+        return 1
+    if registered:
+        print(
+            "[index] registry: workspace={workspace_id} project={project_id}"
+            " variant={variant_id}".format(**registered),
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -464,6 +483,18 @@ def _db_selector(args: Any) -> tuple[Any, str | None]:
     return db, getattr(args, "db_dir", None)
 
 
+def _variant_selector(args: Any) -> tuple[Any, str | None, bool]:
+    """Return (db_values, db_dir, read_only) honoring ``--variant``."""
+
+    from ca.cli import registry as registry_module
+
+    target = registry_module.query_target(args)
+    if target:
+        return [target], None, True
+    db_values, db_dir = _db_selector(args)
+    return db_values, db_dir, False
+
+
 def cmd_query(args: Any) -> int:
     from ca.cli import query_ux
     from ca.cli.dbsource import DatabaseSourceError, add_shard_columns, open_query_store
@@ -482,7 +513,15 @@ def cmd_query(args: Any) -> int:
     if fields and args.kind != "detail":
         print("error: --fields only applies to query detail", file=sys.stderr)
         return 1
-    db_values, db_dir = _db_selector(args)
+    try:
+        db_values, db_dir, read_only = _variant_selector(args)
+    except Exception as exc:
+        from ca.cli.registry import RegistryError
+
+        if isinstance(exc, RegistryError):
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        raise
     try:
         if symbols_arg:
             if symbols_arg == "-":
@@ -493,7 +532,7 @@ def cmd_query(args: Any) -> int:
             if not symbols:
                 print("error: no symbols in input", file=sys.stderr)
                 return 2
-            with open_query_store(db_values, db_dir) as (store, source):
+            with open_query_store(db_values, db_dir, read_only=read_only) as (store, source):
                 batch = query_ux.resolve_batch(
                     store,
                     args.kind,
@@ -505,7 +544,7 @@ def cmd_query(args: Any) -> int:
                     federated=source.federated,
                 )
         else:
-            with open_query_store(db_values, db_dir) as (store, source):
+            with open_query_store(db_values, db_dir, read_only=read_only) as (store, source):
                 rows, detail = _query_rows(
                     store, args.kind, args.symbol, limit, offset, source.federated
                 )
@@ -799,9 +838,15 @@ def cmd_graph(args: Any) -> int:
     from ca.cli.dbsource import DatabaseSourceError, open_query_store
 
     direction = "both" if args.both else ("reverse" if args.reverse else "forward")
-    db_values, db_dir = _db_selector(args)
+    from ca.cli.registry import RegistryError
+
     try:
-        with open_query_store(db_values, db_dir) as (store, source):
+        db_values, db_dir, read_only = _variant_selector(args)
+    except RegistryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        with open_query_store(db_values, db_dir, read_only=read_only) as (store, source):
             data = graph_module.build_call_graph(
                 store,
                 args.from_symbol,
@@ -860,6 +905,9 @@ class UpdateResult:
     summary: Any | None = None
     produced: dict[str, int] = field(default_factory=dict)
     cache_stats: dict[str, object] = field(default_factory=dict)
+    db_write: dict[str, Any] = field(default_factory=dict)
+    incremental_rows: dict[str, Any] = field(default_factory=dict)
+    callback_refresh: dict[str, Any] = field(default_factory=dict)
     db_size: int | None = None
     elapsed_seconds: float = 0.0
     messages: list[str] = field(default_factory=list)
@@ -883,6 +931,9 @@ class UpdateResult:
             else None,
             "produced": dict(self.produced),
             "cache_stats": dict(self.cache_stats),
+            "db_write": dict(self.db_write),
+            "incremental_rows": dict(self.incremental_rows),
+            "callback_refresh": dict(self.callback_refresh),
             "db_size": self.db_size,
             "elapsed_seconds": round(self.elapsed_seconds, 3),
             "messages": list(self.messages),
@@ -938,6 +989,261 @@ def _resolve_header_dependencies(
     return resolved
 
 
+def _affected_units_from_plan(plan: Any, units: Sequence[Any]) -> list[Any]:
+    """Map changed/dependent file paths from the watch plan to compilation units."""
+
+    affected_paths = {
+        str(Path(path).expanduser().resolve())
+        for path in getattr(plan, "affected", ()) or ()
+    }
+    return [
+        unit
+        for unit in units
+        if str(Path(unit.file).expanduser().resolve()) in affected_paths
+    ]
+
+
+def _contributing_units(
+    db_path: Path, repo: Path, changed_files: Sequence[str], units: Sequence[Any]
+) -> list[Any]:
+    """Extra TUs owning rows for changed files (header-inline first-writer rule).
+
+    A function definition in a header is stored once, attributed to the first TU
+    that inserted it. When that header changes we must re-index the owning TU in
+    addition to the TUs in the dependency plan, otherwise a stale header-inline
+    row could survive an in-place update.
+    """
+
+    if not changed_files or not db_path.is_file():
+        return []
+    import sqlite3
+
+    by_id = {str(unit.id): unit for unit in units}
+    found: list[Any] = []
+    seen: set[str] = set()
+    try:
+        connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return []
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if "functions" not in tables:
+            return []
+        changed: list[str] = []
+        for item in changed_files:
+            candidate = Path(item)
+            if candidate.is_absolute():
+                try:
+                    candidate = candidate.resolve().relative_to(repo)
+                except (OSError, ValueError):
+                    continue
+            changed.append(candidate.as_posix())
+        if not changed:
+            return []
+        marks = ", ".join("?" for _ in changed)
+        rows = connection.execute(
+            "SELECT DISTINCT tu_id FROM functions WHERE file IN (" + marks + ")",
+            changed,
+        ).fetchall()
+        for row in rows:
+            tu_id = str(row[0] or "")
+            if tu_id and tu_id not in seen and tu_id in by_id:
+                found.append(by_id[tu_id])
+                seen.add(tu_id)
+    except sqlite3.Error:
+        return found
+    finally:
+        connection.close()
+    return found
+
+
+def _callback_cleanup_refs(db_path: Path, tu_ids: Sequence[str]) -> tuple[list[str], list[str]]:
+    """Registration/candidate ids that become stale when ``tu_ids`` are replaced."""
+
+    if not tu_ids or not db_path.is_file():
+        return [], []
+    import sqlite3
+
+    if not db_path.is_file():
+        return [], []
+    try:
+        connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return [], []
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if "callback_registrations" not in tables:
+            return [], []
+        marks = ", ".join("?" for _ in tu_ids)
+        registration_ids = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT id FROM callback_registrations WHERE tu_id IN (" + marks + ")",
+                list(tu_ids),
+            )
+        ]
+        candidate_ids: list[str] = []
+        if registration_ids and "callback_target_links" in tables:
+            reg_marks = ", ".join("?" for _ in registration_ids)
+            candidate_ids = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT DISTINCT call_target_id FROM callback_target_links"
+                    " WHERE registration_id IN (" + reg_marks + ")",
+                    registration_ids,
+                )
+            ]
+        return list(dict.fromkeys(registration_ids)), list(dict.fromkeys(candidate_ids))
+    except sqlite3.Error:
+        return [], []
+    finally:
+        connection.close()
+
+
+def _delete_ids(connection: Any, table: str, column: str, values: Sequence[str]) -> int:
+    deleted = 0
+    for start in range(0, len(values), 500):
+        chunk = values[start : start + 500]
+        marks = ", ".join("?" for _ in chunk)
+        cursor = connection.execute(
+            f"DELETE FROM {table} WHERE {column} IN ({marks})", list(chunk)
+        )
+        deleted += max(0, int(cursor.rowcount or 0))
+    return deleted
+
+
+def _callbacks_present(db_path: Path) -> tuple[bool, bool]:
+    """Return ``(tables_present, any_registration_or_indirect_call)``."""
+
+    if not db_path.is_file():
+        return False, False
+    import sqlite3
+
+    try:
+        connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error:
+        return False, False
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if not {"callback_registrations", "calls"} <= tables:
+            return False, False
+        registrations = int(
+            connection.execute("SELECT COUNT(*) FROM callback_registrations").fetchone()[0]
+        )
+        indirect = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM calls WHERE kind = 'indirect'"
+            ).fetchone()[0]
+        )
+        return True, bool(registrations or indirect)
+    except sqlite3.Error:
+        return False, False
+    finally:
+        connection.close()
+
+
+def _refresh_callbacks(
+    db_path: Path, repo: Path, compdb: Path | None, jobs: int
+) -> dict[str, Any]:
+    """Recompute cross-TU callback candidates after an in-place update.
+
+    The DB retains registrations for unaffected TUs but not the AST-level
+    indirect-call-site records, so the deterministic way to keep candidate edges
+    identical to a full index is to rerun the existing callback pass (with
+    ``finalize=False``). The pass reparses TUs; it is only invoked when callbacks
+    or indirect call sites exist. Callers may skip it when no callback data is
+    relevant.
+    """
+
+    tables, relevant = _callbacks_present(db_path)
+    if not tables:
+        return {"mode": "skipped", "reason": "no callback tables"}
+    if not relevant:
+        return {"mode": "skipped", "reason": "no callback registrations or indirect calls"}
+    from ca.cli.callbacks import resolve_callbacks
+
+    started = time.perf_counter()
+    try:
+        summary = resolve_callbacks(
+            str(db_path),
+            repo=str(repo),
+            compdb=str(compdb) if compdb else "",
+            jobs=max(1, int(jobs)),
+            finalize=False,
+        )
+    except Exception as exc:
+        return {
+            "mode": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+        }
+    data = {
+        "mode": "rerun",
+        "units": summary.units,
+        "units_parsed": summary.units_parsed,
+        "registrations": summary.registrations,
+        "candidate_edges": summary.candidate_edges,
+        "links": summary.links,
+        "elapsed_seconds": round(time.perf_counter() - started, 3),
+    }
+    if summary.errors:
+        data["errors"] = list(summary.errors[:5])
+    return data
+
+
+def _summary_from_outcomes(
+    outcomes: Sequence[Any], repo: Path, db_path: Path
+) -> Any:
+    """Build an ``IndexSummary`` for the affected-TU pass (not whole-DB totals)."""
+
+    from ca.core.schema import IndexSummary
+
+    summary = IndexSummary(
+        repo_root=str(repo), db_path=str(db_path), tus_total=len(outcomes)
+    )
+    for outcome in outcomes:
+        result = outcome.result
+        parse = result.parse
+        usable = bool(parse.functions or parse.calls or parse.types)
+        parsed_ok = parse.parse_ok or usable
+        if parsed_ok:
+            summary.tus_parsed += 1
+            summary.functions += len(parse.functions)
+            summary.types += len(parse.types)
+            summary.calls += len(parse.calls)
+            summary.analyzed_functions += len(result.analyses)
+            for analysis in result.analyses:
+                summary.branches += len(analysis.branches)
+                summary.assignments += len(analysis.assignments)
+                summary.returns += len(analysis.returns)
+                summary.resource_ops += len(analysis.resource_ops)
+                summary.findings += len(analysis.findings)
+            summary.parse_seconds += parse.elapsed_ms / 1000.0
+        else:
+            summary.tus_failed += 1
+    summary.total_seconds = round(summary.parse_seconds + summary.analyze_seconds, 3)
+    summary.parse_seconds = round(summary.parse_seconds, 6)
+    summary.analyze_seconds = round(summary.analyze_seconds, 6)
+    return summary
+
+
 def run_update(
     *,
     repo: str,
@@ -956,15 +1262,22 @@ def run_update(
 ) -> UpdateResult:
     """Refresh an existing index after a small set of files changed.
 
-    Shared by ``ca update`` (prints) and ``ca watch`` (captures metrics). Only
-    affected TUs are parsed/analyzed again; everything else replays cached
-    records. A header (or non-TU build file) change invalidates the whole cache
-    because header dependencies are not tracked.
+    Only affected TUs are parsed/analyzed; their rows are replaced in place with
+    :meth:`SqliteStore.replace_units` (no whole-database rebuild). Header changes
+    use the ``tu_includes`` dependency map and fall back to a full rebuild only
+    for build files / old indexes without include facts. Shared by ``ca update``
+    and ``ca watch``.
     """
 
     from ca.build import load_compilation_database
     from ca.cli.watcher import plan_changes
-    from ca.pipeline import find_compilation_database, run_index
+    from ca.pipeline import (
+        collect_unit_outcomes,
+        find_compilation_database,
+        resolve_record_scope,
+        run_index,
+    )
+    from ca.store import SqliteStore
 
     started = time.perf_counter()
     result = UpdateResult()
@@ -1015,6 +1328,8 @@ def run_update(
         return result
     if plan.affected_count == 0:
         note("no translation units affected by the changed files")
+        result.db_write = {"mode": "noop"}
+        result.callback_refresh = {"mode": "skipped", "reason": "noop"}
         result.exit_code = 2
         result.elapsed_seconds = time.perf_counter() - started
         return result
@@ -1025,8 +1340,10 @@ def run_update(
     effective_cache_dir = cache_dir or str(
         db_path.expanduser().resolve().parent / ".ca-cache"
     )
+    resolved_record_scope = resolve_record_scope(record_scope, len(units))
+    dependency_aware = bool(getattr(plan, "dependency_aware", False))
     if plan.header_change:
-        if getattr(plan, "dependency_aware", False):
+        if dependency_aware:
             affected = {
                 str(Path(path).resolve()) for path in getattr(plan, "affected", ())
             }
@@ -1035,13 +1352,11 @@ def run_update(
             ]
             from ca.pipeline import invalidate_unit_cache
 
-            from ca.pipeline import resolve_record_scope
-
             removed = invalidate_unit_cache(
                 effective_cache_dir,
                 affected_units,
                 analyze_scope,
-                resolve_record_scope(record_scope, len(units)),
+                resolved_record_scope,
             )
             note(
                 f"[update] dependency-aware: invalidated {removed} cache entries"
@@ -1049,49 +1364,223 @@ def run_update(
             )
         else:
             shutil.rmtree(effective_cache_dir, ignore_errors=True)
+
     note(
         f"[update] affected {plan.affected_count}/{plan.total_units} TUs"
         f" (header_change={plan.header_change}), cache={effective_cache_dir}"
     )
-    _remove_database_files(db_path)
-    produced: dict[str, int] = {}
-    cache_stats: dict[str, object] = {}
+
+    full_rebuild = (
+        bool(getattr(plan, "fallback_full", False))
+        or analyze_scope == "all"
+        or not db_path.is_file()
+    )
+    if full_rebuild:
+        _remove_database_files(db_path)
+        produced: dict[str, int] = {}
+        cache_stats: dict[str, object] = {}
+        try:
+            summary = run_index(
+                str(repo_path),
+                units,
+                str(db_path),
+                jobs=jobs,
+                produced=produced,
+                cache_dir=effective_cache_dir,
+                cache_stats=cache_stats,
+                analyze_scope=analyze_scope,
+                record_scope=record_scope,
+                header_declarations=header_declarations,
+            )
+        except Exception as exc:
+            result.error = f"update failed: {exc}"
+            note(f"error: {result.error}")
+            result.elapsed_seconds = time.perf_counter() - started
+            return result
+        result.summary = summary
+        result.produced = produced
+        result.cache_stats = cache_stats
+        result.db_write = {"mode": "full_rebuild"}
+        result.incremental_rows = {}
+        result.callback_refresh = {"mode": "skipped", "reason": "full rebuild"}
+        result.db_size = db_path.stat().st_size if db_path.is_file() else None
+        if print_summary:
+            fmt.print_summary(summary, db_size=result.db_size, produced=produced)
+        from ca.cli import deep as deep_module
+
+        if layer == "base":
+            deep_module.invalidate_deep(str(db_path), None, None)
+            deep_module.set_index_mode(str(db_path), None, "base")
+            note("[update] layer=base: deep status reset (lazy deep will recompute on demand)")
+        note(
+            f"[update] cache hits={cache_stats.get('hits')}/{cache_stats.get('tus')}"
+            f" misses={cache_stats.get('misses')}; database rebuilt (full fallback)"
+        )
+        result.ok = summary.tus_parsed > 0
+        result.exit_code = 0 if result.ok else 1
+        result.elapsed_seconds = time.perf_counter() - started
+        return result
+
+    if not db_path.is_file():
+        result.error = f"database not found: {db_path}"
+        note(f"error: {result.error}")
+        result.exit_code = 1
+        result.elapsed_seconds = time.perf_counter() - started
+        return result
+
+    affected_units = _affected_units_from_plan(plan, units)
+    seen_ids = {str(unit.id) for unit in affected_units}
+    extra_units = [
+        unit
+        for unit in _contributing_units(db_path, repo_path, changed_files, units)
+        if str(unit.id) not in seen_ids
+    ]
+    if extra_units:
+        affected_units.extend(extra_units)
+        if plan.header_change and dependency_aware:
+            from ca.pipeline import invalidate_unit_cache
+
+            invalidate_unit_cache(
+                effective_cache_dir,
+                extra_units,
+                analyze_scope,
+                resolved_record_scope,
+            )
+        note(
+            f"[update] including {len(extra_units)} contributing TU(s) for"
+            " header-inline ownership"
+        )
+    if not affected_units:
+        result.error = "affected TU list is empty"
+        note(f"error: {result.error}")
+        result.exit_code = 1
+        result.elapsed_seconds = time.perf_counter() - started
+        return result
+
+    affected_ids = [str(unit.id) for unit in affected_units]
+    stale_registrations, stale_candidates = _callback_cleanup_refs(db_path, affected_ids)
     try:
-        summary = run_index(
-            str(repo_path),
-            units,
-            str(db_path),
+        outcomes = collect_unit_outcomes(
+            affected_units,
             jobs=jobs,
-            produced=produced,
             cache_dir=effective_cache_dir,
-            cache_stats=cache_stats,
             analyze_scope=analyze_scope,
-            record_scope=record_scope,
+            record_scope=resolved_record_scope,
             header_declarations=header_declarations,
         )
     except Exception as exc:
-        result.error = f"update failed: {exc}"
+        result.error = f"incremental parse/analyze failed: {exc}"
         note(f"error: {result.error}")
         result.elapsed_seconds = time.perf_counter() - started
         return result
-    result.summary = summary
-    result.produced = produced
-    result.cache_stats = cache_stats
+    if not outcomes:
+        result.error = "incremental pass produced no outcomes"
+        note(f"error: {result.error}")
+        result.exit_code = 1
+        result.elapsed_seconds = time.perf_counter() - started
+        return result
+
+    replace_result: dict[str, Any] = {}
+    store = SqliteStore(str(db_path))
+    store.open()
+    try:
+        store.begin()
+        replace_result = store.replace_units(
+            [(outcome.result.parse, outcome.result.analyses) for outcome in outcomes]
+        )
+        if stale_candidates:
+            _delete_ids(store.connection, "call_targets", "id", stale_candidates)
+        if stale_registrations or stale_candidates:
+            _delete_ids(
+                store.connection, "callback_target_links", "registration_id", stale_registrations
+            )
+            _delete_ids(
+                store.connection, "callback_target_links", "call_target_id", stale_candidates
+            )
+        store.commit()
+    except Exception as exc:
+        store.rollback()
+        result.error = f"incremental write failed: {exc}"
+        note(f"error: {result.error}")
+        result.elapsed_seconds = time.perf_counter() - started
+        store.close()
+        return result
+    finally:
+        store.close()
+
+    removed_rows = sum(int(value or 0) for value in replace_result.get("removed", {}).values())
+    added_rows = sum(int(value or 0) for value in replace_result.get("added", {}).values())
+    result.incremental_rows = {
+        "tu_ids": list(replace_result.get("tu_ids") or []),
+        "removed": removed_rows,
+        "added": added_rows,
+        "fts_deleted": int(replace_result.get("fts_deleted", 0) or 0),
+        "fts_inserted": int(replace_result.get("fts_inserted", 0) or 0),
+        "tables": {
+            "removed": dict(replace_result.get("removed") or {}),
+            "added": dict(replace_result.get("added") or {}),
+        },
+    }
+    result.db_write = {
+        "mode": "incremental",
+        "tu_ids": list(affected_ids),
+        "tu_count": len(affected_ids),
+        "removed_rows": removed_rows,
+        "added_rows": added_rows,
+        "fts_deleted": result.incremental_rows["fts_deleted"],
+        "fts_inserted": result.incremental_rows["fts_inserted"],
+    }
+    result.summary = _summary_from_outcomes(outcomes, repo_path, db_path)
+    result.produced = {
+        "functions": sum(len(outcome.result.parse.functions) for outcome in outcomes),
+        "types": sum(len(outcome.result.parse.types) for outcome in outcomes),
+        "fields": sum(len(outcome.result.parse.fields) for outcome in outcomes),
+        "calls": sum(len(outcome.result.parse.calls) for outcome in outcomes),
+    }
+    unaffected = max(0, len(units) - len(affected_units))
+    result.cache_stats = {
+        "enabled": True,
+        "cache_dir": str(Path(effective_cache_dir).expanduser().resolve()),
+        "hits": unaffected,
+        "misses": len(affected_units),
+        "tus": len(units),
+        "hit_rate": round(unaffected / len(units), 4) if units else 0.0,
+    }
     result.db_size = db_path.stat().st_size if db_path.is_file() else None
     if print_summary:
-        fmt.print_summary(summary, db_size=result.db_size, produced=produced)
+        fmt.print_summary(result.summary, db_size=result.db_size, produced=result.produced)
     from ca.cli import deep as deep_module
 
     if layer == "base":
-        deep_module.invalidate_deep(str(db_path), None, None)
+        deep_module.invalidate_deep(str(db_path), None, affected_ids)
         deep_module.set_index_mode(str(db_path), None, "base")
-        note("[update] layer=base: deep status reset (lazy deep will recompute on demand)")
+        note("[update] layer=base: deep status reset for affected TUs")
     note(
-        f"[update] cache hits={cache_stats.get('hits')}/{cache_stats.get('tus')}"
-        f" misses={cache_stats.get('misses')}; database rebuilt from cache"
-        " (per-TU replace pending store API)"
+        "[update] db_write: incremental"
+        f" tus={len(affected_ids)} rows -{removed_rows}/+{added_rows}"
+        f" fts -{result.incremental_rows['fts_deleted']}/+{result.incremental_rows['fts_inserted']}"
     )
-    result.ok = summary.tus_parsed > 0
+    result.callback_refresh = _refresh_callbacks(
+        db_path, repo_path, compdb_path, jobs
+    )
+    if result.callback_refresh.get("mode") == "rerun":
+        note(
+            "[update] callback_refresh: rerun"
+            f" units={result.callback_refresh.get('units')}"
+            f" registrations={result.callback_refresh.get('registrations')}"
+            f" candidate_edges={result.callback_refresh.get('candidate_edges')}"
+            f" links={result.callback_refresh.get('links')}"
+        )
+    elif result.callback_refresh.get("mode") == "error":
+        note(
+            "[update] warning: callback refresh failed:"
+            f" {result.callback_refresh.get('error')}"
+        )
+    note(
+        f"[update] cache hits={unaffected}/{len(units)} misses={len(affected_units)}"
+        " (unaffected TUs left untouched)"
+    )
+    result.ok = result.summary.tus_parsed > 0
     result.exit_code = 0 if result.ok else 1
     result.elapsed_seconds = time.perf_counter() - started
     return result
@@ -1309,6 +1798,14 @@ def cmd_serve(args: Any) -> int:
         compdb=str(getattr(args, "compdb", "") or ""),
     )
     return serve(config)
+
+
+def cmd_registry(args: Any) -> int:
+    """Dispatch workspace/project/variant registry commands."""
+
+    from ca.cli import registry as registry_module
+
+    return registry_module.cmd_registry(args)
 
 
 def cmd_version(args: Any) -> int:

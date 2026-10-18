@@ -46,7 +46,7 @@ ca graph --from NetBuilderMessageHandler --db .../dsoftbus.db --depth 1 --format
 `search` 返回预期函数/file/line；`detail` 返回 function/branches/assignments/
 returns/resources/findings，且符号 `deep_ready=true`；`graph` 返回有界
 nodes/edges。MCP 在三个库上用 stdio 与 HTTP 验证
-（`scripts/verify_shard_mcp.py`）：18 个工具，`detail`/`graph`/`deep_status`/
+（`scripts/verify_shard_mcp.py`）：21 个工具，`detail`/`graph`/`deep_status`/
 `ensure_deep`/`prewarm` 正常，stdio 单次会话约 0.15s
 （`verify_mcp_{dsoftbus,camera,dsoftbus_camera}.json`）。
 
@@ -66,7 +66,7 @@ camera 中有一条真实跨 TU 虚派发链作为领域样例：
   `Executing`（video_process_command.cpp:45）报告 1 条 `virtual_candidate`
   调用者：command.cpp:37 的 `Command::Do`。
 - graph：`ca graph --from <Command::Do id> --depth 1 --format json` 返回
-  37 nodes / 37 edges，其中 29 条候选边；MCP `graph` 返回同样数据（18 工具）。
+  37 nodes / 37 edges，其中 29 条候选边；MCP `graph` 返回同样数据（21 工具）。
 - 无 override 对照：`IsBframeSupported`→`GetCapability`
   （`dynamic_libs/av_codec/src/av_codec_adapter.cpp:38`）没有 override 元数据，
   查询只返回 direct virtual 边，**0 条 virtual_candidate**（不伪造边）。
@@ -118,7 +118,7 @@ dsoftbus `NetBuilderMessageHandler`
 
 ## MCP / UI
 
-- MCP stdio/HTTP 在三个库验证：18 工具；`detail`、`graph`、`deep_status`、
+- MCP stdio/HTTP 在三个库验证：21 工具；`detail`、`graph`、`deep_status`、
   `ensure_deep`、`prewarm` 返回稳定信封；camera MCP `graph` 与 CLI 一样返回
   29 条 virtual 候选。已无 AI 解释端点/工具（功能已移除）。
 - UI（`ca ui`）本次服务器验证未实跑；同一只读 API/MCP 后端由本地 UI 测试覆盖。

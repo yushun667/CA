@@ -231,6 +231,8 @@ CREATE TABLE IF NOT EXISTS findings (
 );
 
 -- Secondary indexes are created in finalize(); see writer.py.
+-- Incremental per-TU updates (ca.store.incremental) delete/replace rows and
+-- maintain functions_fts in place; a full finalize() rebuild is not required.
 
 -- SQLite FTS5 symbol search (optional, created by finalize()):
 --
