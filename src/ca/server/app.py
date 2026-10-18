@@ -182,7 +182,6 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
                         "jobs": True,
                         "sse": True,
                         "mcp": True,
-                        "agent_explain": True,
                         "sampling_explain": True,
                         "federated": service.federated,
                     }
