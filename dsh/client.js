@@ -12210,6 +12210,7 @@ __exports["createSearchPage"] = createSearchPage;
  */
 
 const { formatBytes, toApiError } = __m("api.js")
+const { shouldAutoStartBackend, shouldLandOnProjects } = __m("shell/logic.js")
 
 /** Main-slot key and locale namespace used by this plugin. */
 const PANEL_ID = 'ca'
@@ -13616,27 +13617,28 @@ function createShell(React, bag) {
     // active and the backend is stopped, start it automatically.
     const autoStartRef = React.useRef(0)
     React.useEffect(() => {
-      const backend = state.backend
-      if (!backend || backend.mode === 'unconfigured' || !state.project) return
-      if (backend.state !== 'stopped') return
-      const now = Date.now()
-      if (now - autoStartRef.current < 15000) return
-      autoStartRef.current = now
+      const project = currentProject()
+      if (!shouldAutoStartBackend(state.backend, project, autoStartRef.current)) return
+      autoStartRef.current = Date.now()
       Promise.resolve(api.backend.start()).catch(() => {})
-    }, [state.backend && state.backend.state, state.project && state.project.id])
+    })
 
-    // With no active project the useful landing page is #/projects.
+    // With no active project the useful landing page is #/projects. Ride the
+    // normal render loop instead of a route subscription: status/projects
+    // snapshots arrive asynchronously and each one re-renders the shell.
     const landedRef = React.useRef(false)
     React.useEffect(() => {
       if (landedRef.current) return
-      if (state.statusLoading || state.connected === null) return
-      if (state.project) {
-        landedRef.current = true
-        return
+      if (shouldLandOnProjects({
+        statusLoading: state.statusLoading,
+        connected: state.connected,
+        project: currentProject(),
+        routePage: state.route.page,
+      })) {
+        navigate({ page: 'projects' })
       }
-      if (state.route.page !== 'projects') navigate({ page: 'projects' })
-      landedRef.current = true
-    }, [state.route.page, state.project && state.project.id, state.statusLoading, state.connected])
+      if (!state.statusLoading && state.connected !== null) landedRef.current = true
+    })
 
     void tick
 
@@ -13686,6 +13688,63 @@ __exports["createShell"] = createShell;
 __exports["PANEL_ID"] = PANEL_ID;
 __exports["NS"] = NS;
 __exports["KNOWN_PAGES"] = KNOWN_PAGES;
+
+    })
+    __modules.set("shell/logic.js", function (__exports) {
+/**
+ * Pure decision helpers for the CA shell.
+ *
+ * These live outside `shell/index.js` so the routing/lifecycle decisions can be
+ * unit-tested without React or a DOM. The shell keeps the same rules in sync:
+ * the backend is an implementation detail (never a settings page), so it starts
+ * automatically for an active project and the panel lands on projects when
+ * there is nothing to show yet.
+ */
+
+/** Minimum delay between automatic start attempts (ms). */
+const AUTO_START_THROTTLE_MS = 15000
+
+/**
+ * Should the shell start the backend on its own?
+ *
+ * @param {object|null} backend `status.backend`
+ * @param {object|null} project current project (`currentProject()`)
+ * @param {number} lastStartedAt timestamp of the previous attempt (0 = never)
+ * @param {number} now current timestamp
+ * @returns {boolean}
+ */
+function shouldAutoStartBackend(backend, project, lastStartedAt, now = Date.now()) {
+  if (!backend || typeof backend !== 'object') return false
+  if (backend.mode === 'unconfigured') return false
+  if (!project) return false
+  if (backend.state !== 'stopped') return false
+  const last = Number(lastStartedAt) || 0
+  if (last <= 0) return true // no attempt yet in this page session
+  return now - last >= AUTO_START_THROTTLE_MS
+}
+
+/**
+ * Should the shell switch the landing route to `#/projects`?
+ *
+ * @param {object} input
+ * @param {boolean} input.statusLoading initial status RPC still in flight
+ * @param {boolean|null} input.connected status transport state (null = unknown)
+ * @param {object|null} input.project current project
+ * @param {string} input.routePage current route page
+ * @returns {boolean}
+ */
+function shouldLandOnProjects({ statusLoading, connected, project, routePage }) {
+  if (statusLoading) return false
+  if (connected === null || connected === undefined) return false
+  if (project) return false
+  return routePage !== 'projects'
+}
+
+
+__exports.default = shouldAutoStartBackend;
+__exports["shouldAutoStartBackend"] = shouldAutoStartBackend;
+__exports["shouldLandOnProjects"] = shouldLandOnProjects;
+__exports["AUTO_START_THROTTLE_MS"] = AUTO_START_THROTTLE_MS;
 
     })
     __modules.set("i18n/index.js", function (__exports) {
