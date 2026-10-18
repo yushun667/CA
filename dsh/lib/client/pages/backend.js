@@ -37,6 +37,11 @@ const BACKEND_CSS = `
 .ca-backend-group-title { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; padding-bottom: 4px; border-bottom: 1px solid var(--dsw-alias-border-l1, #eaeef2); font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-secondary, #57606a); }
 .ca-backend-check { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--dsw-alias-label-primary, #1f2328); cursor: pointer; user-select: none; }
 .ca-backend-check input { width: 14px; height: 14px; accent-color: var(--dsw-alias-state-business-primary, #2f6feb); }
+.ca-backend-db-current { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; margin-bottom: 8px; border: 1px solid var(--dsw-alias-border-l1, #eaeef2); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-2, rgba(127, 127, 127, 0.04)); font-size: 12px; }
+.ca-backend-db-current-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); overflow-wrap: anywhere; }
+.ca-backend-db-name { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+.ca-backend-db-label { font-size: 12.5px; }
+.ca-backend-db-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); overflow-wrap: anywhere; }
 .ca-backend-notice { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-2, rgba(127, 127, 127, 0.05)); font-size: 12.5px; color: var(--dsw-alias-label-secondary, #57606a); }
 .ca-backend-report { max-height: 320px; }
 `
@@ -49,6 +54,39 @@ const MODE_OPTIONS = [
 
 function asText(value) {
   return value === undefined || value === null ? '' : String(value)
+}
+
+/** Last path segment for a POSIX or Windows path. */
+function basename(path) {
+  if (typeof path !== 'string') return ''
+  const cleaned = path.replace(/[\\/]+$/, '')
+  const parts = cleaned.split(/[\\/]/)
+  return parts[parts.length - 1] || cleaned
+}
+
+/** Current database path from a backend.databases payload or config. */
+function currentDatabasePath(databases, config) {
+  if (databases && typeof databases === 'object') {
+    const configured = databases.configured
+    if (configured && typeof configured === 'object' && typeof configured.path === 'string' && configured.path) {
+      return configured.path
+    }
+    if (databases.current && typeof databases.current === 'object') {
+      if (typeof databases.current.db === 'string' && databases.current.db) return databases.current.db
+      if (typeof databases.current.dbDir === 'string' && databases.current.dbDir) return databases.current.dbDir
+    }
+    if (Array.isArray(databases.candidates)) {
+      const marked = databases.candidates.find((candidate) => candidate && candidate.current === true)
+      if (marked && typeof marked.path === 'string' && marked.path) return marked.path
+    }
+  }
+  const local = config && config.local && typeof config.local === 'object' ? config.local : {}
+  if (typeof local.db === 'string' && local.db) return local.db
+  if (typeof local.dbDir === 'string' && local.dbDir) return local.dbDir
+  const remote = config && config.remote && typeof config.remote === 'object' ? config.remote : {}
+  if (typeof remote.db === 'string' && remote.db) return remote.db
+  if (typeof remote.dbDir === 'string' && remote.dbDir) return remote.dbDir
+  return ''
 }
 
 function nullIfEmpty(value) {
@@ -178,6 +216,11 @@ export function createBackendPage(React, bag) {
     const [health, setHealth] = React.useState(null)
     const [healthError, setHealthError] = React.useState(null)
     const [install, setInstall] = React.useState(null)
+    const [databases, setDatabases] = React.useState(null)
+    const [databasesLoading, setDatabasesLoading] = React.useState(false)
+    const [databasesError, setDatabasesError] = React.useState(null)
+    const [databasesUnsupported, setDatabasesUnsupported] = React.useState(false)
+    const [databaseBusy, setDatabaseBusy] = React.useState('')
 
     const mountedRef = React.useRef(true)
     const noticeTimer = React.useRef(null)
@@ -256,8 +299,121 @@ export function createBackendPage(React, bag) {
       }
     }
 
+    const loadDatabases = React.useCallback(async (refreshMode) => {
+      setDatabasesLoading(true)
+      setDatabasesError(null)
+      try {
+        const value = await api.rpc('backend.databases', refreshMode ? { refresh: true } : {})
+        if (!mountedRef.current) return
+        if (value && typeof value === 'object' && value.ok === false) {
+          const apiError = value.error
+            ? toApiError(value.error)
+            : toApiError({ code: 'DB_SCAN_FAILED', message: 'Database scan failed' })
+          setDatabases(value)
+          if (apiError.code === 'BACKEND_UNSUPPORTED' || apiError.code === 'UNKNOWN_ENDPOINT') {
+            setDatabasesError(null)
+            setDatabasesUnsupported(true)
+          } else {
+            setDatabasesError(apiError)
+            setDatabasesUnsupported(false)
+          }
+          return
+        }
+        setDatabases(value && typeof value === 'object' ? value : null)
+        setDatabasesError(value && value.error ? toApiError(value.error) : null)
+        setDatabasesUnsupported(false)
+      } catch (error) {
+        if (!mountedRef.current) return
+        const apiError = toApiError(error)
+        if (apiError.code === 'ABORTED') return
+        const unsupported =
+          apiError.code === 'BACKEND_UNSUPPORTED' || apiError.code === 'UNKNOWN_ENDPOINT'
+        setDatabasesUnsupported(unsupported)
+        setDatabasesError(unsupported ? null : apiError)
+      } finally {
+        if (mountedRef.current) setDatabasesLoading(false)
+      }
+    }, [])
+
+    /** Poll `backend.get` until the backend settles after a database switch. */
+    async function waitForBackendSettled(timeoutMs) {
+      const startedAt = Date.now()
+      while (Date.now() - startedAt < (timeoutMs || 30000)) {
+        try {
+          const snapshot = await api.backend.get()
+          if (!mountedRef.current) return null
+          applySnapshot(snapshot)
+          const nextStatus = snapshot && snapshot.status ? snapshot.status : null
+          const backendState = nextStatus ? nextStatus.state : ''
+          if (backendState === 'running' || backendState === 'error') {
+            return nextStatus
+          }
+        } catch (_error) {
+          /* keep polling: the backend may be restarting */
+        }
+        await new Promise((resolve) => {
+          if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+            window.setTimeout(resolve, 600)
+          } else {
+            setTimeout(resolve, 600)
+          }
+        })
+      }
+      return null
+    }
+
+    /** Switch the backend database through `backend.useDatabase`, then reload. */
+    async function useDatabase(kind, path) {
+      const key = `${kind}:${path}`
+      setDatabaseBusy(key)
+      setActionError(null)
+      try {
+        const result = await api.rpc('backend.useDatabase', { kind, path })
+        if (!mountedRef.current) return
+        if (result && typeof result === 'object') {
+          applySnapshot({ status: result.status, config: result.config })
+        }
+        const nextStatus = await waitForBackendSettled(30000)
+        if (!mountedRef.current) return
+        if (nextStatus && nextStatus.state === 'running') {
+          showNotice(t('backend.databaseSwitched', null, 'Database switched; reloading…'))
+          if (
+            typeof window !== 'undefined' &&
+            window.location &&
+            typeof window.location.reload === 'function'
+          ) {
+            window.location.reload()
+          }
+          return
+        }
+        setActionError(
+          toApiError({
+            code: 'BACKEND_ERROR',
+            message: t('shell.dbSwitchTimeout', null, 'The backend did not become ready in time.'),
+          }),
+        )
+        void loadDatabases(true)
+      } catch (error) {
+        if (!mountedRef.current) return
+        const apiError = toApiError(error)
+        if (apiError.code === 'ABORTED') return
+        if (apiError.code === 'BACKEND_UNSUPPORTED') {
+          apiError.message = t(
+            'shell.dbSwitchUnsupported',
+            null,
+            'This backend build cannot switch databases from the UI; configure it on the backend page.',
+          )
+        }
+        setActionError(apiError)
+        void loadDatabases(true)
+      } finally {
+        if (mountedRef.current) setDatabaseBusy('')
+      }
+    }
+
     React.useEffect(() => {
       void load()
+      void loadDatabases(false)
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
@@ -651,6 +807,221 @@ export function createBackendPage(React, bag) {
       ),
     )
 
+    const databaseCandidates =
+      databases && Array.isArray(databases.candidates) ? databases.candidates : []
+    const currentDbPath = currentDatabasePath(databases, config)
+
+    const databaseColumns = [
+      {
+        key: 'kind',
+        label: t('backend.databaseKind', null, 'Kind'),
+        width: '104px',
+        render: (candidate) =>
+          h(
+            ui.Badge,
+            { tone: candidate.status === 'failed' ? 'error' : 'muted' },
+            candidate.kind === 'dbDir'
+              ? t('shell.dbKindDbDir', null, 'shard dir')
+              : t('shell.dbKindDb', null, 'single DB'),
+          ),
+      },
+      {
+        key: 'path',
+        label: t('backend.db', null, 'Database'),
+        render: (candidate) =>
+          h(
+            'span',
+            { className: 'ca-backend-db-name' },
+            h('span', { className: 'ca-backend-db-label' }, candidate.label || basename(candidate.path)),
+            h('span', { className: 'ca-backend-db-path' }, candidate.path),
+            candidate.status === 'failed'
+              ? h(
+                  'span',
+                  { className: 'ca-backend-db-path', style: { color: 'var(--dsw-alias-state-error-primary, #d1242f)' } },
+                  t('backend.databaseScanFailed', null, 'scan failed'),
+                )
+              : null,
+          ),
+      },
+      {
+        key: 'size',
+        label: t('backend.databaseSize', null, 'Size'),
+        align: 'right',
+        width: '120px',
+        render: (candidate) => {
+          if (candidate.sizeBytes !== undefined && candidate.sizeBytes !== null) {
+            return h('span', { className: 'ca-mono' }, formatBytes(candidate.sizeBytes))
+          }
+          if (Number(candidate.dbCount) > 0) {
+            return t('backend.databaseFiles', { count: Number(candidate.dbCount) }, `${candidate.dbCount} DB files`)
+          }
+          return '—'
+        },
+      },
+      {
+        key: 'source',
+        label: t('backend.databaseSource', null, 'Source'),
+        width: '110px',
+        render: (candidate) =>
+          candidate.source ? h(ui.Badge, { tone: 'neutral' }, String(candidate.source)) : '—',
+      },
+      {
+        key: 'actions',
+        label: '',
+        width: '150px',
+        render: (candidate) => {
+          const isCurrent = Boolean(currentDbPath) && currentDbPath === candidate.path
+          const rowBusy = databaseBusy === `${candidate.kind}:${candidate.path}`
+          return h(
+            ui.Button,
+            {
+              variant: isCurrent ? 'secondary' : 'primary',
+              size: 'sm',
+              disabled: isCurrent || Boolean(databaseBusy),
+              title: candidate.path,
+              onClick: () => {
+                void useDatabase(candidate.kind || 'db', candidate.path)
+              },
+            },
+            rowBusy ? h(ui.Spinner, { size: 11 }) : null,
+            isCurrent
+              ? t('backend.databaseCurrent', null, 'Current')
+              : rowBusy
+                ? t('backend.usingDatabase', null, 'Switching…')
+                : t('backend.useDatabase', null, 'Use this database'),
+          )
+        },
+      },
+    ]
+
+    const databasesCard = h(
+      ui.Card,
+      {
+        title: t('backend.databases', null, 'Available databases'),
+        subtitle: t(
+          'backend.databasesHint',
+          null,
+          'Scanned on the backend host; choosing one updates the backend configuration and restarts it.',
+        ),
+        actions: [
+          h(
+            ui.Button,
+            {
+              key: 'rescan',
+              variant: 'ghost',
+              size: 'sm',
+              disabled: databasesLoading || Boolean(databaseBusy),
+              onClick: () => {
+                void loadDatabases(true)
+              },
+            },
+            databasesLoading ? h(ui.Spinner, { size: 12 }) : h(ui.Icon, { name: 'refresh', size: 13 }),
+            databasesLoading
+              ? t('backend.scanning', null, 'Scanning…')
+              : t('backend.scan', null, 'Rescan'),
+          ),
+        ],
+      },
+      h(
+        'div',
+        { className: 'ca-col' },
+        currentDbPath
+          ? h(
+              'div',
+              { className: 'ca-backend-db-current' },
+              h(ui.Badge, { tone: 'success' }, t('backend.databaseCurrent', null, 'Current')),
+              h('span', { className: 'ca-backend-db-current-path' }, currentDbPath),
+            )
+          : null,
+        databases && (Number(databases.total) > 0 || databases.scannedAt)
+          ? h(
+              'div',
+              { className: 'ca-row', style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary, #8b949e)', flexWrap: 'wrap' } },
+              Number(databases.total) > 0
+                ? h(
+                    ui.Badge,
+                    { tone: 'neutral' },
+                    t('backend.databaseTotal', { count: Number(databases.total) }, `${Number(databases.total)} candidates`),
+                  )
+                : null,
+              databases.truncated
+                ? h(
+                    ui.Badge,
+                    { tone: 'warn' },
+                    t(
+                      'backend.databaseTruncated',
+                      { count: Number(databases.maxItems) || Number(databases.total) || 0 },
+                      'Only the first entries are shown.',
+                    ),
+                  )
+                : null,
+              databases.scannedAt
+                ? h(
+                    'span',
+                    null,
+                    t(
+                      'backend.databaseScannedAt',
+                      { time: formatTimestamp(Number(databases.scannedAt)) },
+                      `Scanned ${formatTimestamp(Number(databases.scannedAt))}`,
+                    ),
+                  )
+                : null,
+            )
+          : null,
+        databasesUnsupported
+          ? h(ui.EmptyState, {
+              icon: h(ui.Icon, { name: 'info', size: 22 }),
+              title: t('shell.dbScanUnsupported', null, 'This host build does not support database scanning; configure the database on the backend page.'),
+              body: t('backend.configHint', null, 'Saved on the DSH host; SSH passwords are never stored — use keys or ssh-agent.'),
+            })
+          : null,
+        databasesError
+          ? h(ui.ErrorBox, {
+              title: t('common.error', null, 'Error'),
+              error: databasesError,
+              hint: t('backend.databasesHint', null, 'Scanned on the backend host; choosing one updates the backend configuration and restarts it.'),
+              retryLabel: t('common.retry', null, 'Retry'),
+              onRetry: () => {
+                void loadDatabases(true)
+              },
+            })
+          : null,
+        !databasesUnsupported && databaseCandidates.length === 0
+          ? h(ui.EmptyState, {
+              icon: h(ui.Icon, { name: 'backend', size: 22 }),
+              title: databasesLoading
+                ? t('backend.scanning', null, 'Scanning…')
+                : t('backend.databasesEmpty', null, 'No database candidates were found next to the configured paths.'),
+              action: databasesLoading
+                ? null
+                : h(
+                    ui.Button,
+                    { variant: 'ghost', size: 'sm', onClick: () => void loadDatabases(true) },
+                    h(ui.Icon, { name: 'refresh', size: 13 }),
+                    t('backend.scan', null, 'Rescan'),
+                  ),
+            })
+          : null,
+        databaseCandidates.length > 0
+          ? h(ui.Table, {
+              columns: databaseColumns,
+              rows: databaseCandidates,
+              rowKey: (candidate) => `${candidate.kind}:${candidate.path}`,
+              dense: true,
+              empty: t('backend.databasesEmpty', null, 'No database candidates were found next to the configured paths.'),
+            })
+          : null,
+        databaseBusy
+          ? h(
+              'div',
+              { className: 'ca-backend-notice' },
+              h(ui.Spinner, { size: 12 }),
+              t('backend.usingDatabase', null, 'Switching…'),
+            )
+          : null,
+      ),
+    )
+
     const healthCard = health || healthError
       ? h(
           ui.Card,
@@ -907,6 +1278,7 @@ export function createBackendPage(React, bag) {
         ),
         unconfiguredHint,
         statusCard,
+        databasesCard,
         healthCard,
         probeCard,
         installCard,

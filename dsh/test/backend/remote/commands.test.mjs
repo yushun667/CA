@@ -4,6 +4,7 @@ import test from 'node:test';
 import { BackendError } from '../../../lib/host/backend/errors.js';
 import { parseCaVersionJson, parseReadyLine } from '../../../lib/host/backend/ca-protocol.js';
 import {
+  buildListDatabasesScript,
   buildProbeScript,
   buildRemoteCaScript,
   buildRemoteEditableInstallScript,
@@ -16,6 +17,7 @@ import {
   buildSshArgv,
   buildSshTunnelArgv,
   classifySshFailure,
+  buildValidateDatabaseScript,
   normalizeSshConfig,
   parseProbeOutput,
   remotePathExpression,
@@ -280,4 +282,41 @@ test('ca-protocol parsers handle readiness line and pretty version JSON', () => 
   const record = parseCaVersionJson('{\n  "version": "0.1.0",\n  "schema_version": "2"\n}');
   assert.equal(record.version, '0.1.0');
   assert.equal(parseCaVersionJson('no json here'), null);
+});
+
+test('buildListDatabasesScript scans one level with python and shell fallback', () => {
+  const script = buildListDatabasesScript({ root: '/home/yu/CA_OH/index' });
+  assert.match(script, /^set \+e/);
+  assert.match(script, /ROOT=\/home\/yu\/CA_OH\/index/);
+  assert.match(script, /CA_DB_SCAN_ROOT=\$ROOT/);
+  assert.ok(script.includes('python3 - "$ROOT"'), 'python3 primary path');
+  assert.ok(script.includes('os.scandir'), 'python scans the directory');
+  assert.ok(script.includes('CA_DB_ENTRY:'), 'JSON entry marker');
+  assert.ok(script.includes('CA_DB_DONE=1'), 'completion marker');
+  assert.ok(script.includes('-wal'), 'wal sidecars are skipped');
+  assert.ok(script.includes('-shm'), 'shm sidecars are skipped');
+  assert.ok(script.includes('startswith(".")'), 'hidden dirs are skipped');
+  assert.ok(script.includes('".ca"') && script.includes('".tmp"'), 'known dirs skipped');
+  assert.ok(script.includes('stat -c %Y'), 'shell/stat fallback');
+  assert.ok(script.includes('CA_DB_ERROR='));
+  // Configured root may be written as ~/... and must expand remotely.
+  const homeScript = buildListDatabasesScript({ root: '~/CA_OH/index' });
+  assert.ok(homeScript.includes('ROOT="$HOME/CA_OH/index"'));
+  assert.throws(() => buildListDatabasesScript({ root: '' }), /扫描根目录不能为空/);
+});
+
+test('buildValidateDatabaseScript validates files and shard directories', () => {
+  const dbScript = buildValidateDatabaseScript({ kind: 'db', path: '/home/yu/ca.db' });
+  assert.ok(dbScript.includes('TARGET=/home/yu/ca.db'));
+  assert.ok(dbScript.includes('CA_DB_VALID=1:OK:1:$SIZE'));
+  assert.ok(dbScript.includes('NOT_FILE'));
+  assert.ok(dbScript.includes('NOT_DB_EXTENSION'));
+  assert.ok(dbScript.includes('*.db) ;;'));
+
+  const dirScript = buildValidateDatabaseScript({ kind: 'dbDir', path: '/home/yu/index' });
+  assert.ok(dirScript.includes('NOT_DIR'));
+  assert.ok(dirScript.includes('NO_DB'));
+  assert.ok(dirScript.includes('CA_DB_VALID=1:OK:$COUNT'));
+  assert.throws(() => buildValidateDatabaseScript({ kind: 'nope', path: '/x' }), /kind 必须是/);
+  assert.throws(() => buildValidateDatabaseScript({ kind: 'db', path: '' }), /路径不能为空/);
 });

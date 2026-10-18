@@ -29,6 +29,7 @@ registerPrompt(ctx, config)
 - `getStatus() -> {mode:'unconfigured'|'local'|'remote', state:'stopped'|'starting'|'running'|'error', baseUrl, db, error, since, version?, features?}`
 - `start(opts?)/stop()/restart()`；`request(path,{method='GET',query,body,timeoutMs=30000}) -> CA envelope {ok,data|error}`（传输错误抛 `BackendError`）；`execCa(spec,{onStdout,onStderr,signal}) -> {exitCode,signal}`
 - `probeLocal()`、`onChange(fn)`、`dispose()`；`config` 解析后的设置。`BackendError{code,message,details}`。
+- `listDatabases(options?) -> {ok,mode,current,configured,candidates[],...}`（扫描本地/远端索引库，永不抛；当前项固定第一）与 `useDatabase({kind,path})`（校验→持久化→重启，失败回滚）。
 - 本地：`ca serve --db/--db-dir --port 0 ...`，就绪判定 = stderr URL 行 + `/api/health`。远程：probe → rsync 源码 + venv + `pip install -e .` → 远端 `ca serve` + SSH 隧道；`execCa` 经 ssh。设置持久化 `$DSH_HOME/plugin-data/dsh-ca/settings.json`。
 
 ## TaskManager（host-tools）
@@ -52,7 +53,9 @@ registerPrompt(ctx, config)
   - 鉴权：先 `const rejection = ctx.connection.requestRejection(req)`，非空则回 401/403；非 POST 回 405；路径不匹配 404。
   - 响应：`content-type: application/json`，`{ok:true,value}` / `{ok:false,error:{code,message,details}}`；业务错误 HTTP 200，参数错误 400，body 过大 413。
 - Client：`fetch('/dsh-ca/<endpoint>', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(payload||{}), signal, credentials:'same-origin' })`，解包同一 envelope。
-- 端点名不变：`ping`；`status`；`ca.request{method,path,query,body}`（仅 `/api/` 前缀）；`backend.get|configure|start|stop|restart|probe|install`；`tasks.start|list|get|logs|cancel`；`explain`。
+- 端点名不变：`ping`；`status`；`ca.request{method,path,query,body}`（仅 `/api/` 前缀）；`backend.get|configure|start|stop|restart|probe|install|databases|useDatabase`；`tasks.start|list|get|logs|cancel`；`explain`。
+  - `backend.databases`：扫描后端的索引数据库/目录 + 可选合并 `/api/registry`，返回 `{ok,mode,current,configured,candidates[],registry,error?}`（永不因扫描失败抛错）。
+  - `backend.useDatabase{kind:'db'|'dbDir',path}`：持久化新目标并重启后端（失败回滚旧目标）。
 - Handler 不得抛未捕获异常；参数与大小校验。
 
 ## Tools（host-tools；plain JSON Schema，不 import defineTool/schemastery）

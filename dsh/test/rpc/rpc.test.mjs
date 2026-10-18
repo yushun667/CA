@@ -506,6 +506,252 @@ test('backend.install falls back to a foreground installer promise', async () =>
 })
 
 // --------------------------------------------------------------------------- //
+// backend.databases / backend.useDatabase
+// --------------------------------------------------------------------------- //
+
+const REGISTRY = {
+  available: true,
+  active_variant_id: 'v1',
+  active_variant: { id: 'v1', name: 'main' },
+  variants: [{ id: 'v1', name: 'main', db_path: '/data/main.db' }],
+  workspaces: [{ id: 'w1', name: 'oh', path: '/src/oh' }],
+  projects: [],
+  registry_db: '/tmp/registry.db',
+}
+
+test('the endpoint list exposes the database picker endpoints', () => {
+  assert.ok(RPC_ENDPOINTS.includes('backend.databases'))
+  assert.ok(RPC_ENDPOINTS.includes('backend.useDatabase'))
+})
+
+test('backend.databases returns candidates and merges the CA registry while running', async () => {
+  const context = setup({
+    handlers: {
+      '/api/registry': () => ({ ok: true, data: REGISTRY }),
+    },
+  })
+  const response = await context.call('backend.databases')
+  assert.equal(response.status, 200)
+  const value = valueOf(response)
+  assert.equal(value.mode, 'local')
+  assert.equal(value.current.db, '/tmp/ca.db')
+  assert.equal(value.candidates.length, 2)
+  assert.equal(value.candidates[0].kind, 'db')
+  assert.equal(value.candidates[0].sizeBytes, 2048)
+  assert.deepEqual(value.registry, {
+    available: true,
+    variants: [{ id: 'v1', name: 'main', db_path: '/data/main.db' }],
+    workspaces: [{ id: 'w1', name: 'oh', path: '/src/oh' }],
+    projects: [],
+    active_variant_id: 'v1',
+  })
+  assert.equal(context.backend.calls.listDatabases.length, 1)
+  assert.equal(context.backend.calls.listDatabases[0], undefined)
+  assert.equal(context.backend.calls.request[0].path, '/api/registry')
+})
+
+test('backend.databases forwards refresh and skips the registry when stopped', async () => {
+  const running = setup({
+    handlers: { '/api/registry': () => ({ ok: true, data: REGISTRY }) },
+  })
+  valueOf(await running.call('backend.databases', { refresh: true }))
+  assert.deepEqual(running.backend.calls.listDatabases[0], { refresh: true })
+  assert.equal(
+    errorOf(await running.call('backend.databases', { refresh: 'yes' })).code,
+    'INVALID_ARGUMENT',
+  )
+
+  const stopped = setup({
+    status: { mode: 'local', state: 'stopped', baseUrl: null, db: '/tmp/ca.db' },
+    handlers: { '/api/registry': () => ({ ok: true, data: REGISTRY }) },
+  })
+  const value = valueOf(await stopped.call('backend.databases'))
+  assert.equal(value.registry, null, 'registry is only merged while the backend runs')
+  assert.equal(stopped.backend.calls.request.length, 0, 'no registry request while stopped')
+  assert.equal(value.candidates.length, 2, 'discovery still works while stopped')
+})
+
+test('backend.databases degrades when the registry lookup fails', async () => {
+  const caError = setup({
+    handlers: {
+      '/api/registry': () => ({ ok: false, error: { code: 'DB_UNAVAILABLE', message: 'no db' } }),
+    },
+  })
+  const errorValue = valueOf(await caError.call('backend.databases'))
+  assert.equal(errorValue.registry, null)
+  assert.equal(errorValue.candidates.length, 2)
+
+  const crash = setup({
+    handlers: {
+      '/api/registry': () => new BackendError('HTTP_NETWORK', 'registry unreachable'),
+    },
+  })
+  const crashResponse = await crash.call('backend.databases')
+  assert.equal(crashResponse.status, 200)
+  assert.equal(valueOf(crashResponse).registry, null)
+})
+
+test('backend.databases passes a structured scan failure through', async () => {
+  const backend = createFakeBackend()
+  backend.listDatabases = async () => ({
+    ok: false,
+    mode: 'remote',
+    current: { db: null, dbDir: null },
+    candidates: [],
+    error: { code: 'SSH_UNREACHABLE', message: 'host offline' },
+  })
+  const context = setup({ backend })
+  const value = valueOf(await context.call('backend.databases'))
+  assert.equal(value.mode, 'remote')
+  assert.equal(value.ok, false)
+  assert.deepEqual(value.candidates, [])
+  assert.equal(value.error.code, 'SSH_UNREACHABLE')
+})
+
+test('backend.databases passes real scan metadata through', async () => {
+  const backend = createFakeBackend()
+  backend.listDatabases = async () => ({
+    ok: true,
+    mode: 'remote',
+    current: { db: null, dbDir: '/srv/index' },
+    configured: { kind: 'dbDir', path: '/srv/index' },
+    candidates: [
+      {
+        kind: 'dbDir',
+        path: '/srv/index',
+        label: 'index/',
+        dbCount: 4,
+        source: 'configured',
+        current: true,
+        status: 'ok',
+      },
+    ],
+    roots: ['/srv', '/home/yu'],
+    total: 9,
+    truncated: true,
+    maxItems: 5,
+    scannedAt: 1700000000123,
+    error: null,
+  })
+  const context = setup({ backend })
+  const value = valueOf(await context.call('backend.databases'))
+  assert.equal(value.ok, true)
+  assert.equal(value.mode, 'remote')
+  assert.deepEqual(value.current, { db: null, dbDir: '/srv/index' })
+  assert.deepEqual(value.configured, { kind: 'dbDir', path: '/srv/index' })
+  assert.equal(value.candidates.length, 1)
+  assert.equal(value.candidates[0].current, true)
+  assert.equal(value.candidates[0].status, 'ok')
+  assert.equal(value.total, 9)
+  assert.equal(value.truncated, true)
+  assert.deepEqual(value.roots, ['/srv', '/home/yu'])
+  assert.equal(value.scannedAt, 1700000000123)
+  assert.equal(value.registry?.available, false)
+})
+
+test('backend.databases normalizes thrown discovery failures', async () => {
+  const backend = createFakeBackend()
+  backend.listDatabases = async () => {
+    throw new BackendError('SSH_UNREACHABLE', 'cannot reach linux-box')
+  }
+  const context = setup({ backend })
+  const response = await context.call('backend.databases')
+  assert.equal(response.status, 200, 'backend failures are business envelopes')
+  const error = errorOf(response)
+  assert.equal(error.code, 'BACKEND_ERROR')
+  assert.equal(error.details.backendCode, 'SSH_UNREACHABLE')
+
+  const unsupported = createFakeBackend()
+  delete unsupported.listDatabases
+  const noMethod = setup({ backend: unsupported })
+  assert.equal(errorOf(await noMethod.call('backend.databases')).code, 'BACKEND_UNSUPPORTED')
+})
+
+test('backend.useDatabase switches the configured database', async () => {
+  const context = setup()
+  const response = await context.call('backend.useDatabase', { kind: 'db', path: '/data/ca.db' })
+  assert.equal(response.status, 200)
+  const value = valueOf(response)
+  assert.equal(value.config.db, '/data/ca.db')
+  assert.equal(value.status.mode, 'local')
+  assert.deepEqual(context.backend.calls.useDatabase, [{ kind: 'db', path: '/data/ca.db' }])
+
+  valueOf(await context.call('backend.useDatabase', { kind: 'dbDir', path: '/data/index' }))
+  assert.deepEqual(context.backend.calls.useDatabase.at(-1), {
+    kind: 'dbDir',
+    path: '/data/index',
+  })
+  valueOf(await context.call('backend.useDatabase', { kind: 'dbdir', path: '/data/index2' }))
+  assert.equal(context.backend.calls.useDatabase.at(-1).kind, 'dbDir', 'kind is case-insensitive')
+})
+
+test('backend.useDatabase validates kind and path before calling the backend', async () => {
+  const context = setup()
+  const cases = [
+    [{}, 'INVALID_ARGUMENT'],
+    [{ kind: 'file', path: '/data/ca.db' }, 'INVALID_ARGUMENT'],
+    [{ kind: 'db' }, 'INVALID_ARGUMENT'],
+    [{ kind: 'db', path: '' }, 'INVALID_ARGUMENT'],
+    [{ kind: 'db', path: 'ca.db' }, 'INVALID_ARGUMENT'],
+    [{ kind: 'db', path: '/tmp/../etc/x.db' }, 'INVALID_ARGUMENT'],
+    [{ kind: 'db', path: '/tmp/a\nb' }, 'INVALID_ARGUMENT'],
+    [{ kind: 'db', path: `/${'x'.repeat(4096)}` }, 'INVALID_ARGUMENT'],
+  ]
+  for (const [payload, code] of cases) {
+    const response = await context.call('backend.useDatabase', payload)
+    assert.equal(response.status, 400, `status for ${JSON.stringify(payload)}`)
+    assert.equal(errorOf(response).code, code)
+  }
+  assert.equal(context.backend.calls.useDatabase.length, 0)
+})
+
+test('backend.useDatabase normalizes backend failures into the picker error vocabulary', async () => {
+  const notFound = setup()
+  notFound.backend.useDatabase = async () => {
+    throw new BackendError('DB_NOT_FOUND', 'database not found: /x.db')
+  }
+  const notFoundResponse = await notFound.call('backend.useDatabase', { kind: 'db', path: '/x.db' })
+  assert.equal(notFoundResponse.status, 200)
+  assert.equal(errorOf(notFoundResponse).code, 'DB_NOT_FOUND')
+
+  const invalid = setup()
+  invalid.backend.useDatabase = async () => {
+    throw new BackendError('CONFIG_INVALID', 'invalid database configuration')
+  }
+  const invalidResponse = await invalid.call('backend.useDatabase', { kind: 'db', path: '/x.db' })
+  assert.equal(invalidResponse.status, 400)
+  assert.equal(errorOf(invalidResponse).code, 'INVALID_ARGUMENT')
+
+  const offline = setup()
+  offline.backend.useDatabase = async () => {
+    throw new BackendError('HTTP_NETWORK', 'unreachable', { cause: 'ECONNREFUSED' })
+  }
+  const offlineResponse = await offline.call('backend.useDatabase', { kind: 'db', path: '/x.db' })
+  assert.equal(offlineResponse.status, 200)
+  const offlineError = errorOf(offlineResponse)
+  assert.equal(offlineError.code, 'BACKEND_ERROR')
+  assert.equal(offlineError.details.backendCode, 'HTTP_NETWORK')
+
+  const crash = setup()
+  crash.backend.useDatabase = async () => {
+    throw new Error('boom')
+  }
+  const crashResponse = await crash.call('backend.useDatabase', { kind: 'db', path: '/x.db' })
+  assert.equal(crashResponse.status, 500)
+  assert.equal(errorOf(crashResponse).code, 'INTERNAL')
+})
+
+test('backend.useDatabase reports an unsupported backend manager', async () => {
+  const backend = createFakeBackend()
+  delete backend.useDatabase
+  const context = setup({ backend })
+  assert.equal(
+    errorOf(await context.call('backend.useDatabase', { kind: 'db', path: '/x.db' })).code,
+    'BACKEND_UNSUPPORTED',
+  )
+})
+
+// --------------------------------------------------------------------------- //
 // tasks.*
 // --------------------------------------------------------------------------- //
 
@@ -629,7 +875,17 @@ test('explain reports unavailable/failed services and invalid payloads', async (
 
 test('the route handler never throws, for any endpoint or body shape', async () => {
   const context = setup()
-  for (const endpoint of ['ping', 'status', 'ca.request', 'backend.get', 'tasks.list', 'explain', '???']) {
+  for (const endpoint of [
+    'ping',
+    'status',
+    'ca.request',
+    'backend.get',
+    'backend.databases',
+    'backend.useDatabase',
+    'tasks.list',
+    'explain',
+    '???',
+  ]) {
     for (const rawBody of ['', 'null', '[1,2,3]', '"text"', '123', 'not-json', '{}']) {
       const response = await context.call(endpoint, undefined, { rawBody })
       assert.equal(typeof response.envelope, 'object')

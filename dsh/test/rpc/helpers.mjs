@@ -37,6 +37,8 @@ export function createFakeBackend(options = {}) {
     probeRemote: [],
     startRemoteInstall: [],
     installRemote: [],
+    listDatabases: [],
+    useDatabase: [],
   }
   const backend = {
     calls,
@@ -102,6 +104,41 @@ export function createFakeBackend(options = {}) {
         steps: [{ id: 'rsync', title: 'copy sources', status: 'running' }],
         logs: ['copying…'],
         error: null,
+      }
+    },
+    async listDatabases(options) {
+      calls.listDatabases.push(options)
+      return {
+        mode: 'local',
+        current: { db: '/tmp/ca.db', dbDir: null },
+        candidates: [
+          {
+            kind: 'db',
+            path: '/tmp/ca.db',
+            label: 'ca.db',
+            sizeBytes: 2048,
+            mtime: 1700000000,
+            source: 'configured',
+          },
+          {
+            kind: 'dbDir',
+            path: '/tmp/index',
+            label: 'index',
+            dbCount: 3,
+            source: 'scan',
+          },
+        ],
+      }
+    },
+    async useDatabase(request) {
+      calls.useDatabase.push(request)
+      backend.config = {
+        ...backend.config,
+        ...(request.kind === 'db' ? { db: request.path } : { dbDir: request.path }),
+      }
+      return {
+        config: backend.config,
+        status: { mode: 'local', state: 'running', db: request.path },
       }
     },
     on() {

@@ -55,6 +55,19 @@ the backend page are persisted as a sparse user patch in
 | `local.env` / `remote.env` | `{}` | extra child-process environment |
 | `log.*` | bounded | plugin log rotation and in-memory ring settings |
 
+### Choosing the database / project
+
+The top bar always shows the active database (a single `.db` file or a federated
+shard directory, with its full path in the tooltip). Its selector lists databases
+discovered on the backend host — for a remote backend it scans the configured
+directory over one SSH round trip — plus the workspace/project/variant entries a
+CA registry database exposes. The backend page repeats the same list under
+"Available databases". Selecting an entry calls `backend.useDatabase`, which
+persists the new target in the user patch, restarts `ca serve` (and the SSH
+tunnel for remote targets) and reloads the page; a failed switch keeps the
+previous database. Nothing about the queried index is compiled into the plugin:
+it is always the configured local path or the remote path reached through SSH.
+
 All remote paths must be absolute or start with `~/`.
 
 Advanced optional overrides are read from the same config object:

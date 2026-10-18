@@ -38,6 +38,8 @@ export const RPC_ENDPOINTS = Object.freeze([
   'backend.probe',
   'backend.install',
   'backend.installStatus',
+  'backend.databases',
+  'backend.useDatabase',
   'tasks.start',
   'tasks.list',
   'tasks.get',
@@ -59,6 +61,7 @@ const MAX_HTTP_BODY_BYTES = 1024 * 1024
 const MAX_SYMBOL_LENGTH = 1024
 const MAX_QUESTION_LENGTH = 4000
 const MAX_ID_LENGTH = 128
+const MAX_DB_PATH_LENGTH = 4096
 
 /** Stable RPC error carrying a machine-readable code. */
 export class RpcError extends Error {
@@ -156,6 +159,72 @@ function optionalInt(payload, name, min, max) {
     fail('INVALID_ARGUMENT', `payload.${name} must be between ${min} and ${max}`)
   }
   return number
+}
+
+/** Optional boolean payload field (accepts JSON booleans only). */
+function optionalBool(payload, name) {
+  const value = payload[name]
+  if (value === undefined || value === null) return undefined
+  if (typeof value === 'boolean') return value
+  fail('INVALID_ARGUMENT', `payload.${name} must be a boolean`)
+}
+
+/** Validate a database file or directory path coming from the UI. */
+function validateDatabasePath(value) {
+  if (typeof value !== 'string') fail('INVALID_ARGUMENT', 'payload.path must be a string')
+  const path = value.trim()
+  if (path.length === 0) fail('INVALID_ARGUMENT', 'payload.path must not be empty')
+  if (path.length > MAX_DB_PATH_LENGTH) {
+    fail('INVALID_ARGUMENT', `payload.path is too long (maximum ${MAX_DB_PATH_LENGTH} characters)`)
+  }
+  if (/[\0\r\n]/.test(path)) {
+    fail('INVALID_ARGUMENT', 'payload.path must not contain NUL or newline characters')
+  }
+  if (!path.startsWith('/')) {
+    fail('INVALID_ARGUMENT', 'payload.path must be an absolute path (start with "/")')
+  }
+  if (path.split('/').includes('..')) {
+    fail('INVALID_ARGUMENT', 'payload.path must not contain ".." segments')
+  }
+  return path
+}
+
+/**
+ * Map backend failures onto the small database-switch vocabulary the UI knows:
+ * INVALID_ARGUMENT (bad input/config), DB_NOT_FOUND (missing target), and
+ * BACKEND_ERROR (anything else, original code kept in details).
+ */
+function databaseSwitchFailure(error) {
+  if (!isBackendError(error)) return error
+  const details = detailsOf(error.details)
+  if (error.code === 'DB_NOT_FOUND') return new RpcError('DB_NOT_FOUND', error.message, details)
+  if (error.code === 'INVALID_ARGUMENT' || error.code === 'CONFIG_INVALID') {
+    return new RpcError('INVALID_ARGUMENT', error.message, details)
+  }
+  return new RpcError('BACKEND_ERROR', error.message, { ...details, backendCode: error.code })
+}
+
+/** Trim the CA registry snapshot to the fields the database picker needs. */
+function registrySummary(data) {
+  if (!isPlainObject(data)) return null
+  const strings = (items) =>
+    Array.isArray(items)
+      ? items
+          .filter((item) => isPlainObject(item))
+          .slice(0, 100)
+          .map((item) => jsonSafe(item) ?? {})
+      : []
+  const active = isPlainObject(data.active_variant) ? data.active_variant : null
+  return {
+    available:
+      data.available === true ||
+      data.active_variant_id != null ||
+      (Array.isArray(data.variants) && data.variants.length > 0),
+    variants: strings(data.variants),
+    workspaces: strings(data.workspaces),
+    projects: strings(data.projects),
+    active_variant_id: data.active_variant_id ?? active?.id ?? null,
+  }
 }
 
 /** Validate `payload.id` for task endpoints. */
@@ -601,6 +670,96 @@ function makeDispatcher({ backend, tasks, explain, config = {}, ctx }) {
       }
       if (installState !== null) return jsonSafe(installState) ?? { started: false, status: 'idle' }
       return { started: false, status: 'idle', steps: [], logs: [] }
+    },
+
+    async 'backend.databases'(payload) {
+      const refresh = optionalBool(payload, 'refresh')
+      const listDatabases = backendMethod(backend, ['listDatabases'])
+      if (listDatabases === null) {
+        fail(
+          'BACKEND_UNSUPPORTED',
+          'This CA backend build does not support database discovery yet; start it from the CA backend page instead.',
+        )
+      }
+      let report
+      try {
+        report = await listDatabases(refresh === true ? { refresh: true } : undefined)
+      } catch (error) {
+        throw databaseSwitchFailure(error)
+      }
+      if (!isPlainObject(report)) {
+        fail('BACKEND_ERROR', 'The CA backend returned an invalid database discovery report')
+      }
+      const safe = jsonSafe(report) ?? {}
+      const status = safeStatus(backend)
+      const current = isPlainObject(safe.current)
+        ? safe.current
+        : { db: null, dbDir: null }
+      // Best effort: merge the CA registry (variants/workspaces) only while the
+      // backend answers; a registry failure must never fail database discovery.
+      let registry = null
+      if (status.state === 'running' && typeof backend.request === 'function') {
+        try {
+          const envelope = await backend.request('/api/registry', { method: 'GET', timeoutMs: 5000 })
+          if (isPlainObject(envelope) && envelope.ok === true) {
+            registry = registrySummary(envelope.data)
+          }
+        } catch {
+          registry = null
+        }
+      }
+      const candidates = Array.isArray(safe.candidates) ? safe.candidates.slice(0, 500) : []
+      // `mode/current/candidates/registry` are the picker contract; the scan
+      // metadata below is additive so the settings page can show totals and
+      // truncation without another RPC.
+      const value = {
+        ok: safe.ok !== false,
+        mode: typeof safe.mode === 'string' ? safe.mode : (status.mode ?? 'unconfigured'),
+        current,
+        configured: isPlainObject(safe.configured) ? safe.configured : null,
+        candidates,
+        total: Number.isFinite(Number(safe.total)) ? Number(safe.total) : candidates.length,
+        truncated: safe.truncated === true,
+        roots: Array.isArray(safe.roots) ? safe.roots.slice(0, 20).map((root) => String(root)) : [],
+        registry,
+      }
+      if (Number.isFinite(Number(safe.scannedAt))) value.scannedAt = Number(safe.scannedAt)
+      if (safe.error !== undefined) value.error = jsonSafe(safe.error) ?? null
+      return value
+    },
+
+    async 'backend.useDatabase'(payload) {
+      const kindRaw = optionalString(payload, 'kind', { required: true, maxLength: 16 })
+      const normalized = kindRaw.toLowerCase()
+      const kind =
+        normalized === 'db'
+          ? 'db'
+          : normalized === 'dbdir' || normalized === 'db_dir'
+            ? 'dbDir'
+            : null
+      if (kind === null) {
+        fail('INVALID_ARGUMENT', 'payload.kind must be "db" or "dbDir"')
+      }
+      const target = validateDatabasePath(payload.path)
+      const useDatabase = backendMethod(backend, ['useDatabase'])
+      if (useDatabase === null) {
+        fail(
+          'BACKEND_UNSUPPORTED',
+          'This CA backend build does not support switching databases yet; configure the database on the CA backend page instead.',
+        )
+      }
+      let result
+      try {
+        result = await useDatabase({ kind, path: target })
+      } catch (error) {
+        throw databaseSwitchFailure(error)
+      }
+      const safe = isPlainObject(result) ? jsonSafe(result) : {}
+      return {
+        ...safe,
+        config: publicConfig(safe?.config ?? backend.config ?? config) ?? {},
+        status: safeStatus(backend),
+      }
     },
 
     async 'tasks.start'(payload) {

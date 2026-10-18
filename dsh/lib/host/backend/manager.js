@@ -17,6 +17,7 @@
  */
 
 import os from 'node:os';
+import path from 'node:path';
 
 import {
   applyConfigPatch,
@@ -30,11 +31,13 @@ import {
   saveStoredSettings,
   validateConfig,
 } from '../config.js';
+import { createDatabaseErrorReport } from './databases.js';
 import { BackendError, normalizeError, toErrorPayload } from './errors.js';
 import { createHttpClient } from './http.js';
 import { createLocalBackend } from './local.js';
 import { createLogger } from './log.js';
 import { createRemoteBackend } from './remote/index.js';
+import { nonEmptyString } from './util.js';
 
 export { BackendError } from './errors.js';
 
@@ -487,6 +490,191 @@ export function createBackendManager(ctx, configInput, deps = {}) {
   }
 
   /**
+   * List database/project candidates for the active (or requested) backend.
+   *
+   * Never throws: configuration, ssh or scan problems come back as
+   * `{ok:false, error:{code,message,details?}}` so the settings page can render
+   * them. The currently configured target is always `candidates[0]`.
+   *
+   * @param {{mode?: 'local'|'remote', maxItems?: number, ssh?: string|object, timeoutMs?: number}} [listOptions]
+   */
+  async function listDatabases(listOptions = {}) {
+    const optionsObject = listOptions && typeof listOptions === 'object' ? listOptions : {};
+    const requestedMode = optionsObject.mode;
+    if (requestedMode !== undefined && !['local', 'remote'].includes(requestedMode)) {
+      return createDatabaseErrorReport({
+        mode: 'unconfigured',
+        maxItems: optionsObject.maxItems,
+        error: {
+          code: 'INVALID_ARGUMENT',
+          message: `mode 必须是 'local' 或 'remote'（当前 ${JSON.stringify(requestedMode)}）`,
+        },
+      });
+    }
+    if (disposed) {
+      return createDatabaseErrorReport({
+        mode: requestedMode || resolveConfiguredMode(config),
+        maxItems: optionsObject.maxItems,
+        error: { code: 'DISPOSED', message: 'CA 后端管理器已释放，无法扫描数据库' },
+      });
+    }
+    const mode = requestedMode || resolveConfiguredMode(config);
+    if (mode === 'unconfigured') {
+      return createDatabaseErrorReport({
+        mode: 'unconfigured',
+        maxItems: optionsObject.maxItems,
+        error: {
+          code: 'BACKEND_NOT_CONFIGURED',
+          message:
+            describeConfigurationHint(config) ||
+            'CA 后端尚未配置：请设置本地 DB（local.db/local.dbDir）或远程服务器（remote.ssh.host + remote.db/remote.dbDir）。',
+        },
+      });
+    }
+    const db = mode === 'local' ? config.local.db : config.remote.db;
+    const dbDir = mode === 'local' ? config.local.dbDir : config.remote.dbDir;
+    try {
+      const backend = await ensureBackend(mode);
+      return await backend.listDatabases({ ...optionsObject, mode });
+    } catch (error) {
+      const normalized = normalizeError(error, 'DB_SCAN_FAILED', '数据库扫描失败');
+      logger.warn(`[backend] ${normalized.message}`);
+      return createDatabaseErrorReport({
+        mode,
+        db,
+        dbDir,
+        maxItems: optionsObject.maxItems,
+        error: {
+          code: normalized.code,
+          message: normalized.message,
+          details: normalized.details,
+        },
+      });
+    }
+  }
+
+  /**
+   * Switch the backend to a listed database/directory.
+   *
+   * Order matters: validate the target first (one ssh round trip for remote),
+   * then persist + restart. If validation, persistence or restart fails the
+   * previous settings/config are restored (and the old backend is restarted
+   * best-effort), so a bad selection never bricks the plugin.
+   *
+   * @param {{kind: 'db'|'dbDir', path: string, mode?: 'local'|'remote', ssh?: string|object}} selection
+   * @returns {Promise<{config: Record<string, any>, status: Record<string, any>, validation: Record<string, any>}>}
+   */
+  async function useDatabase(selection = {}) {
+    if (disposed) throw new BackendError('DISPOSED', 'CA 后端管理器已释放，无法切换数据库');
+    if (!selection || typeof selection !== 'object' || Array.isArray(selection)) {
+      throw new BackendError('INVALID_ARGUMENT', 'useDatabase() 需要对象参数 {kind, path}');
+    }
+    const kind = selection.kind;
+    const selectedPath = typeof selection.path === 'string' ? selection.path.trim() : '';
+    if (kind !== 'db' && kind !== 'dbDir') {
+      throw new BackendError(
+        'INVALID_ARGUMENT',
+        `kind 必须是 'db'（单库）或 'dbDir'（分片目录），当前 ${JSON.stringify(kind)}`,
+        { field: 'kind' },
+      );
+    }
+    if (!selectedPath) {
+      throw new BackendError('INVALID_ARGUMENT', 'path 不能为空', { field: 'path' });
+    }
+    if (!path.isAbsolute(selectedPath)) {
+      throw new BackendError('INVALID_ARGUMENT', `数据库路径必须是绝对路径: ${selectedPath}`, {
+        field: 'path',
+        path: selectedPath,
+      });
+    }
+    const configuredMode = resolveConfiguredMode(config);
+    const explicitMode = selection.mode;
+    if (explicitMode !== undefined && !['local', 'remote'].includes(explicitMode)) {
+      throw new BackendError('INVALID_ARGUMENT', `mode 必须是 'local' 或 'remote'（当前 ${JSON.stringify(explicitMode)}）`);
+    }
+    let targetMode = explicitMode || configuredMode;
+    if (targetMode === 'unconfigured') {
+      targetMode = nonEmptyString(config.remote?.ssh?.host) ? 'remote' : 'local';
+    }
+    /** @type {Record<string, any>} sparse patch, same shape as settings.json */
+    const patch = {};
+    if (configuredMode === 'unconfigured' || (explicitMode && explicitMode !== configuredMode)) {
+      patch.backend = targetMode;
+    }
+    patch[targetMode] =
+      kind === 'db' ? { db: selectedPath, dbDir: null } : { db: null, dbDir: selectedPath };
+
+    // 1) Validate the candidate path before touching persisted settings.
+    const backend = await ensureBackend(targetMode);
+    const validation = await backend.validateDatabase({ kind, path: selectedPath });
+
+    // 2) Snapshot rollback state, then persist + restart.
+    const rollback = { storedPatch, config, configVersion };
+    let configureResult;
+    try {
+      configureResult = configure(patch);
+      if (!configureResult.changed && getStatus().state === 'running') {
+        return { config: publicConfig(config, paths), status: getStatus(), validation };
+      }
+      const status = await restart();
+      logger.info(`[backend] 已切换数据库（mode=${targetMode}, ${kind}=${selectedPath}）`);
+      return { config: publicConfig(config, paths), status, validation };
+    } catch (rawError) {
+      const cause = normalizeError(rawError, 'DATABASE_SWITCH_FAILED', '切换数据库失败');
+      logger.error(`[backend] 切换数据库失败，回滚设置：${cause.message}`);
+      try {
+        saveStoredSettings(paths, rollback.storedPatch);
+      } catch (writeError) {
+        logger.error(`[backend] 回滚 settings.json 失败: ${writeError?.message || writeError}`);
+      }
+      storedPatch = rollback.storedPatch;
+      config = rollback.config;
+      configVersion += 1;
+      for (const modeKey of BACKEND_MODES) {
+        const entry = backends[modeKey];
+        if (!entry) continue;
+        try {
+          entry.unsubscribe();
+        } catch {
+          // ignore
+        }
+        try {
+          await entry.backend.dispose();
+        } catch (disposeError) {
+          logger.warn(`[backend] 回滚时释放 ${modeKey} 后端失败: ${disposeError?.message || disposeError}`);
+        }
+        backends[modeKey] = null;
+      }
+      let restored = false;
+      let restoreError = null;
+      try {
+        const restoreMode = resolveConfiguredMode(config);
+        if (restoreMode !== 'unconfigured') {
+          const restoredStatus = await start();
+          restored = restoredStatus.state === 'running';
+        }
+      } catch (restoreFailure) {
+        restoreError = normalizeError(restoreFailure, 'BACKEND_START_FAILED');
+        logger.warn(`[backend] 回滚后重启旧后端失败: ${restoreError.message}`);
+      }
+      emit('config', { config: publicConfig(config, paths), changed: true });
+      emit('status', { ...getStatus(), configChanged: false }, { reason: 'rolled-back' });
+      throw new BackendError(
+        'DATABASE_SWITCH_FAILED',
+        `切换数据库失败：${cause.message}` +
+          (restored ? '；已恢复原配置并重启旧后端' : '；已恢复原配置，但旧后端未能自动重启，请重试 backend.start'),
+        {
+          cause: cause.toJSON(),
+          restored,
+          validation,
+          status: getStatus(),
+          restoreError: restoreError ? restoreError.message : null,
+        },
+      );
+    }
+  }
+
+  /**
    * Persist sparse user settings and resolve them. While a backend is running
    * the new settings only take effect on the next start/restart; the return
    * value says so via `restartRequired`.
@@ -588,6 +776,8 @@ export function createBackendManager(ctx, configInput, deps = {}) {
     installRemote,
     startRemoteInstall,
     getInstallStatus,
+    listDatabases,
+    useDatabase,
     configure,
     onChange,
     on,

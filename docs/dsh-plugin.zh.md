@@ -51,6 +51,15 @@ bundle）；改 `dsh/lib/host/bootstrap.js` 必须完整重启 Harness。
 | `local.env` / `remote.env` | `{}` | 子进程附加环境变量 |
 | `log.*` | 有界 | 插件自身日志轮转与内存环形缓冲设置 |
 
+### 选择数据库 / 项目
+
+顶栏始终显示当前数据库（单个 `.db` 文件或联邦 shard 目录，tooltip 给出完整路径）。
+选择器列出后端主机上发现的数据库——远程后端通过一次 SSH 往返扫描配置目录——以及
+CA registry 数据库暴露的 workspace/project/variant 条目。后端页面的「可用数据库」
+重复同一列表。选中一项会调用 `backend.useDatabase`：把新目标持久化到用户 patch、
+重启 `ca serve`（远程目标同时重启 SSH 隧道）并重新加载页面；切换失败保留原数据库。
+插件不内置任何被查询的索引：它始终是配置的本地路径，或经 SSH 到达的远端路径。
+
 远端路径必须是绝对路径或以 `~/` 开头。
 
 以下可选覆盖项也从同一 config 对象读取：`maxToolOutputChars`（或

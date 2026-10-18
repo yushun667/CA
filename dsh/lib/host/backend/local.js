@@ -18,6 +18,11 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 
 import { READY_LINE_RE } from './ca-protocol.js';
+import {
+  createDatabaseErrorReport,
+  scanLocalDatabaseCatalog,
+  validateLocalDatabaseTarget,
+} from './databases.js';
 import { BackendError, describeCause, normalizeError } from './errors.js';
 import {
   buildCaArgv,
@@ -660,6 +665,64 @@ export function createLocalBackend(options) {
     });
   }
 
+  /**
+   * List local database candidates around the configured target. Never throws:
+   * configuration/scan problems come back as `{ok:false, error}`.
+   */
+  async function listDatabases(listOptions = {}) {
+    const local = config.local || {};
+    const db = local.db || null;
+    const dbDir = local.dbDir || null;
+    const maxItems = listOptions?.maxItems;
+    if (!db && !dbDir) {
+      return createDatabaseErrorReport({
+        mode: 'local',
+        db,
+        dbDir,
+        maxItems,
+        error: {
+          code: 'BACKEND_NOT_CONFIGURED',
+          message: '本地后端未配置数据库：请设置 local.db 或 local.dbDir。',
+        },
+      });
+    }
+    if (disposed) {
+      return createDatabaseErrorReport({
+        mode: 'local',
+        db,
+        dbDir,
+        maxItems,
+        error: { code: 'DISPOSED', message: 'CA 本地后端已释放' },
+      });
+    }
+    try {
+      return scanLocalDatabaseCatalog({
+        db,
+        dbDir,
+        repoRoot: local.repoRoot || null,
+        maxItems,
+      });
+    } catch (error) {
+      const normalized = normalizeError(error, 'DB_SCAN_FAILED');
+      return createDatabaseErrorReport({
+        mode: 'local',
+        db,
+        dbDir,
+        maxItems,
+        error: {
+          code: normalized.code,
+          message: normalized.message,
+          details: normalized.details,
+        },
+      });
+    }
+  }
+
+  /** Validate a local switch target; throws BackendError on any problem. */
+  async function validateDatabase(selection = {}) {
+    return validateLocalDatabaseTarget(selection);
+  }
+
   async function dispose() {
     if (disposed) return;
     disposed = true;
@@ -701,6 +764,8 @@ export function createLocalBackend(options) {
     restart,
     execCa,
     probe,
+    listDatabases,
+    validateDatabase,
     subscribe,
     dispose,
     /** Exposed for tests: the argv builder without spawning. */

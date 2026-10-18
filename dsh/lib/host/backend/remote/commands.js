@@ -659,3 +659,200 @@ export function buildRemoteVerifyScript(options) {
     options.env,
   );
 }
+
+/**
+ * Remote script listing database candidates under one root directory.
+ *
+ * One ssh round trip, one directory level (plus root itself):
+ *   - direct `*.db` files (skipping `-wal`/`-shm` sidecars);
+ *   - subdirectories containing `*.db` files, with a `dbCount`;
+ *   - the root itself as a `dbDir` candidate.
+ *
+ * Hidden directories and `.ca`/`.tmp` are skipped. Primary implementation is
+ * python3 (JSON-safe for arbitrary paths); a POSIX shell + `stat` fallback is
+ * used when python3 is unavailable. Output markers are parsed by
+ * `parseRemoteDatabaseScanOutput` in ../databases.js.
+ *
+ * @param {{root: string, maxEntries?: number}} options
+ */
+export function buildListDatabasesScript(options = {}) {
+  const root = nonEmptyString(options.root);
+  if (!root) {
+    throw new BackendError('INVALID_ARGUMENT', '数据库扫描根目录不能为空');
+  }
+  const rootExpr = remotePathExpression(root);
+  const maxEntries = Math.max(1, Math.min(500, Math.trunc(Number(options.maxEntries) || 240)));
+  const lines = [
+    'set +e',
+    `ROOT=${rootExpr}`,
+    'echo "CA_DB_SCAN_ROOT=$ROOT"',
+    'if [ ! -d "$ROOT" ]; then',
+    '  echo "CA_DB_ERROR=root_missing"',
+    '  exit 0',
+    'fi',
+    'if command -v python3 >/dev/null 2>&1; then',
+    `  python3 - "$ROOT" ${maxEntries} <<'PY'`,
+    'import json, os, sys',
+    '',
+    'root = sys.argv[1]',
+    'max_entries = int(sys.argv[2])',
+    'emitted = 0',
+    '',
+    'def emit(obj):',
+    '    global emitted',
+    '    if emitted >= max_entries:',
+    '        return',
+    '    emitted += 1',
+    '    print("CA_DB_ENTRY:" + json.dumps(obj, separators=(",", ":")))',
+    '',
+    'def is_db_file(name):',
+    '    return name.endswith(".db") and not name.endswith(("-wal", "-shm"))',
+    '',
+    'try:',
+    '    entries = list(os.scandir(root))',
+    'except OSError as exc:',
+    '    print("CA_DB_ERROR=" + str(exc).replace(chr(10), " "))',
+    '    sys.exit(0)',
+    '',
+    'root_db_count = 0',
+    'for entry in entries:',
+    '    try:',
+    '        if entry.is_file() and is_db_file(entry.name):',
+    '            root_db_count += 1',
+    '            st = entry.stat()',
+    '            emit({"kind": "db", "path": os.path.join(root, entry.name), "name": entry.name, "sizeBytes": st.st_size, "mtime": int(st.st_mtime * 1000), "source": "scan"})',
+    '    except OSError:',
+    '        pass',
+    '',
+    'try:',
+    '    root_stat = os.stat(root)',
+    '    emit({"kind": "dbDir", "path": root, "name": os.path.basename(root) or root, "sizeBytes": None, "mtime": int(root_stat.st_mtime * 1000), "dbCount": root_db_count, "source": "scan"})',
+    'except OSError:',
+    '    pass',
+    '',
+    'for entry in entries:',
+    '    try:',
+    '        if not entry.is_dir():',
+    '            continue',
+    '    except OSError:',
+    '        continue',
+    '    name = entry.name',
+    '    if name.startswith(".") or name in (".ca", ".tmp"):',
+    '        continue',
+    '    path = os.path.join(root, name)',
+    '    count = 0',
+    '    try:',
+    '        for child in os.scandir(path):',
+    '            try:',
+    '                if child.is_file() and is_db_file(child.name):',
+    '                    count += 1',
+    '            except OSError:',
+    '                pass',
+    '    except OSError:',
+    '        continue',
+    '    if count == 0:',
+    '        continue',
+    '    mtime = None',
+    '    try:',
+    '        mtime = int(entry.stat().st_mtime * 1000)',
+    '    except OSError:',
+    '        pass',
+    '    emit({"kind": "dbDir", "path": path, "name": name, "sizeBytes": None, "mtime": mtime, "dbCount": count, "source": "scan"})',
+    '',
+    'print("CA_DB_DONE=1")',
+    'PY',
+    'else',
+    '  # POSIX shell fallback (no python3): compute sizes with stat/wc.',
+    '  EMITTED=0',
+    '  ROOT_COUNT=0',
+    '  for f in "$ROOT"/*.db; do',
+    '    [ -f "$f" ] || continue',
+    '    case "$f" in *-wal|*-shm) continue;; esac',
+    '    ROOT_COUNT=$((ROOT_COUNT+1))',
+    '    SIZE=$(wc -c < "$f" 2>/dev/null)',
+    '    [ -n "$SIZE" ] || SIZE=0',
+    '    MTIME=$(stat -c %Y "$f" 2>/dev/null)',
+    '    [ -n "$MTIME" ] || MTIME=0',
+    '    MTIME=$((MTIME*1000))',
+    '    NAME=$(basename "$f")',
+    `    printf 'CA_DB_ENTRY:{"kind":"db","path":"%s","name":"%s","sizeBytes":%s,"mtime":%s,"source":"scan"}\\n' "$f" "$NAME" "$SIZE" "$MTIME"`,
+    '    EMITTED=$((EMITTED+1))',
+    '    [ "$EMITTED" -ge ' + String(maxEntries) + ' ] && break',
+    '  done',
+    '  dir_mtime=$(stat -c %Y "$ROOT" 2>/dev/null)',
+    '  [ -n "$dir_mtime" ] || dir_mtime=0',
+    '  dir_mtime=$((dir_mtime*1000))',
+    `  printf 'CA_DB_ENTRY:{"kind":"dbDir","path":"%s","name":"%s","sizeBytes":null,"mtime":%s,"dbCount":%s,"source":"scan"}\\n' "$ROOT" "$(basename "$ROOT")" "$dir_mtime" "$ROOT_COUNT"`,
+    '  for d in "$ROOT"/*/; do',
+    '    [ -d "$d" ] || continue',
+    '    name=${d%/}',
+    '    name=${name##*/}',
+    '    case "$name" in .*) continue;; esac',
+    '    [ "$name" = ".ca" ] && continue',
+    '    [ "$name" = ".tmp" ] && continue',
+    '    count=0',
+    '    for f in "$d"*.db; do',
+    '      [ -f "$f" ] || continue',
+    '      case "$f" in *-wal|*-shm) continue;; esac',
+    '      count=$((count+1))',
+    '    done',
+    '    [ "$count" -gt 0 ] || continue',
+    '    MTIME=$(stat -c %Y "${d%/}" 2>/dev/null)',
+    '    [ -n "$MTIME" ] || MTIME=0',
+    '    MTIME=$((MTIME*1000))',
+    "    printf 'CA_DB_ENTRY:{\"kind\":\"dbDir\",\"path\":\"%s\",\"name\":\"%s\",\"sizeBytes\":null,\"mtime\":%s,\"dbCount\":%s,\"source\":\"scan\"}\\n' \"${d%/}\" \"$name\" \"$MTIME\" \"$count\"",
+    '    EMITTED=$((EMITTED+1))',
+    '    [ "$EMITTED" -ge ' + String(maxEntries) + ' ] && break',
+    '  done',
+    '  echo "CA_DB_DONE=1"',
+    'fi',
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * Remote script validating a database switch target without changing anything.
+ * Prints `CA_DB_VALID=1:OK[:count[:size]]` or `CA_DB_VALID=0:<REASON>`.
+ *
+ * @param {{kind: 'db'|'dbDir', path: string}} options
+ */
+export function buildValidateDatabaseScript(options = {}) {
+  const kind = options.kind;
+  const target = nonEmptyString(options.path);
+  if (kind !== 'db' && kind !== 'dbDir') {
+    throw new BackendError('INVALID_ARGUMENT', `kind 必须是 'db' 或 'dbDir'（当前 ${JSON.stringify(kind)}）`);
+  }
+  if (!target) throw new BackendError('INVALID_ARGUMENT', '数据库路径不能为空');
+  const targetExpr = remotePathExpression(target);
+  const lines = [
+    'set +e',
+    `TARGET=${targetExpr}`,
+    'if [ ! -e "$TARGET" ]; then',
+    '  if [ ! -d "$TARGET" ]; then',
+    '    echo "CA_DB_VALID=0:NOT_FOUND"',
+    '    exit 0',
+    '  fi',
+    'fi',
+  ];
+  if (kind === 'dbDir') {
+    lines.push(
+      'if [ ! -d "$TARGET" ]; then echo "CA_DB_VALID=0:NOT_DIR"; exit 0; fi',
+      'COUNT=0',
+      'for f in "$TARGET"/*.db; do',
+      '  [ -f "$f" ] || continue',
+      '  case "$f" in *-wal|*-shm) continue;; esac',
+      '  COUNT=$((COUNT+1))',
+      'done',
+      'if [ "$COUNT" -eq 0 ]; then echo "CA_DB_VALID=0:NO_DB"; else echo "CA_DB_VALID=1:OK:$COUNT"; fi',
+    );
+  } else {
+    lines.push(
+      'if [ ! -f "$TARGET" ]; then echo "CA_DB_VALID=0:NOT_FILE"; exit 0; fi',
+      'case "$TARGET" in *.db) ;; *) echo "CA_DB_VALID=0:NOT_DB_EXTENSION"; exit 0;; esac',
+      'SIZE=$(wc -c < "$TARGET" 2>/dev/null)',
+      '[ -n "$SIZE" ] || SIZE=0',
+      'echo "CA_DB_VALID=1:OK:1:$SIZE"',
+    );
+  }
+  return lines.join('\n');
+}

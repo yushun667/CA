@@ -13,6 +13,7 @@
  */
 
 import { BackendError, normalizeError } from '../errors.js';
+import { listRemoteDatabases, validateRemoteDatabase } from './databases.js';
 import { createRemoteExecutor } from './exec.js';
 import { createInstallSteps, performRemoteInstall } from './install.js';
 import { probeRemote } from './probe.js';
@@ -189,6 +190,28 @@ export function createRemoteBackend(options) {
         executor,
         logger,
         timeoutMs: Number(deps.probeTimeoutMs) > 0 ? Number(deps.probeTimeoutMs) : undefined,
+      });
+    },
+    /** Database candidates (never throws; failures come back as a report). */
+    listDatabases(listOptions = {}) {
+      return listRemoteDatabases({
+        config,
+        executor,
+        logger,
+        sshOverride: listOptions?.ssh,
+        maxItems: listOptions?.maxItems,
+        timeoutMs: Number(listOptions?.timeoutMs) > 0 ? Number(listOptions.timeoutMs) : undefined,
+      });
+    },
+    /** Validate a switch target over ssh; throws BackendError on failure. */
+    validateDatabase(selection = {}) {
+      return validateRemoteDatabase({
+        config,
+        executor,
+        logger,
+        sshOverride: selection?.ssh,
+        kind: selection?.kind,
+        path: selection?.path,
       });
     },
     install,

@@ -16,6 +16,7 @@ import {
   makeTempDir,
   nextTick,
 } from './helpers/fakes.mjs';
+import { createFakeRunner } from './remote/helpers.mjs';
 
 const READY_URL = 'http://127.0.0.1:48123';
 const READY_LINE = `[serve] CA backend listening on ${READY_URL} (db=/tmp/ca.db; federated=no)\n`;
@@ -82,7 +83,10 @@ function setup(explicit = {}, options = {}) {
     now: () => 1700000000000,
     spawn: fakeSpawn.spawn,
     fetch: fetchImpl,
-    resolveLocalTarget: async () => options.target || makeTarget(),
+    resolveLocalTarget: async (targetOptions) =>
+      typeof options.target === 'function'
+        ? options.target(targetOptions)
+        : options.target || makeTarget(),
     resolveRuntime: () => options.runtime || makeRuntime(),
     findFreePort: async () => 43210,
     runProcess:
@@ -370,4 +374,171 @@ test('remote mode is wired end to end and failure paths are BackendErrors', asyn
   }
 });
 
+const REMOTE_DB_ENTRY_LINES = [
+  'CA_DB_SCAN_ROOT=/home/yu/CA_OH/index',
+  'CA_DB_ENTRY:{"kind":"dbDir","path":"/home/yu/CA_OH/index","name":"index","sizeBytes":null,"mtime":1700000000000,"dbCount":15,"source":"scan"}',
+  'CA_DB_ENTRY:{"kind":"db","path":"/home/yu/CA_OH/index/oh_S1.db","name":"oh_S1.db","sizeBytes":4096,"mtime":1700000000000,"source":"scan"}',
+  'CA_DB_ENTRY:{"kind":"dbDir","path":"/home/yu/CA_OH/index/functional","name":"functional","sizeBytes":null,"mtime":1700000000000,"dbCount":3,"source":"scan"}',
+  'CA_DB_DONE=1',
+].join('\n');
 
+function remoteDbConfig(overrides = {}) {
+  return {
+    backend: 'remote',
+    remote: {
+      ssh: { host: 'linux-box', user: 'yu' },
+      repoPath: '/home/yu/CA',
+      db: null,
+      dbDir: '/home/yu/CA_OH/index',
+      serveRemotePort: 0,
+      localPort: 0,
+      readyTimeoutMs: 2000,
+      maxRestarts: 0,
+      restartBackoffMs: 10,
+      ...overrides,
+    },
+  };
+}
+
+test('listDatabases on an unconfigured backend returns a structured report', async () => {
+  const context = setup({});
+  try {
+    const report = await context.manager.listDatabases();
+    assert.equal(report.ok, false);
+    assert.equal(report.mode, 'unconfigured');
+    assert.deepEqual(report.candidates, []);
+    assert.equal(report.error.code, 'BACKEND_NOT_CONFIGURED');
+    assert.deepEqual(report.current, { db: null, dbDir: null });
+  } finally {
+    await teardown(context);
+  }
+});
+
+test('listDatabases remote scans with one ssh round trip and marks current', async () => {
+  const runner = createFakeRunner(() => ({ code: 0, stdout: REMOTE_DB_ENTRY_LINES, stderr: '' }));
+  const context = setup(remoteDbConfig(), { runProcess: runner });
+  try {
+    const report = await context.manager.listDatabases();
+    assert.equal(report.ok, true);
+    assert.equal(report.mode, 'remote');
+    assert.deepEqual(report.current, { db: null, dbDir: '/home/yu/CA_OH/index' });
+    assert.equal(report.candidates[0].path, '/home/yu/CA_OH/index');
+    assert.equal(report.candidates[0].current, true);
+    assert.equal(report.candidates[0].dbCount, 15);
+    assert.equal(report.candidates.find((candidate) => /oh_S1\.db/.test(candidate.path)).sizeBytes, 4096);
+    assert.equal(runner.calls.length, 1, 'single ssh round trip for the scan');
+  } finally {
+    await teardown(context);
+  }
+});
+
+test('useDatabase remote switches the shard dir, persists and restarts', async () => {
+  const runner = createFakeRunner((call) => {
+    if (call.script?.includes('CA_DB_VALID')) return { code: 0, stdout: 'CA_DB_VALID=1:OK:4', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  });
+  const context = setup(remoteDbConfig(), { runProcess: runner });
+  try {
+    const result = await context.manager.useDatabase({
+      kind: 'dbDir',
+      path: '/home/yu/CA_OH/index2',
+    });
+    assert.equal(result.status.state, 'running');
+    assert.equal(result.status.mode, 'remote');
+    assert.equal(result.config.remote.dbDir, '/home/yu/CA_OH/index2');
+    assert.equal(result.config.remote.db, null);
+    assert.equal(result.validation.dbCount, 4);
+    const persisted = JSON.parse(fs.readFileSync(context.paths.settingsPath, 'utf8'));
+    assert.equal(persisted.config.remote.dbDir, '/home/yu/CA_OH/index2');
+    assert.equal(runner.calls.filter((call) => call.script?.includes('CA_DB_VALID')).length, 1);
+  } finally {
+    await teardown(context);
+  }
+});
+
+test('useDatabase rejects an invalid remote target without touching settings', async () => {
+  const runner = createFakeRunner((call) => {
+    if (call.script?.includes('CA_DB_VALID')) return { code: 0, stdout: 'CA_DB_VALID=0:NO_DB', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  });
+  const context = setup(remoteDbConfig(), { runProcess: runner });
+  try {
+    await assert.rejects(
+      context.manager.useDatabase({ kind: 'dbDir', path: '/home/yu/CA_OH/empty' }),
+      (error) => error.code === 'DB_NOT_FOUND',
+    );
+    assert.equal(context.manager.config.remote.dbDir, '/home/yu/CA_OH/index');
+    assert.equal(fs.existsSync(context.paths.settingsPath), false, 'nothing was persisted');
+  } finally {
+    await teardown(context);
+  }
+});
+
+test('useDatabase rolls back config and settings when restart fails', async () => {
+  const runner = createFakeRunner((call) => {
+    if (call.script?.includes('CA_DB_VALID')) return { code: 0, stdout: 'CA_DB_VALID=1:OK:4', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  });
+  const failingSpawn = createFakeSpawn({
+    onSpawn(call) {
+      call.child.emitData('stderr', 'error: cannot bind 127.0.0.1\n');
+      call.child.exit(1, null);
+    },
+  });
+  const context = setup(remoteDbConfig(), { runProcess: runner, fakeSpawn: failingSpawn });
+  try {
+    // Persist the old selection first so rollback has something to restore.
+    context.manager.configure({ remote: { dbDir: '/home/yu/CA_OH/index' } });
+    await assert.rejects(
+      context.manager.useDatabase({ kind: 'dbDir', path: '/home/yu/CA_OH/index2' }),
+      (error) => {
+        assert.equal(error.code, 'DATABASE_SWITCH_FAILED');
+        assert.equal(error.details.restored, false);
+        assert.ok(error.details.cause && typeof error.details.cause.message === 'string');
+        return true;
+      },
+    );
+    assert.equal(context.manager.config.remote.dbDir, '/home/yu/CA_OH/index', 'old config restored');
+    const persisted = JSON.parse(fs.readFileSync(context.paths.settingsPath, 'utf8'));
+    assert.equal(persisted.config.remote.dbDir, '/home/yu/CA_OH/index', 'old settings restored');
+    assert.notEqual(context.manager.getStatus().state, 'running');
+  } finally {
+    await teardown(context);
+  }
+});
+
+test('useDatabase local validates the file, persists and restarts', async () => {
+  const root = makeTempDir();
+  const db1 = path.join(root, 'old.db');
+  const db2 = path.join(root, 'new.db');
+  fs.writeFileSync(db1, 'sqlite');
+  fs.writeFileSync(db2, 'sqlite');
+  const context = setup(
+    { backend: 'local', local: { db: db1 } },
+    {
+      root,
+      target: (targetOptions) =>
+        makeTarget({
+          db: targetOptions.config.local.db,
+          dbDir: targetOptions.config.local.dbDir,
+        }),
+    },
+  );
+  try {
+    const result = await context.manager.useDatabase({ kind: 'db', path: db2 });
+    assert.equal(result.status.state, 'running');
+    assert.equal(result.config.local.db, db2);
+    assert.equal(result.config.local.dbDir, null);
+    const persisted = JSON.parse(fs.readFileSync(context.paths.settingsPath, 'utf8'));
+    assert.equal(persisted.config.local.db, db2);
+    assert.equal(result.validation.dbCount, 1);
+
+    await assert.rejects(
+      context.manager.useDatabase({ kind: 'db', path: path.join(root, 'missing.db') }),
+      (error) => error.code === 'DB_NOT_FOUND',
+    );
+    assert.equal(context.manager.config.local.db, db2, 'failed validation leaves the selection intact');
+  } finally {
+    cleanupDir(root);
+  }
+});

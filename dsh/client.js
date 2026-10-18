@@ -9831,6 +9831,11 @@ const BACKEND_CSS = `
 .ca-backend-group-title { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; padding-bottom: 4px; border-bottom: 1px solid var(--dsw-alias-border-l1, #eaeef2); font-size: 12.5px; font-weight: 600; color: var(--dsw-alias-label-secondary, #57606a); }
 .ca-backend-check { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--dsw-alias-label-primary, #1f2328); cursor: pointer; user-select: none; }
 .ca-backend-check input { width: 14px; height: 14px; accent-color: var(--dsw-alias-state-business-primary, #2f6feb); }
+.ca-backend-db-current { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; margin-bottom: 8px; border: 1px solid var(--dsw-alias-border-l1, #eaeef2); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-2, rgba(127, 127, 127, 0.04)); font-size: 12px; }
+.ca-backend-db-current-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); overflow-wrap: anywhere; }
+.ca-backend-db-name { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+.ca-backend-db-label { font-size: 12.5px; }
+.ca-backend-db-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); overflow-wrap: anywhere; }
 .ca-backend-notice { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-2, rgba(127, 127, 127, 0.05)); font-size: 12.5px; color: var(--dsw-alias-label-secondary, #57606a); }
 .ca-backend-report { max-height: 320px; }
 `
@@ -9843,6 +9848,39 @@ const MODE_OPTIONS = [
 
 function asText(value) {
   return value === undefined || value === null ? '' : String(value)
+}
+
+/** Last path segment for a POSIX or Windows path. */
+function basename(path) {
+  if (typeof path !== 'string') return ''
+  const cleaned = path.replace(/[\\/]+$/, '')
+  const parts = cleaned.split(/[\\/]/)
+  return parts[parts.length - 1] || cleaned
+}
+
+/** Current database path from a backend.databases payload or config. */
+function currentDatabasePath(databases, config) {
+  if (databases && typeof databases === 'object') {
+    const configured = databases.configured
+    if (configured && typeof configured === 'object' && typeof configured.path === 'string' && configured.path) {
+      return configured.path
+    }
+    if (databases.current && typeof databases.current === 'object') {
+      if (typeof databases.current.db === 'string' && databases.current.db) return databases.current.db
+      if (typeof databases.current.dbDir === 'string' && databases.current.dbDir) return databases.current.dbDir
+    }
+    if (Array.isArray(databases.candidates)) {
+      const marked = databases.candidates.find((candidate) => candidate && candidate.current === true)
+      if (marked && typeof marked.path === 'string' && marked.path) return marked.path
+    }
+  }
+  const local = config && config.local && typeof config.local === 'object' ? config.local : {}
+  if (typeof local.db === 'string' && local.db) return local.db
+  if (typeof local.dbDir === 'string' && local.dbDir) return local.dbDir
+  const remote = config && config.remote && typeof config.remote === 'object' ? config.remote : {}
+  if (typeof remote.db === 'string' && remote.db) return remote.db
+  if (typeof remote.dbDir === 'string' && remote.dbDir) return remote.dbDir
+  return ''
 }
 
 function nullIfEmpty(value) {
@@ -9972,6 +10010,11 @@ function createBackendPage(React, bag) {
     const [health, setHealth] = React.useState(null)
     const [healthError, setHealthError] = React.useState(null)
     const [install, setInstall] = React.useState(null)
+    const [databases, setDatabases] = React.useState(null)
+    const [databasesLoading, setDatabasesLoading] = React.useState(false)
+    const [databasesError, setDatabasesError] = React.useState(null)
+    const [databasesUnsupported, setDatabasesUnsupported] = React.useState(false)
+    const [databaseBusy, setDatabaseBusy] = React.useState('')
 
     const mountedRef = React.useRef(true)
     const noticeTimer = React.useRef(null)
@@ -10050,8 +10093,121 @@ function createBackendPage(React, bag) {
       }
     }
 
+    const loadDatabases = React.useCallback(async (refreshMode) => {
+      setDatabasesLoading(true)
+      setDatabasesError(null)
+      try {
+        const value = await api.rpc('backend.databases', refreshMode ? { refresh: true } : {})
+        if (!mountedRef.current) return
+        if (value && typeof value === 'object' && value.ok === false) {
+          const apiError = value.error
+            ? toApiError(value.error)
+            : toApiError({ code: 'DB_SCAN_FAILED', message: 'Database scan failed' })
+          setDatabases(value)
+          if (apiError.code === 'BACKEND_UNSUPPORTED' || apiError.code === 'UNKNOWN_ENDPOINT') {
+            setDatabasesError(null)
+            setDatabasesUnsupported(true)
+          } else {
+            setDatabasesError(apiError)
+            setDatabasesUnsupported(false)
+          }
+          return
+        }
+        setDatabases(value && typeof value === 'object' ? value : null)
+        setDatabasesError(value && value.error ? toApiError(value.error) : null)
+        setDatabasesUnsupported(false)
+      } catch (error) {
+        if (!mountedRef.current) return
+        const apiError = toApiError(error)
+        if (apiError.code === 'ABORTED') return
+        const unsupported =
+          apiError.code === 'BACKEND_UNSUPPORTED' || apiError.code === 'UNKNOWN_ENDPOINT'
+        setDatabasesUnsupported(unsupported)
+        setDatabasesError(unsupported ? null : apiError)
+      } finally {
+        if (mountedRef.current) setDatabasesLoading(false)
+      }
+    }, [])
+
+    /** Poll `backend.get` until the backend settles after a database switch. */
+    async function waitForBackendSettled(timeoutMs) {
+      const startedAt = Date.now()
+      while (Date.now() - startedAt < (timeoutMs || 30000)) {
+        try {
+          const snapshot = await api.backend.get()
+          if (!mountedRef.current) return null
+          applySnapshot(snapshot)
+          const nextStatus = snapshot && snapshot.status ? snapshot.status : null
+          const backendState = nextStatus ? nextStatus.state : ''
+          if (backendState === 'running' || backendState === 'error') {
+            return nextStatus
+          }
+        } catch (_error) {
+          /* keep polling: the backend may be restarting */
+        }
+        await new Promise((resolve) => {
+          if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+            window.setTimeout(resolve, 600)
+          } else {
+            setTimeout(resolve, 600)
+          }
+        })
+      }
+      return null
+    }
+
+    /** Switch the backend database through `backend.useDatabase`, then reload. */
+    async function useDatabase(kind, path) {
+      const key = `${kind}:${path}`
+      setDatabaseBusy(key)
+      setActionError(null)
+      try {
+        const result = await api.rpc('backend.useDatabase', { kind, path })
+        if (!mountedRef.current) return
+        if (result && typeof result === 'object') {
+          applySnapshot({ status: result.status, config: result.config })
+        }
+        const nextStatus = await waitForBackendSettled(30000)
+        if (!mountedRef.current) return
+        if (nextStatus && nextStatus.state === 'running') {
+          showNotice(t('backend.databaseSwitched', null, 'Database switched; reloading…'))
+          if (
+            typeof window !== 'undefined' &&
+            window.location &&
+            typeof window.location.reload === 'function'
+          ) {
+            window.location.reload()
+          }
+          return
+        }
+        setActionError(
+          toApiError({
+            code: 'BACKEND_ERROR',
+            message: t('shell.dbSwitchTimeout', null, 'The backend did not become ready in time.'),
+          }),
+        )
+        void loadDatabases(true)
+      } catch (error) {
+        if (!mountedRef.current) return
+        const apiError = toApiError(error)
+        if (apiError.code === 'ABORTED') return
+        if (apiError.code === 'BACKEND_UNSUPPORTED') {
+          apiError.message = t(
+            'shell.dbSwitchUnsupported',
+            null,
+            'This backend build cannot switch databases from the UI; configure it on the backend page.',
+          )
+        }
+        setActionError(apiError)
+        void loadDatabases(true)
+      } finally {
+        if (mountedRef.current) setDatabaseBusy('')
+      }
+    }
+
     React.useEffect(() => {
       void load()
+      void loadDatabases(false)
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
@@ -10445,6 +10601,221 @@ function createBackendPage(React, bag) {
       ),
     )
 
+    const databaseCandidates =
+      databases && Array.isArray(databases.candidates) ? databases.candidates : []
+    const currentDbPath = currentDatabasePath(databases, config)
+
+    const databaseColumns = [
+      {
+        key: 'kind',
+        label: t('backend.databaseKind', null, 'Kind'),
+        width: '104px',
+        render: (candidate) =>
+          h(
+            ui.Badge,
+            { tone: candidate.status === 'failed' ? 'error' : 'muted' },
+            candidate.kind === 'dbDir'
+              ? t('shell.dbKindDbDir', null, 'shard dir')
+              : t('shell.dbKindDb', null, 'single DB'),
+          ),
+      },
+      {
+        key: 'path',
+        label: t('backend.db', null, 'Database'),
+        render: (candidate) =>
+          h(
+            'span',
+            { className: 'ca-backend-db-name' },
+            h('span', { className: 'ca-backend-db-label' }, candidate.label || basename(candidate.path)),
+            h('span', { className: 'ca-backend-db-path' }, candidate.path),
+            candidate.status === 'failed'
+              ? h(
+                  'span',
+                  { className: 'ca-backend-db-path', style: { color: 'var(--dsw-alias-state-error-primary, #d1242f)' } },
+                  t('backend.databaseScanFailed', null, 'scan failed'),
+                )
+              : null,
+          ),
+      },
+      {
+        key: 'size',
+        label: t('backend.databaseSize', null, 'Size'),
+        align: 'right',
+        width: '120px',
+        render: (candidate) => {
+          if (candidate.sizeBytes !== undefined && candidate.sizeBytes !== null) {
+            return h('span', { className: 'ca-mono' }, formatBytes(candidate.sizeBytes))
+          }
+          if (Number(candidate.dbCount) > 0) {
+            return t('backend.databaseFiles', { count: Number(candidate.dbCount) }, `${candidate.dbCount} DB files`)
+          }
+          return '—'
+        },
+      },
+      {
+        key: 'source',
+        label: t('backend.databaseSource', null, 'Source'),
+        width: '110px',
+        render: (candidate) =>
+          candidate.source ? h(ui.Badge, { tone: 'neutral' }, String(candidate.source)) : '—',
+      },
+      {
+        key: 'actions',
+        label: '',
+        width: '150px',
+        render: (candidate) => {
+          const isCurrent = Boolean(currentDbPath) && currentDbPath === candidate.path
+          const rowBusy = databaseBusy === `${candidate.kind}:${candidate.path}`
+          return h(
+            ui.Button,
+            {
+              variant: isCurrent ? 'secondary' : 'primary',
+              size: 'sm',
+              disabled: isCurrent || Boolean(databaseBusy),
+              title: candidate.path,
+              onClick: () => {
+                void useDatabase(candidate.kind || 'db', candidate.path)
+              },
+            },
+            rowBusy ? h(ui.Spinner, { size: 11 }) : null,
+            isCurrent
+              ? t('backend.databaseCurrent', null, 'Current')
+              : rowBusy
+                ? t('backend.usingDatabase', null, 'Switching…')
+                : t('backend.useDatabase', null, 'Use this database'),
+          )
+        },
+      },
+    ]
+
+    const databasesCard = h(
+      ui.Card,
+      {
+        title: t('backend.databases', null, 'Available databases'),
+        subtitle: t(
+          'backend.databasesHint',
+          null,
+          'Scanned on the backend host; choosing one updates the backend configuration and restarts it.',
+        ),
+        actions: [
+          h(
+            ui.Button,
+            {
+              key: 'rescan',
+              variant: 'ghost',
+              size: 'sm',
+              disabled: databasesLoading || Boolean(databaseBusy),
+              onClick: () => {
+                void loadDatabases(true)
+              },
+            },
+            databasesLoading ? h(ui.Spinner, { size: 12 }) : h(ui.Icon, { name: 'refresh', size: 13 }),
+            databasesLoading
+              ? t('backend.scanning', null, 'Scanning…')
+              : t('backend.scan', null, 'Rescan'),
+          ),
+        ],
+      },
+      h(
+        'div',
+        { className: 'ca-col' },
+        currentDbPath
+          ? h(
+              'div',
+              { className: 'ca-backend-db-current' },
+              h(ui.Badge, { tone: 'success' }, t('backend.databaseCurrent', null, 'Current')),
+              h('span', { className: 'ca-backend-db-current-path' }, currentDbPath),
+            )
+          : null,
+        databases && (Number(databases.total) > 0 || databases.scannedAt)
+          ? h(
+              'div',
+              { className: 'ca-row', style: { fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary, #8b949e)', flexWrap: 'wrap' } },
+              Number(databases.total) > 0
+                ? h(
+                    ui.Badge,
+                    { tone: 'neutral' },
+                    t('backend.databaseTotal', { count: Number(databases.total) }, `${Number(databases.total)} candidates`),
+                  )
+                : null,
+              databases.truncated
+                ? h(
+                    ui.Badge,
+                    { tone: 'warn' },
+                    t(
+                      'backend.databaseTruncated',
+                      { count: Number(databases.maxItems) || Number(databases.total) || 0 },
+                      'Only the first entries are shown.',
+                    ),
+                  )
+                : null,
+              databases.scannedAt
+                ? h(
+                    'span',
+                    null,
+                    t(
+                      'backend.databaseScannedAt',
+                      { time: formatTimestamp(Number(databases.scannedAt)) },
+                      `Scanned ${formatTimestamp(Number(databases.scannedAt))}`,
+                    ),
+                  )
+                : null,
+            )
+          : null,
+        databasesUnsupported
+          ? h(ui.EmptyState, {
+              icon: h(ui.Icon, { name: 'info', size: 22 }),
+              title: t('shell.dbScanUnsupported', null, 'This host build does not support database scanning; configure the database on the backend page.'),
+              body: t('backend.configHint', null, 'Saved on the DSH host; SSH passwords are never stored — use keys or ssh-agent.'),
+            })
+          : null,
+        databasesError
+          ? h(ui.ErrorBox, {
+              title: t('common.error', null, 'Error'),
+              error: databasesError,
+              hint: t('backend.databasesHint', null, 'Scanned on the backend host; choosing one updates the backend configuration and restarts it.'),
+              retryLabel: t('common.retry', null, 'Retry'),
+              onRetry: () => {
+                void loadDatabases(true)
+              },
+            })
+          : null,
+        !databasesUnsupported && databaseCandidates.length === 0
+          ? h(ui.EmptyState, {
+              icon: h(ui.Icon, { name: 'backend', size: 22 }),
+              title: databasesLoading
+                ? t('backend.scanning', null, 'Scanning…')
+                : t('backend.databasesEmpty', null, 'No database candidates were found next to the configured paths.'),
+              action: databasesLoading
+                ? null
+                : h(
+                    ui.Button,
+                    { variant: 'ghost', size: 'sm', onClick: () => void loadDatabases(true) },
+                    h(ui.Icon, { name: 'refresh', size: 13 }),
+                    t('backend.scan', null, 'Rescan'),
+                  ),
+            })
+          : null,
+        databaseCandidates.length > 0
+          ? h(ui.Table, {
+              columns: databaseColumns,
+              rows: databaseCandidates,
+              rowKey: (candidate) => `${candidate.kind}:${candidate.path}`,
+              dense: true,
+              empty: t('backend.databasesEmpty', null, 'No database candidates were found next to the configured paths.'),
+            })
+          : null,
+        databaseBusy
+          ? h(
+              'div',
+              { className: 'ca-backend-notice' },
+              h(ui.Spinner, { size: 12 }),
+              t('backend.usingDatabase', null, 'Switching…'),
+            )
+          : null,
+      ),
+    )
+
     const healthCard = health || healthError
       ? h(
           ui.Card,
@@ -10701,6 +11072,7 @@ function createBackendPage(React, bag) {
         ),
         unconfiguredHint,
         statusCard,
+        databasesCard,
         healthCard,
         probeCard,
         installCard,
@@ -11226,7 +11598,7 @@ __exports["createSearchPage"] = createSearchPage;
  * (`createXPage(React, { ui, api, i18n })`) and receive `{ route, navigate }`.
  */
 
-const { toApiError } = __m("api.js")
+const { formatBytes, toApiError } = __m("api.js")
 
 /** Main-slot key and locale namespace used by this plugin. */
 const PANEL_ID = 'ca'
@@ -11454,9 +11826,72 @@ const SHELL_CSS = `
 .ca-lang-switch { display: inline-flex; align-items: center; padding: 2px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: var(--dsw-radius-sm, 6px); }
 .ca-lang-switch .ca-btn { min-height: 20px; padding: 0 7px; font-size: 11.5px; border-radius: calc(var(--dsw-radius-sm, 6px) - 2px); }
 .ca-lang-switch .ca-btn-active { background: var(--dsw-alias-button-ghost-active-fill, rgba(127, 127, 127, 0.14)); }
-.ca-variant { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.ca-variant-label { font-size: 11.5px; color: var(--dsw-alias-label-tertiary, #8b949e); white-space: nowrap; }
-.ca-variant .ca-select { width: auto; min-width: 140px; max-width: 280px; min-height: 26px; padding: 2px 8px; font-size: 12px; }
+.ca-db { position: relative; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.ca-db-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l2, #e5e7eb);
+  border-radius: var(--dsw-radius-sm, 6px);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, #57606a);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ca-db-trigger:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.1)); color: var(--dsw-alias-label-primary, #1f2328); }
+.ca-db-trigger[aria-expanded='true'] { background: var(--dsw-alias-button-ghost-active-fill, rgba(127, 127, 127, 0.14)); border-color: var(--dsw-alias-border-l3, #d0d7de); color: var(--dsw-alias-label-primary, #1f2328); }
+.ca-db-label { max-width: 185px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 11.5px; }
+.ca-db-switching { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); white-space: nowrap; }
+.ca-db-dropdown {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(470px, calc(100vw - 32px));
+  max-height: min(72vh, 580px);
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--dsw-alias-border-l2, #e5e7eb);
+  border-radius: var(--dsw-radius-lg, 10px);
+  background: var(--dsw-alias-bg-layer-1, #ffffff);
+  box-shadow: var(--dsw-elevation-panel, 0 10px 30px rgba(0, 0, 0, 0.16));
+}
+.ca-db-section { display: flex; flex-direction: column; gap: 1px; padding: 3px 0; }
+.ca-db-section + .ca-db-section { border-top: 1px solid var(--dsw-alias-border-l1, #eaeef2); }
+.ca-db-section-head { display: flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary, #8b949e); }
+.ca-db-current { display: flex; flex-direction: column; gap: 2px; padding: 5px 8px; }
+.ca-db-current-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ca-db-current-path { font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); overflow-wrap: anywhere; }
+.ca-db-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm, 6px);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.ca-db-row:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.09)); }
+.ca-db-row:disabled { opacity: 0.7; cursor: default; }
+.ca-db-row-active { background: var(--dsw-alias-button-ghost-active-fill, rgba(127, 127, 127, 0.13)); }
+.ca-db-row-main { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-width: 0; }
+.ca-db-row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ca-db-row-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ds-font-family-code, ui-monospace, monospace); font-size: 10.5px; color: var(--dsw-alias-label-tertiary, #8b949e); }
+.ca-db-row-meta { font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); white-space: nowrap; }
+.ca-db-hint { padding: 5px 8px; font-size: 11.5px; color: var(--dsw-alias-label-tertiary, #8b949e); }
+.ca-db-hint-error { color: var(--dsw-alias-state-error-primary, #d1242f); }
+.ca-db-foot { display: flex; gap: 6px; padding: 4px; border-top: 1px solid var(--dsw-alias-border-l1, #eaeef2); }
+.ca-db-foot .ca-btn { flex: 1 1 auto; justify-content: flex-start; }
 .ca-banner { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding: 6px 14px; border-bottom: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-2, #f6f8fa); color: var(--dsw-alias-label-secondary, #57606a); font-size: 12.5px; }
 .ca-banner-warn { color: var(--dsw-alias-state-warn-label, #9a6700); }
 .ca-banner-error { color: var(--dsw-alias-state-error-primary, #d1242f); }
@@ -11466,7 +11901,7 @@ const SHELL_CSS = `
 .ca-static-fill > * { max-width: 560px; width: 100%; }
 @media (max-width: 1080px) {
   .ca-brand-sub { display: none; }
-  .ca-variant-label { display: none; }
+  .ca-db-label { max-width: 120px; }
 }
 @media (max-width: 860px) {
   .ca-topnav .ca-btn { padding: 4px 8px; }
@@ -11505,6 +11940,11 @@ function createShell(React, bag) {
     backend: null, // status.backend
     counts: null,
     variantError: null,
+    databases: null, // backend.databases value {mode,current,candidates,registry}
+    databasesLoading: false,
+    databasesError: null,
+    databasesUnsupported: false,
+    databaseSwitch: null, // {kind,path,label,busy,phase,error}
     language: i18n.lang,
   }
 
@@ -11613,6 +12053,17 @@ function createShell(React, bag) {
         // Keep the variant catalog fresh once the backend can answer.
         api.variant.refresh({ signal: controller ? controller.signal : undefined }).catch(() => {})
       }
+      if (
+        value &&
+        value.backend &&
+        value.backend.mode !== 'unconfigured' &&
+        (!state.databases || state.databases.ok !== true) &&
+        !state.databasesLoading &&
+        !state.databasesUnsupported &&
+        !databasesInFlight
+      ) {
+        void refreshDatabases()
+      }
     } catch (error) {
       if (controller && controller.signal.aborted) return
       const apiError = toApiError(error)
@@ -11691,6 +12142,230 @@ function createShell(React, bag) {
     })
   }
 
+  // -- databases / project switching ---------------------------------------- //
+
+  /** File-name portion of a POSIX or Windows path. */
+  function basename(path) {
+    if (typeof path !== 'string') return ''
+    const cleaned = path.replace(/[\\/]+$/, '')
+    const parts = cleaned.split(/[\\/]/)
+    return parts[parts.length - 1] || cleaned
+  }
+
+  /** Current database descriptor: {kind:'db'|'dbDir'|'', path}. */
+  function currentDatabase() {
+    const databases = state.databases
+    if (databases && typeof databases === 'object') {
+      const configured = databases.configured
+      if (configured && typeof configured === 'object' && typeof configured.path === 'string' && configured.path) {
+        return { kind: configured.kind === 'dbDir' ? 'dbDir' : 'db', path: configured.path }
+      }
+      if (databases.current && typeof databases.current === 'object') {
+        const db = databases.current.db
+        const dbDir = databases.current.dbDir
+        if (typeof db === 'string' && db) return { kind: 'db', path: db }
+        if (typeof dbDir === 'string' && dbDir) return { kind: 'dbDir', path: dbDir }
+      }
+      if (Array.isArray(databases.candidates)) {
+        const marked = databases.candidates.find((candidate) => candidate && candidate.current === true)
+        if (marked && typeof marked.path === 'string' && marked.path) {
+          return { kind: marked.kind === 'dbDir' ? 'dbDir' : 'db', path: marked.path }
+        }
+      }
+    }
+    const backend = state.backend || {}
+    if (typeof backend.db === 'string' && backend.db) return { kind: 'db', path: backend.db }
+    if (typeof backend.dbDir === 'string' && backend.dbDir) return { kind: 'dbDir', path: backend.dbDir }
+    return { kind: '', path: '' }
+  }
+
+  function currentDatabaseLabel() {
+    const current = currentDatabase()
+    return current.path
+      ? basename(current.path)
+      : translate('shell.dbUnconfigured', null, 'No database configured')
+  }
+
+  function databaseKindLabel(kind) {
+    return kind === 'dbDir'
+      ? translate('shell.dbKindDbDir', null, 'shard dir')
+      : translate('shell.dbKindDb', null, 'single DB')
+  }
+
+  function databaseOptions() {
+    const databases = state.databases
+    if (!databases || !Array.isArray(databases.candidates)) return []
+    return databases.candidates.filter((candidate) => candidate && typeof candidate.path === 'string')
+  }
+
+  let databasesAbort = null
+  let databasesInFlight = false
+
+  /** Scan the backend host for index databases (`backend.databases`). */
+  async function refreshDatabases(options) {
+    const settings = options && typeof options === 'object' ? options : {}
+    if (databasesInFlight && !settings.force) return state.databases
+    databasesInFlight = true
+    publish({ databasesLoading: true, databasesError: null })
+    if (databasesAbort) databasesAbort.abort()
+    const controller = typeof AbortController === 'function' ? new AbortController() : null
+    databasesAbort = controller
+    try {
+      const value = await api.rpc(
+        'backend.databases',
+        settings.refresh ? { refresh: true } : {},
+        controller ? controller.signal : undefined,
+      )
+      if (controller && controller.signal.aborted) return null
+      if (value && typeof value === 'object' && value.ok === false) {
+        const failure = value.error ? toApiError(value.error) : toApiError({ code: 'DB_SCAN_FAILED', message: 'Database scan failed' })
+        const unsupported = failure.code === 'BACKEND_UNSUPPORTED' || failure.code === 'UNKNOWN_ENDPOINT'
+        publish({
+          databasesLoading: false,
+          databases: value,
+          databasesError: unsupported ? null : failure,
+          databasesUnsupported: unsupported,
+        })
+        return null
+      }
+      // A structured scan failure still carries mode/current/candidates; show
+      // the warning next to the list instead of discarding it.
+      const scanError =
+        value && typeof value === 'object' && value.error ? toApiError(value.error) : null
+      publish({
+        databasesLoading: false,
+        databases: value && typeof value === 'object' ? value : null,
+        databasesError: scanError,
+        databasesUnsupported: false,
+      })
+      return value
+    } catch (error) {
+      if (controller && controller.signal.aborted) return null
+      const apiError = toApiError(error)
+      if (apiError.code === 'ABORTED') return null
+      const unsupported =
+        apiError.code === 'UNKNOWN_ENDPOINT' ||
+        apiError.code === 'NOT_FOUND' ||
+        apiError.code === 'INVALID_ARGUMENT' ||
+        apiError.code === 'BACKEND_UNSUPPORTED'
+      publish({
+        databasesLoading: false,
+        databasesError: unsupported ? null : apiError,
+        databasesUnsupported: unsupported,
+      })
+      return null
+    } finally {
+      databasesInFlight = false
+      databasesAbort = null
+    }
+  }
+
+  /** Poll `status` until the backend settles, without waiting for the 8s loop. */
+  async function waitForBackendSettled(options) {
+    const settings = options && typeof options === 'object' ? options : {}
+    const timeoutMs = Number(settings.timeoutMs) > 0 ? Number(settings.timeoutMs) : 30000
+    const intervalMs = Number(settings.intervalMs) > 0 ? Number(settings.intervalMs) : 600
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < timeoutMs) {
+      try {
+        const value = await api.getStatus()
+        if (value && value.backend) {
+          publish({
+            connected: true,
+            statusLoading: false,
+            statusError: null,
+            status: value,
+            backend: value.backend,
+            counts: value.counts || null,
+          })
+          const backendState = value.backend.state
+          if (backendState === 'running' || backendState === 'error') {
+            return value.backend
+          }
+        }
+      } catch (error) {
+        const apiError = toApiError(error)
+        if (apiError.code === 'ABORTED') return null
+      }
+      await new Promise((resolve) => {
+        if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+          window.setTimeout(resolve, intervalMs)
+        } else {
+          setTimeout(resolve, intervalMs)
+        }
+      })
+    }
+    return null
+  }
+
+  /** Switch the backend database through `backend.useDatabase`, then reload. */
+  async function switchDatabase(kind, path) {
+    if (!kind || !path) return false
+    const target = { kind, path, label: basename(path) || path }
+    publish({
+      variantError: null,
+      databaseSwitch: { kind, path, label: target.label, busy: true, phase: 'switching', error: null },
+    })
+    try {
+      const result = await api.rpc('backend.useDatabase', { kind, path })
+      if (result && result.status && typeof result.status === 'object') {
+        publish({ backend: result.status })
+      }
+      publish({
+        databaseSwitch: { kind, path, label: target.label, busy: true, phase: 'waiting', error: null },
+      })
+      const backend = await waitForBackendSettled({ timeoutMs: 30000 })
+      if (backend && backend.state === 'running') {
+        publish({
+          databaseSwitch: { kind, path, label: target.label, busy: true, phase: 'reloading', error: null },
+        })
+        if (
+          typeof window !== 'undefined' &&
+          window.location &&
+          typeof window.location.reload === 'function'
+        ) {
+          window.location.reload()
+        }
+        // Clear the transient state; a working reload replaces the page anyway.
+        publish({ databaseSwitch: null })
+        return true
+      }
+      const message =
+        backend && backend.state === 'error' && backend.error
+          ? String(backend.error)
+          : translate('shell.dbSwitchTimeout', null, 'The backend did not become ready in time.')
+      publish({
+        databaseSwitch: {
+          kind,
+          path,
+          label: target.label,
+          busy: false,
+          phase: 'error',
+          error: toApiError({ code: 'BACKEND_ERROR', message }),
+        },
+      })
+      return false
+    } catch (error) {
+      const apiError = toApiError(error)
+      if (apiError.code === 'ABORTED') {
+        publish({ databaseSwitch: null })
+        return false
+      }
+      if (apiError.code === 'BACKEND_UNSUPPORTED') {
+        apiError.message = translate(
+          'shell.dbSwitchUnsupported',
+          null,
+          'This backend build cannot switch databases from the UI; configure it on the backend page.',
+        )
+      }
+      publish({
+        databaseSwitch: { kind, path, label: target.label, busy: false, phase: 'error', error: apiError },
+      })
+      void refreshDatabases({ refresh: true, force: true })
+      return false
+    }
+  }
+
   const translate = (key, vars, fallback) => i18n.t(key, vars, fallback)
   const PageErrorBoundary = createPageErrorBoundary(React, ui, translate)
 
@@ -11723,15 +12398,337 @@ function createShell(React, bag) {
     return translate(key, null, backend.state || 'stopped')
   }
 
+  /**
+   * Always-visible project/database selector in the top bar.
+   *
+   * Sections: current backend + scanned database candidates (`backend.databases`),
+   * registered registry variants (switch through POST /api/registry/active),
+   * and a fixed link to the backend settings page.
+   */
+  function DatabaseSelector() {
+    const [open, setOpen] = React.useState(false)
+    const wrapRef = React.useRef(null)
+    const databases = state.databases
+    const switchState = state.databaseSwitch
+    const busy = Boolean(switchState && switchState.busy)
+    const current = currentDatabase()
+    const currentLabel = currentDatabaseLabel()
+    const options = databaseOptions()
+    const registryState = api.variant.get()
+    const registry =
+      (registryState && registryState.registry) ||
+      (databases && databases.registry && typeof databases.registry === 'object'
+        ? databases.registry
+        : null)
+    const variants = registry && Array.isArray(registry.variants) ? registry.variants : []
+    const showRegistry = Boolean(registry && registry.available && variants.length > 0)
+
+    const close = () => setOpen(false)
+
+    // Lazy scan when the dropdown opens (and a manual retry path).
+    const openDropdown = () => {
+      const next = !open
+      setOpen(next)
+      if (next && (!databases || databases.ok !== true) && !state.databasesLoading) {
+        void refreshDatabases()
+      }
+    }
+
+    // Close on outside click / Escape.
+    React.useEffect(() => {
+      if (!open) return undefined
+      const onPointerDown = (event) => {
+        const wrap = wrapRef.current
+        if (wrap && event.target instanceof Node && !wrap.contains(event.target)) close()
+      }
+      const onKeyDown = (event) => {
+        if (event.key === 'Escape') close()
+      }
+      document.addEventListener('pointerdown', onPointerDown)
+      document.addEventListener('keydown', onKeyDown)
+      return () => {
+        document.removeEventListener('pointerdown', onPointerDown)
+        document.removeEventListener('keydown', onKeyDown)
+      }
+    }, [open])
+
+    const switchText = (() => {
+      if (!switchState) return ''
+      if (switchState.phase === 'reloading') return translate('shell.dbReloading', null, 'Reloading…')
+      if (switchState.phase === 'waiting') return translate('shell.dbRestarting', null, 'Restarting backend…')
+      return translate('shell.dbSwitching', null, 'Switching database…')
+    })()
+
+    const candidatesSection = h(
+      'div',
+      { className: 'ca-db-section' },
+      h(
+        'div',
+        { className: 'ca-db-section-head' },
+        h(ui.Icon, { name: 'backend', size: 12 }),
+        h('span', null, translate('shell.dbCandidates', null, 'Backend databases')),
+        databases && Number(databases.total) > 0
+          ? h(ui.Badge, { tone: 'neutral' }, String(Number(databases.total)))
+          : null,
+        state.databasesLoading ? h(ui.Spinner, { size: 11 }) : null,
+        h('span', { className: 'ca-spacer' }),
+        h(
+          ui.IconButton,
+          {
+            label: translate('shell.dbRescan', null, 'Rescan'),
+            title: translate('shell.dbRescan', null, 'Rescan'),
+            size: 22,
+            disabled: state.databasesLoading || busy,
+            onClick: () => {
+              void refreshDatabases({ refresh: true, force: true })
+            },
+          },
+          h(ui.Icon, { name: 'refresh', size: 12 }),
+        ),
+      ),
+      state.databasesError
+        ? h(
+            'div',
+            { className: 'ca-db-hint ca-db-hint-error' },
+            state.databasesError.message,
+            ' ',
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'ca-btn ca-btn-ghost ca-btn-sm',
+                onClick: () => {
+                  void refreshDatabases({ refresh: true, force: true })
+                },
+              },
+              translate('common.retry', null, 'Retry'),
+            ),
+          )
+        : null,
+      state.databasesUnsupported
+        ? h(
+            'div',
+            { className: 'ca-db-hint' },
+            translate(
+              'shell.dbScanUnsupported',
+              null,
+              'This host build does not support database scanning; configure the database on the backend page.',
+            ),
+          )
+        : null,
+      state.databasesLoading && options.length === 0
+        ? h('div', { className: 'ca-db-hint' }, translate('shell.dbScanning', null, 'Scanning databases…'))
+        : null,
+      !state.databasesLoading && !state.databasesError && !state.databasesUnsupported && options.length === 0
+        ? h(
+            'div',
+            { className: 'ca-db-hint' },
+            translate('shell.dbNoCandidates', null, 'No database candidates were found.'),
+          )
+        : null,
+      options.map((candidate) => {
+        const currentCandidate =
+          candidate.current === true ||
+          (current.path === candidate.path && (current.kind === candidate.kind || !candidate.kind))
+        const failed = candidate.status === 'failed'
+        const label = candidate.label || basename(candidate.path)
+        return h(
+          'button',
+          {
+            key: `${candidate.kind || 'db'}:${candidate.path}`,
+            type: 'button',
+            className: `ca-db-row${currentCandidate ? ' ca-db-row-active' : ''}`,
+            disabled: busy || currentCandidate || failed,
+            title: candidate.path,
+            onClick: () => {
+              close()
+              if (!currentCandidate && !failed) void switchDatabase(candidate.kind || 'db', candidate.path)
+            },
+          },
+          h(ui.Badge, { tone: failed ? 'error' : 'muted' }, databaseKindLabel(candidate.kind)),
+          h(
+            'span',
+            { className: 'ca-db-row-main' },
+            h('span', { className: 'ca-db-row-label' }, label),
+            h('span', { className: 'ca-db-row-path' }, candidate.path),
+          ),
+          failed
+            ? h(ui.Badge, { tone: 'error' }, translate('shell.dbCandidateFailed', null, 'scan failed'))
+            : null,
+          !failed && candidate.sizeBytes !== undefined && candidate.sizeBytes !== null
+            ? h('span', { className: 'ca-db-row-meta' }, formatBytes(candidate.sizeBytes))
+            : null,
+          !failed && Number(candidate.dbCount) > 0
+            ? h(
+                'span',
+                { className: 'ca-db-row-meta' },
+                translate('backend.databaseFiles', { count: Number(candidate.dbCount) }, `${candidate.dbCount} DB files`),
+              )
+            : null,
+          currentCandidate
+            ? h(ui.Badge, { tone: 'success' }, translate('shell.dbActive', null, 'active'))
+            : null,
+        )
+      }),
+      databases && databases.truncated
+        ? h(
+            'div',
+            { className: 'ca-db-hint' },
+            translate(
+              'shell.dbTruncated',
+              { count: Number(databases.maxItems) || Number(databases.total) || 0 },
+              'Only the first candidates are shown.',
+            ),
+          )
+        : null,
+    )
+
+    const registrySection = showRegistry
+      ? h(
+          'div',
+          { className: 'ca-db-section' },
+          h(
+            'div',
+            { className: 'ca-db-section-head' },
+            h(ui.Icon, { name: 'graph', size: 12 }),
+            h('span', null, translate('shell.dbRegistry', null, 'Registered variants')),
+          ),
+          variants.map((variant) => {
+            const active = variant.id === registry.active_variant_id
+            const parts = [variant.name, variant.product, variant.board, variant.version].filter(
+              (part) => typeof part === 'string' && part.length > 0,
+            )
+            const label = parts.length ? parts.join(' · ') : String(variant.id)
+            return h(
+              'button',
+              {
+                key: String(variant.id),
+                type: 'button',
+                className: `ca-db-row${active ? ' ca-db-row-active' : ''}`,
+                disabled: busy || active || !variant.db_exists,
+                title: variant.db_path || label,
+                onClick: () => {
+                  close()
+                  void switchVariant(variant.id)
+                },
+              },
+              h(ui.Badge, { tone: 'info' }, translate('shell.variant', null, 'Variant')),
+              h(
+                'span',
+                { className: 'ca-db-row-main' },
+                h('span', { className: 'ca-db-row-label' }, label),
+                variant.db_path ? h('span', { className: 'ca-db-row-path' }, variant.db_path) : null,
+              ),
+              active ? h(ui.Badge, { tone: 'success' }, translate('shell.dbActive', null, 'active')) : null,
+            )
+          }),
+        )
+      : null
+
+    return h(
+      'div',
+      { className: 'ca-db', ref: wrapRef },
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'ca-db-trigger',
+          'aria-haspopup': 'dialog',
+          'aria-expanded': open ? 'true' : 'false',
+          'aria-label': `${translate('shell.database', null, 'Database')}: ${currentLabel}`,
+          title: current.path
+            ? `${translate('shell.database', null, 'Database')}: ${current.path}`
+            : translate('shell.dbUnconfiguredHint', null, 'No database configured — open the selector to choose one.'),
+          onClick: openDropdown,
+        },
+        h(ui.Icon, { name: 'backend', size: 13 }),
+        h('span', { className: 'ca-db-label' }, currentLabel),
+        h(ui.Icon, { name: 'chevron-down', size: 11 }),
+      ),
+      switchState && switchState.busy
+        ? h('span', { className: 'ca-db-switching' }, h(ui.Spinner, { size: 11 }), switchText)
+        : null,
+      open
+        ? h(
+            'div',
+            {
+              className: 'ca-db-dropdown',
+              role: 'dialog',
+              'aria-label': translate('shell.databaseSelector', null, 'Project / database selector'),
+            },
+            h(
+              'div',
+              { className: 'ca-db-section' },
+              h(
+                'div',
+                { className: 'ca-db-current' },
+                h(
+                  'div',
+                  { className: 'ca-db-current-row' },
+                  h(ui.Badge, { tone: backendStateTone(state.backend) === 'running' ? 'success' : 'neutral' }, backendStateLabel(state.backend)),
+                  state.backend && state.backend.mode
+                    ? h('span', { className: 'ca-db-row-meta' }, String(state.backend.mode))
+                    : null,
+                ),
+                h(
+                  'div',
+                  { className: 'ca-db-current-path' },
+                  current.path || translate('shell.dbUnconfigured', null, 'No database configured'),
+                ),
+              ),
+            ),
+            switchState && switchState.phase === 'error' && switchState.error
+              ? h(
+                  'div',
+                  { className: 'ca-db-hint ca-db-hint-error' },
+                  translate(
+                    'shell.dbSwitchFailed',
+                    { message: switchState.error.message },
+                    `Could not switch database: ${switchState.error.message}`,
+                  ),
+                )
+              : null,
+            candidatesSection,
+            registrySection,
+            h(
+              'div',
+              { className: 'ca-db-foot' },
+              h(
+                ui.Button,
+                {
+                  variant: 'ghost',
+                  size: 'sm',
+                  onClick: () => {
+                    close()
+                    navigate({ page: 'backend' })
+                  },
+                },
+                h(ui.Icon, { name: 'settings', size: 13 }),
+                translate('shell.dbSettings', null, 'Backend settings…'),
+              ),
+              h(
+                ui.Button,
+                {
+                  variant: 'ghost',
+                  size: 'sm',
+                  onClick: () => {
+                    void refreshDatabases({ refresh: true, force: true })
+                  },
+                },
+                h(ui.Icon, { name: 'refresh', size: 13 }),
+                translate('shell.dbRescan', null, 'Rescan'),
+              ),
+            ),
+          )
+        : null,
+    )
+  }
+
   function TopBar() {
-    const variantState = api.variant.get()
-    const registry = variantState && variantState.registry
-    const options = variantOptions()
     const backend = state.backend
     const runningTasks =
       state.counts && Number(state.counts.running) > 0 ? Number(state.counts.running) : 0
     const route = state.route
-    const showVariant = Boolean(registry && registry.available && options.length > 0)
     return h(
       'header',
       { className: 'ca-topbar', role: 'banner' },
@@ -11786,26 +12783,7 @@ function createShell(React, bag) {
       h(
         'div',
         { className: 'ca-topbar-right' },
-        showVariant
-          ? h(
-              'div',
-              { className: 'ca-variant' },
-              h(
-                'span',
-                { className: 'ca-variant-label' },
-                translate('shell.variant', null, 'Variant'),
-              ),
-              h(ui.Select, {
-                value: registry.active_variant_id || '',
-                options,
-                ariaLabel: translate('shell.variant', null, 'Variant'),
-                title: registry.active_variant && registry.active_variant.db_path,
-                onChange: (value) => {
-                  void switchVariant(value)
-                },
-              }),
-            )
-          : null,
+        h(DatabaseSelector),
         h(
           'button',
           {
@@ -11946,19 +12924,30 @@ function createShell(React, bag) {
   }
 
   function VariantErrorBanner() {
-    if (!state.variantError) return null
+    const switchError =
+      state.databaseSwitch && state.databaseSwitch.phase === 'error' && state.databaseSwitch.error
+        ? state.databaseSwitch.error
+        : null
+    const error = state.variantError || switchError
+    if (!error) return null
     return h(
       'div',
       { className: 'ca-banner ca-banner-error', role: 'alert' },
       h(ui.Icon, { name: 'warning', size: 13 }),
-      h('span', { className: 'ca-banner-text' }, state.variantError.message),
+      h(
+        'span',
+        { className: 'ca-banner-text' },
+        switchError
+          ? translate('shell.dbSwitchFailed', { message: error.message }, `Could not switch database: ${error.message}`)
+          : error.message,
+      ),
       h('span', { className: 'ca-spacer' }),
       h(
         ui.Button,
         {
           variant: 'ghost',
           size: 'sm',
-          onClick: () => publish({ variantError: null }),
+          onClick: () => publish({ variantError: null, databaseSwitch: null }),
         },
         translate('common.close', null, 'Close'),
       ),
@@ -12071,6 +13060,8 @@ function createShell(React, bag) {
     subscribe,
     getSnapshot,
     refreshStatus,
+    refreshDatabases,
+    switchDatabase,
   }
 }
 
@@ -12885,6 +13876,49 @@ const zh = {
   'shell.pageError': '页面渲染失败',
   'shell.pageErrorHint': '请切换到其他视图后重试，或点击重试。',
 
+  // ---- DSH project / database selector -------------------------------------
+  'shell.project': '项目',
+  'shell.database': '数据库',
+  'shell.databaseSelector': '项目 / 数据库选择器',
+  'shell.dbUnconfigured': '未配置数据库',
+  'shell.dbUnconfiguredHint': '尚未配置数据库——打开选择器选择。',
+  'shell.dbCandidates': '后端数据库',
+  'shell.dbRegistry': '注册变体',
+  'shell.dbSettings': '后端设置…',
+  'shell.dbActive': '当前',
+  'shell.dbSwitching': '正在切换数据库…',
+  'shell.dbRestarting': '正在重启后端…',
+  'shell.dbReloading': '正在刷新…',
+  'shell.dbSwitchFailed': '切换数据库失败：{message}',
+  'shell.dbSwitchTimeout': '后端未在预期时间内就绪。',
+  'shell.dbKindDb': '单库',
+  'shell.dbKindDbDir': '分片目录',
+  'shell.dbScanning': '正在扫描数据库…',
+  'shell.dbNoCandidates': '未发现数据库候选。',
+  'shell.dbRescan': '重新扫描',
+  'shell.dbScanUnsupported': '当前 Host 版本不支持数据库扫描；请在后端页配置数据库。',
+  'shell.dbSwitchUnsupported': '当前后端版本不支持从界面切换数据库；请在后端页手动配置。',
+  'backend.databases': '可用数据库',
+  'backend.databasesHint': '在后端主机上扫描；选择后会更新后端配置并重启后端。',
+  'backend.databasesEmpty': '在配置路径附近未发现数据库候选。',
+  'backend.databaseCurrent': '当前',
+  'backend.databaseKind': '类型',
+  'backend.databaseSource': '来源',
+  'backend.databaseSize': '大小',
+  'backend.databaseFiles': '{count} 个 DB 文件',
+  'backend.useDatabase': '使用此库',
+  'backend.usingDatabase': '切换中…',
+  'backend.databaseSwitched': '数据库已切换，正在刷新…',
+  'backend.databaseSwitchFailed': '无法切换数据库',
+  'backend.scan': '重新扫描',
+  'backend.scanning': '扫描中…',
+  'shell.dbTruncated': '仅显示前 {count} 个候选。',
+  'shell.dbCandidateFailed': '扫描失败',
+  'backend.databaseTruncated': '仅显示前 {count} 项。',
+  'backend.databaseTotal': '{count} 个候选',
+  'backend.databaseScannedAt': '扫描于 {time}',
+  'backend.databaseScanFailed': '扫描失败',
+
   // ---- DSH view keys (ui-detail / ui-graph / shared views) ----------------
 
   // ---- DSH AI explanation panel (ai-explain) ------------------------------
@@ -13592,6 +14626,49 @@ const en = {
   // ---- DSH shell extensions -----------------------------------------------
   'shell.pageError': 'This page failed to render',
   'shell.pageErrorHint': 'Switch to another view and back, or retry the page.',
+
+  // ---- DSH project / database selector -------------------------------------
+  'shell.project': 'Project',
+  'shell.database': 'Database',
+  'shell.databaseSelector': 'Project / database selector',
+  'shell.dbUnconfigured': 'No database configured',
+  'shell.dbUnconfiguredHint': 'No database configured — open the selector to choose one.',
+  'shell.dbCandidates': 'Backend databases',
+  'shell.dbRegistry': 'Registered variants',
+  'shell.dbSettings': 'Backend settings…',
+  'shell.dbActive': 'active',
+  'shell.dbSwitching': 'Switching database…',
+  'shell.dbRestarting': 'Restarting backend…',
+  'shell.dbReloading': 'Reloading…',
+  'shell.dbSwitchFailed': 'Could not switch database: {message}',
+  'shell.dbSwitchTimeout': 'The backend did not become ready in time.',
+  'shell.dbKindDb': 'single DB',
+  'shell.dbKindDbDir': 'shard dir',
+  'shell.dbScanning': 'Scanning databases…',
+  'shell.dbNoCandidates': 'No database candidates were found.',
+  'shell.dbRescan': 'Rescan',
+  'shell.dbScanUnsupported': 'This host build does not support database scanning; configure the database on the backend page.',
+  'shell.dbSwitchUnsupported': 'This backend build cannot switch databases from the UI; configure it on the backend page.',
+  'backend.databases': 'Available databases',
+  'backend.databasesHint': 'Scanned on the backend host; choosing one updates the backend configuration and restarts it.',
+  'backend.databasesEmpty': 'No database candidates were found next to the configured paths.',
+  'backend.databaseCurrent': 'Current',
+  'backend.databaseKind': 'Kind',
+  'backend.databaseSource': 'Source',
+  'backend.databaseSize': 'Size',
+  'backend.databaseFiles': '{count} DB files',
+  'backend.useDatabase': 'Use this database',
+  'backend.usingDatabase': 'Switching…',
+  'backend.databaseSwitched': 'Database switched; reloading…',
+  'backend.databaseSwitchFailed': 'Could not switch the database',
+  'backend.scan': 'Rescan',
+  'backend.scanning': 'Scanning…',
+  'shell.dbTruncated': 'Only the first {count} candidates are shown.',
+  'shell.dbCandidateFailed': 'scan failed',
+  'backend.databaseTruncated': 'Only the first {count} entries are shown.',
+  'backend.databaseTotal': '{count} candidates',
+  'backend.databaseScannedAt': 'Scanned {time}',
+  'backend.databaseScanFailed': 'scan failed',
 
   // ---- DSH view keys (ui-detail / ui-graph / shared views) ----------------
 
