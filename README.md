@@ -31,13 +31,13 @@ Python setup: the plugin installs a private backend for you (see below).
 3. Open the CA panel from the sidebar and add a project:
    - **Local**: choose **Choose directory…**, pick a source tree. The plugin
      installs a private CA venv, creates the SQLite index under
-     `$DSH_HOME/plugin-data/dsh-ca/data/<name>/index.db`, starts `ca serve` and
+     `<source tree>/.ca/index.db` (a fixed hidden directory inside the source tree), starts `ca serve` and
      activates the project.
    - **Remote Linux**: choose **Remote server**, enter username, host/IP, port
      (22), and a password or a key/agent (免密), press **Connect**, browse the
      server and choose the source directory. The plugin installs the backend in
      `~/dsh-ca/backend` on the server, creates
-     `~/.dsh-ca/data/<name>/index.db`, starts `ca serve` behind an SSH tunnel and
+     `<server source tree>/.ca/index.db`, starts `ca serve` behind an SSH tunnel and
      activates the project.
 4. Run an **index** task on the Tasks page (agent tool: `ca_task`). A freshly
    created project starts with an empty index; queries return nothing until

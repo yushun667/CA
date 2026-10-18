@@ -18,11 +18,11 @@ DSH 插件还支持通过 SSH 使用远程 Linux 后端。DSH 桌面用户不需
    `<repo>/dsh`），然后启用 `@local/dsh-ca`。
 3. 从侧栏打开 CA 面板并添加项目：
    - **本机**：点 **选择目录…**，选一个源码目录。插件会安装私有 CA venv，
-     在 `$DSH_HOME/plugin-data/dsh-ca/data/<name>/index.db` 建索引库、启动
+     在源码目录的固定隐藏目录 `<源码目录>/.ca/index.db` 建索引库、启动
      `ca serve` 并激活项目。
    - **远程 Linux**：选 **远程服务器**，填用户名、主机/IP、端口（22），选择密码
      或密钥/免密，点 **连接**，浏览服务器并选择源码目录。插件会在服务器
-     `~/dsh-ca/backend` 安装后端、在 `~/.dsh-ca/data/<name>/index.db` 建库、
+     `~/dsh-ca/backend` 安装后端、在服务器源码目录的 `<源码目录>/.ca/index.db` 建库、
      通过 SSH 隧道启动 `ca serve` 并激活项目。
 4. 在任务页运行 **index** 任务（agent 工具：`ca_task`）。新项目初始是空索引，
    索引完成前查询没有结果。

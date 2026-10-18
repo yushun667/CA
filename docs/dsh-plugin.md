@@ -31,16 +31,20 @@ separately by the plugin's backend installer (next sections).
 
 ## Adding a project (one step)
 
+The database lives inside the source tree under the fixed hidden `.ca/` directory
+(`<source>/.ca/index.db`), so it travels with the sources; add `.ca/` to the
+repository's `.gitignore` if you do not want to commit it.
+
 The project page asks for one thing:
 
 - **Local**: click **Choose directory…** and pick a source tree. The plugin installs
   or reuses the bundled CA backend, creates the database under
-  `$DSH_HOME/plugin-data/dsh-ca/data/<name>/index.db`, starts `ca serve` and activates
+  `<source tree>/.ca/index.db` (hidden directory inside the sources), starts `ca serve` and activates
   the project.
 - **Remote Linux**: enter username, host/IP, port (22), and either a password or a
   key / none (免密); click **Connect**, browse the server directories and click
   **Choose this directory**. The plugin installs the backend under
-  `~/dsh-ca/backend` on the server, creates `~/.dsh-ca/data/<name>/index.db`, starts
+  `~/dsh-ca/backend` on the server, creates `<server source tree>/.ca/index.db`, starts
   `ca serve` behind the SSH tunnel and activates the project.
 
 Password authentication uses a transient `SSH_ASKPASS` helper on the DSH host: the
@@ -229,7 +233,7 @@ server.
    a password or a key / agent (免密), then press **Connect**.
 2. Browse the server directories and press **Choose this directory**. The plugin
    installs `~/dsh-ca/backend` on the server (wheel, online or from a wheelhouse),
-   creates `~/.dsh-ca/data/<name>/index.db`, starts `ca serve` and opens the SSH tunnel;
+   creates `<server source tree>/.ca/index.db`, starts `ca serve` and opens the SSH tunnel;
    no rsync or source checkout is required.
    Activate it: the Host configures the backend and runs `ca serve` on the remote
    loopback interface, opening a local

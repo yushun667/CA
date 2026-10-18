@@ -266,7 +266,7 @@ test('manager.createSimpleProject stores a local project without activating it',
     assert.equal(created.project.backend, 'local');
     assert.equal(created.project.name, 'demo');
     assert.equal(created.project.sourceRoot, source);
-    assert.equal(created.project.db, path.join(context.paths.stateDir, 'data', 'demo', 'index.db'));
+    assert.equal(created.project.db, path.join(source, '.ca', 'index.db'));
     assert.equal(created.project.python, null);
     assert.equal(created.activeProjectId, null, 'simple project is not activated until prepared');
     assert.equal(context.manager.getActiveProject(), null);
@@ -274,15 +274,17 @@ test('manager.createSimpleProject stores a local project without activating it',
     assert.equal(stored.projects.length, 1);
     assert.equal(stored.projects[0].db, created.project.db);
 
-    // Same name/directory again: unique name + unique DB directory.
+    // Same directory again: one source tree owns one database, so the
+    // existing project is returned instead of creating a duplicate.
     const duplicate = await context.manager.createSimpleProject({
       kind: 'local',
       directory: source,
       name: 'demo',
     });
-    assert.equal(duplicate.project.name, 'demo (2)');
-    assert.notEqual(duplicate.project.db, created.project.db);
-    assert.equal(duplicate.projects.length, 2);
+    assert.equal(duplicate.project.id, created.project.id);
+    assert.equal(duplicate.existing, true);
+    assert.equal(duplicate.project.db, created.project.db);
+    assert.equal(duplicate.projects.length, 1);
   } finally {
     await teardown(context);
   }
@@ -309,7 +311,7 @@ test('manager.createSimpleProject remote resolves home from a connection and str
       ssh: { host: 'linux-box', user: 'yu', password: 's3cret' },
     });
     assert.equal(created.project.backend, 'remote');
-    assert.equal(created.project.db, '/home/yu/.dsh-ca/data/openharmony/index.db');
+    assert.equal(created.project.db, '/home/yu/CA_OH/openharmony/.ca/index.db');
     assert.equal(created.project.ssh.password, undefined);
     const stored = fs.readFileSync(context.paths.settingsPath, 'utf8');
     assert.equal(stored.includes('s3cret'), false, 'password is never persisted');
@@ -394,7 +396,7 @@ test('manager.prepareProject remote installs wheel, creates remote dirs and star
     const project = context.manager.getActiveProject();
     assert.equal(project.python, '~/dsh-ca/backend/venv/bin/python');
     assert.equal(project.caRepoPath, '~/dsh-ca/backend');
-    assert.equal(project.db, '/home/yu/.dsh-ca/data/openharmony/index.db');
+    assert.equal(project.db, '/home/yu/CA_OH/openharmony/.ca/index.db');
     assert.equal(context.manager.getStatus().state, 'running');
     assert.equal(context.manager.getStatus().mode, 'remote');
     // The backend was recreated when the project got activated, so the live
@@ -405,7 +407,7 @@ test('manager.prepareProject remote installs wheel, creates remote dirs and star
     assert.equal(transfer.uploads.filter((upload) => upload.type === 'file').length, 1);
     const dirsScript = runner.calls.map((call) => call.script || '').find((script) => script.includes('CA_DIRS_OK'));
     assert.ok(dirsScript, 'remote DB dirs script ran');
-    assert.match(dirsScript, /\.dsh-ca\/data\/openharmony/);
+    assert.match(dirsScript, /openharmony\/\.ca\/index\.db/);
 
     const stored = JSON.parse(fs.readFileSync(context.paths.settingsPath, 'utf8'));
     assert.equal(stored.projects[0].python, project.python);
@@ -432,7 +434,7 @@ test('manager.prepareProject failures are recorded and leave the project unactiv
     assert.equal(context.manager.getStatus().state, 'stopped');
     const project = context.manager.listProjects().projects[0];
     assert.equal(project.python, null);
-    assert.equal(fs.existsSync(path.join(context.paths.stateDir, 'data', 'bad', 'index.db')), false);
+    assert.equal(fs.existsSync(path.join(source, '.ca', 'index.db')), false);
   } finally {
     await teardown(context);
   }

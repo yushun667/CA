@@ -44,7 +44,7 @@ test('buildSimpleProject local picks defaults: basename name, managed DB, compdb
     assert.equal(project.name, 'openharmony');
     assert.equal(project.backend, 'local');
     assert.equal(project.sourceRoot, source);
-    assert.equal(project.db, path.join(stateDir, 'data', 'openharmony', 'index.db'));
+    assert.equal(project.db, path.join(source, '.ca', 'index.db'));
     assert.equal(project.dbDir, null);
     assert.equal(project.compdb, path.join(source, 'compile_commands.json'));
     assert.equal(project.python, null);
@@ -69,13 +69,12 @@ test('buildSimpleProject local uses explicit name, slug suffix and no compdb whe
       slugSuffix: 2,
     });
     assert.equal(project.name, 'My Project');
-    assert.equal(project.db, path.join(stateDir, 'data', 'my-project-2', 'index.db'));
+    assert.equal(project.db, path.join(source, '.ca', 'index.db'));
     assert.equal(project.compdb, null);
 
     const rootProject = buildSimpleProject({ kind: 'local', directory: '/', stateDir });
     assert.equal(rootProject.name, 'root');
-
-    assert.equal(buildSimpleProject({ kind: 'local', directory: source }).db.startsWith(defaultStateDir()), true);
+    assert.equal(rootProject.db, path.join('/', '.ca', 'index.db'));
   } finally {
     cleanupDir(root);
   }
@@ -118,7 +117,7 @@ test('buildSimpleProject remote derives DB under the remote home and strips pass
     assert.equal(project.backend, 'remote');
     assert.equal(project.name, 'openharmony');
     assert.equal(project.sourceRoot, '/home/yu/CA_OH/openharmony');
-    assert.equal(project.db, '/home/yu/.dsh-ca/data/openharmony/index.db');
+    assert.equal(project.db, '/home/yu/CA_OH/openharmony/.ca/index.db');
     assert.equal(project.dbDir, null);
     assert.equal(project.python, null);
     assert.equal(project.caRepoPath, null);
@@ -184,12 +183,12 @@ test('ensureDefaultDirs creates remote directories via one ssh command', async (
     };
     const project = {
       backend: 'remote',
-      db: '/home/yu/.dsh-ca/data/demo/index.db',
+      db: '/home/yu/CA_OH/openharmony/.ca/index.db',
       ssh: { host: 'linux-box', user: 'yu' },
     };
     const result = await ensureDefaultDirs(project, { deps: { runProcess, env: {} } });
     assert.equal(result.kind, 'remote');
-    assert.equal(result.dir, '/home/yu/.dsh-ca/data/demo');
+    assert.equal(result.dir, '/home/yu/CA_OH/openharmony/.ca');
     assert.equal(calls.length, 1);
     const script = calls[0].args.at(-1);
     assert.match(script, /mkdir -p "\$DIR"/);

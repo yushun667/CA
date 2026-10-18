@@ -1612,13 +1612,18 @@ export function createBackendManager(ctx, configInput, deps = {}) {
     if (projectState.projects.some((existing) => projectNameKey(existing.name) === projectNameKey(project.name))) {
       project = make({ name: uniqueProjectName(projectState.projects, project.name) });
     }
-    let suffix = 2;
-    while (projectState.projects.some((existing) => existing.db === project.db)) {
-      project = make({ name: project.name, slugSuffix: suffix });
-      suffix += 1;
-      if (suffix > 999) {
-        throw new BackendError('PROJECT_NAME_CONFLICT', `无法为目录 ${project.sourceRoot} 生成唯一数据库路径`);
-      }
+    // One source tree owns one hidden database (`<source>/.ca/index.db`), so
+    // asking to add the same directory twice returns the existing project.
+    const duplicate = projectState.projects.find(
+      (existing) => existing.backend === project.backend && existing.db === project.db,
+    );
+    if (duplicate) {
+      return {
+        project: cloneJson(duplicate),
+        projects: listProjects().projects,
+        activeProjectId: projectState.activeProjectId,
+        existing: true,
+      };
     }
     projectState.projects.push(project);
     try {

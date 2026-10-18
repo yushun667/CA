@@ -27,14 +27,17 @@ bundle）；改 `dsh/lib/host/bootstrap.js` 必须完整重启 Harness。
 
 ## 添加项目（一步完成）
 
+数据库固定存放在源码树内的隐藏目录 `.ca/`（`<源码目录>/.ca/index.db`），跟着源码走；
+不想提交到 Git 的话把 `.ca/` 加入仓库的 `.gitignore`。
+
 项目页只需要一件事：
 
 - **本机**：点「选择目录…」选一个源码目录。插件自动安装或复用内置 CA 后端，在
-  `$DSH_HOME/plugin-data/dsh-ca/data/<name>/index.db` 建数据库，启动 `ca serve` 并
+  源码目录的隐藏目录 `<源码目录>/.ca/index.db` 建数据库，启动 `ca serve` 并
   激活项目。
 - **远程 Linux**：填用户名、主机/IP、端口（22），选择密码或密钥/免密；点「连接」，
   在服务器目录树里浏览并点「选择此目录」。插件会在服务器
-  `~/dsh-ca/backend` 安装后端，在 `~/.dsh-ca/data/<name>/index.db` 建数据库，透
+  `~/dsh-ca/backend` 安装后端，在服务器源码目录的 `<源码目录>/.ca/index.db` 建数据库，透
   过 SSH 隧道启动 `ca serve` 并激活项目。
 
 密码认证在 DSH 本机用临时 `SSH_ASKPASS` helper 完成：密码不会写日志或配置文件，
@@ -199,7 +202,7 @@ CA wheel 副本 + `manifest.json`）；`--tar` 还会写出 `<platform>.tar.gz`�
 1. 在 `#/projects` 选 **远程服务器**，填用户名、主机/IP、端口，并选择密码或
    密钥/免密，点 **连接**。
 2. 浏览服务器目录并点 **选择此目录**：插件在服务器安装 `~/dsh-ca/backend`
-   （wheel，在线或离线 wheelhouse）、创建 `~/.dsh-ca/data/<name>/index.db`、启动
+   （wheel，在线或离线 wheelhouse）、创建服务器源码目录的 `<源码目录>/.ca/index.db`、启动
    `ca serve` 并打开 SSH 隧道；不需要 rsync 或源码 checkout。激活它：Host 配置后端并在远端 loopback
    上运行 `ca serve`，同时打开本地
    `ssh -N -L <localPort>:127.0.0.1:<remotePort>` 隧道；健康检查与所有查询都走该

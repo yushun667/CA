@@ -558,8 +558,8 @@ function simpleProjectName(directory, name) {
  *
  * The database path is generated (single DB per project, created empty before
  * the backend starts; `ca index` fills it later):
- *   local:  `$DSH_HOME/plugin-data/dsh-ca/data/<slug>/index.db`
- *   remote: `<remote home>/.dsh-ca/data/<slug>/index.db`
+ *   both:   `<source tree>/.ca/index.db` (fixed hidden directory inside the
+ *            source tree, so an index always travels with its sources)
  *
  * `python`/`caRepoPath` stay null: the installer fills them after installing CA.
  *
@@ -614,8 +614,9 @@ export function buildSimpleProject(options = {}) {
   let db;
   let ssh = null;
   if (kind === 'local') {
-    const stateDir = nonEmptyString(options.stateDir) || defaultStateDir();
-    db = path.join(stateDir, 'data', slug, 'index.db');
+    // Fixed hidden directory inside the source tree: the index belongs to the
+    // sources, not to the plugin's private data directory.
+    db = path.join(directory, '.ca', 'index.db');
   } else {
     const home = nonEmptyString(options.home);
     if (!home) {
@@ -626,7 +627,7 @@ export function buildSimpleProject(options = {}) {
       );
     }
     const normalizedHome = home === '~' || home.startsWith('~/') ? normalizeRemotePath(home, 'home', { required: true }) : home.replace(/\/+$/, '');
-    db = path.posix.join(normalizedHome, '.dsh-ca', 'data', slug, 'index.db');
+    db = path.posix.join(directory, '.ca', 'index.db');
     ssh = publicSshConfig(options.ssh);
     if (!ssh.host) {
       throw new BackendError('INVALID_ARGUMENT', '远程项目必须提供 ssh.host', { field: 'ssh.host' });

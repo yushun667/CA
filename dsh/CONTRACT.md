@@ -77,7 +77,7 @@ Manager 方法：`listProjects()`、`saveProject(input)`、`deleteProject(id)`�
   - `backend.get.install`：安装摘要（platform/local/remote/wheel/wheelhouse）；`backend.installLocal` 启动本地安装；`backend.install` 启动远程安装，payload 支持 `ssh?`、`mode`、`offline`、`wheelhousePath`、`installDir`、`python`（旧 `opts` 仍兼容）；`backend.installStatus{scope:'local'|'remote'}` 返回合并进度（步骤/日志/错误）。
   - `projects.save` 仅创建/更新项目定义；`projects.activate` 切换活动项目并重启后端（失败回滚）。
   - `local.browse{path?}`：Host 端列出本机目录（项目页“选择目录”弹窗用，默认 home，仅返回子目录，最多 500 项；`~` 展开）。
-  - 一键建项目：`projects.createSimple{kind,directory,name?,ssh?,home?}` 生成项目与自动数据库路径（local=`$DSH_HOME/plugin-data/dsh-ca/data/<name>/index.db`，remote=`<home>/.dsh-ca/data/<name>/index.db`）；`projects.prepare{id,offline?,wheelhousePath?}` 按需安装后端、建 DB 目录/空库、激活并启动；`remote.connect{ssh}` 返回 home/platform/python{supported,versionText,candidates}/ca，`remote.browse{ssh,path?}` 返回目录列表；`backend.installStatus` 另含 `prepare` 快照（state/projectId/installScope/error/result）。密码只传给 manager，响应中掩码，不持久化。
+  - 一键建项目：`projects.createSimple{kind,directory,name?,ssh?,home?}` 生成项目与自动数据库路径（local/remote 均为 `<sourceRoot>/.ca/index.db`：固定隐藏目录随源码树存放）；`projects.prepare{id,offline?,wheelhousePath?}` 按需安装后端、建 DB 目录/空库、激活并启动；`remote.connect{ssh}` 返回 home/platform/python{supported,versionText,candidates}/ca，`remote.browse{ssh,path?}` 返回目录列表；`backend.installStatus` 另含 `prepare` 快照（state/projectId/installScope/error/result）。密码只传给 manager，响应中掩码，不持久化。
   - `backend.databases|useDatabase` 保留为低层辅助，不作为产品主流程。
 - Handler 不得抛未捕获异常；参数与大小校验。
 
