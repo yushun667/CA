@@ -34,7 +34,7 @@ import { createFunctionPage } from './views/function/index.js'
 import { maybeRunSelfTest } from './selftest.js'
 
 /** Client services this module needs from the harness. */
-export const inject = ['slots', 'locale']
+export const inject = ['slots', 'locale', 'layout']
 
 /**
  * Install the CA client half on the harness Web page.

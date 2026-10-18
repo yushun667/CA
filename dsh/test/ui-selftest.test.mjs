@@ -279,14 +279,18 @@ test('pending=true: runs the DOM walk and submits the report', async () => {
   assert.ok(marker.startsWith('done:'), `marker=${marker}`)
 })
 
-test('sessionStorage marker prevents a second run', async () => {
+test('a new pending request re-runs despite a stale done marker', async () => {
+  // The Host deletes selftest-pending.json after a report, so a pending marker
+  // is authoritative; a done marker left in sessionStorage by an earlier page
+  // load must not suppress a newly requested run.
   const api = fakeApi({ pending: true })
   const storage = fakeStorage({ [SELFTEST_DONE_KEY]: 'done:1234' })
   const adapters = fakeAdapters()
   const result = await maybeRunSelfTest(null, {}, fakeShell(), { api }, { adapters, storage })
-  assert.equal(result.ran, false)
-  assert.equal(result.reason, 'already-ran')
-  assert.equal(api.calls.length, 0, 'pending endpoint must not be queried after a run')
+  assert.equal(result.ran, true)
+  assert.equal(result.reason, 'pending')
+  assert.equal(api.calls.length > 0, true)
+  assert.match(String(storage.getItem(SELFTEST_DONE_KEY)), /^done:/)
 })
 
 test('pending endpoint failure is non-fatal and does not mark the run', async () => {

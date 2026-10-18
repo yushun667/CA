@@ -49,7 +49,7 @@ const { createFunctionPage } = __m("views/function/index.js")
 const { maybeRunSelfTest } = __m("selftest.js")
 
 /** Client services this module needs from the harness. */
-const inject = ['slots', 'locale']
+const inject = ['slots', 'locale', 'layout']
 
 /**
  * Install the CA client half on the harness Web page.
@@ -696,7 +696,6 @@ async function maybeRunSelfTest(React, ctx, shell, bag, overrides) {
   if (!api || typeof api.rpc !== 'function') return { ran: false, reason: 'no-api' }
 
   const storage = safeSessionStorage(settings)
-  if (readMarker(storage)) return { ran: false, reason: 'already-ran' }
 
   let adapters = settings.adapters || null
   if (!adapters) {
@@ -712,6 +711,9 @@ async function maybeRunSelfTest(React, ctx, shell, bag, overrides) {
   }
   if (!pendingValue || pendingValue.pending !== true) return { ran: false, reason: 'not-pending' }
 
+  // The Host only keeps `selftest-pending.json` while a run is requested
+  // (it is deleted after the report), so pending is authoritative and a stale
+  // done marker from an earlier page load must not suppress a new request.
   writeMarker(storage, `running:${Date.now()}`)
   let result
   try {
