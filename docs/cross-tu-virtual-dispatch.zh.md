@@ -30,6 +30,9 @@ store schema v7 持久化为 `functions.is_virtual`、`functions.is_pure_virtual
 - **跨 TU**：查询时 `store.load_forward_edges`/`load_reverse_edges` 基于全部已索引
   shard 的 override 关系，在直接调用边上叠加 `virtual_candidate` 边；无需额外
   物化步骤，旧库缺表时退化为直接边。
+- 成员函数内的隐式 `this` 调用（`f()`）记录为 `kind="virtual_this"`；候选会按
+  接收者类及其派生类（`type_bases` 闭包）收窄。显式接收者（`p->f()`）因动态类型
+  未知，仍保留完整 override 集合。
 - 经由 `Base::m` 的调用，候选是 `m` 的已知 override（override 链最多 3 层）。
   `callees` 以 `kind="virtual_candidate"` 与可读 `reason` 返回；`Derived::m` 的
   `callers` 会包含静态目标是其祖先方法的虚调用点。

@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: cross-tu-virtual-dispatch.md
-  sha256: c7845e47c3bfa8ac8b853f27f11711797c36d69babd0e9c167e29391109d8056
+  sha256: 67dbab826dc5c3bd0612a7163ce6f7a68205fd2c1952d871b1bdfa54a8975ca2
 zh:
   file: cross-tu-virtual-dispatch.zh.md
-  sha256: bb60e5df645f0c83c4d875b6a958e5bb2f213c526967d391e5e44b1fb75d0f50
+  sha256: 0b1405968efabf9df35c381c25f8a87cdde40e10e4c332463258bb254c89d9db
