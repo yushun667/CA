@@ -1,4 +1,4 @@
--- CA SQLite schema (core SCHEMA_VERSION 1 / store_schema_version 4), ca.store.
+-- CA SQLite schema (core SCHEMA_VERSION 1 / store_schema_version 5), ca.store.
 --
 -- meta["schema_version"] tracks the ca.core.schema contract; meta
 -- ["store_schema_version"] tracks this physical layout. Additive tables are
@@ -344,3 +344,36 @@ CREATE TABLE IF NOT EXISTS callback_target_links (
     call_target_id  TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (registration_id, call_target_id)
 );
+
+-- Unified-backend job queue and event log (store schema v5).
+-- These are runtime control tables, not bulk-loaded record tables, so their
+-- indexes are created here (open()) instead of in finalize(); a `ca serve`
+-- state database can therefore be used right after open() without finalize().
+CREATE TABLE IF NOT EXISTS jobs (
+    id           TEXT PRIMARY KEY,
+    kind         TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'queued',  -- queued | running | done | failed
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    result_json  TEXT NOT NULL DEFAULT '',
+    error        TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL DEFAULT '',        -- ISO-8601 UTC
+    updated_at   TEXT NOT NULL DEFAULT '',
+    claimed_by   TEXT NOT NULL DEFAULT '',
+    lease_until  TEXT NOT NULL DEFAULT '',
+    attempts     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_jobs_kind_status_created ON jobs(kind, status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_lease ON jobs(status, lease_until);
+
+-- Monotonic event log for SSE replay (Last-Event-ID / ?since_id=N).
+CREATE TABLE IF NOT EXISTS job_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id     TEXT NOT NULL DEFAULT '',
+    type       TEXT NOT NULL DEFAULT '',
+    data_json  TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_events_job ON job_events(job_id, id);

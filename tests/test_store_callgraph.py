@@ -448,7 +448,7 @@ def test_phase2_database_upgrade_in_place(tmp_path) -> None:
         assert reopened.query_functions("main_a")[0]["id"] == MAIN.id
         assert reopened.query_callers("leaf_c")[0]["caller_name"] == "mid_b"
         meta = dict(reopened.connection.execute("SELECT key, value FROM meta"))
-        assert meta["store_schema_version"] == "4"
+        assert meta["store_schema_version"] == "5"
 
         reopened.finalize()
         indexes = {

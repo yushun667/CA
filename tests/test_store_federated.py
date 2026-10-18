@@ -569,7 +569,7 @@ def test_stats_aggregation(tmp_path) -> None:
         for entry in stats["shards"]:
             assert entry["path"]
             assert entry["schema_version"] == "1"
-            assert entry["store_schema_version"] == "4"
+            assert entry["store_schema_version"] == "5"
             assert entry["tables"]["functions"] >= 1
 
 

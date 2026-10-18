@@ -70,6 +70,8 @@ TABLES: tuple[str, ...] = (
     "workspaces",
     "projects",
     "variants",
+    "jobs",
+    "job_events",
 )
 
 # kind -> (table, columns, json column -> output key, boolean columns)
@@ -877,10 +879,16 @@ class QueryEngine:
         }
 
     def stats(self) -> dict[str, Any]:
-        counts = {
-            table: self._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in TABLES
-        }
+        counts: dict[str, int] = {}
+        for table in TABLES:
+            try:
+                counts[table] = self._conn.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone()[0]
+            except sqlite3.OperationalError:
+                # Jobs/events live in an optional state DB; a regular index
+                # database legitimately lacks those tables.
+                continue
         page_count = self._conn.execute("PRAGMA page_count").fetchone()[0]
         page_size = self._conn.execute("PRAGMA page_size").fetchone()[0]
         row = self._conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()

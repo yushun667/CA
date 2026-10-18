@@ -7,6 +7,14 @@ JSON API。它复用 CLI 与 MCP 相同的 store 查询（单库经 `ca.store`�
 前端是纯 HTML/CSS/JavaScript：无 CDN、无外部字体、无 Node 构建步骤、无第三方运行时
 依赖，除本服务外不发任何网络请求。HTTP 服务使用 Python 标准库（`http.server`）。
 
+`ca ui` 有两种模式：
+
+- **内嵌（embedded，默认）**（`--db` / `--db-dir`）：UI 进程自己打开索引并直接应答
+  `/api/*`。
+- **远程（remote，薄客户端）**（`--serve-url`）：UI 进程只提供静态资源，把 `/api/*`
+  与 `/events` **同源反向代理**到运行中的 [`ca serve`](server.zh.md) 后端。浏览器
+  从不直连后端，因此不需要 CORS/CSP 改动，UI 保持只读。
+
 ## 启动 UI
 
 ```sh
@@ -23,6 +31,10 @@ JSON API。它复用 CLI 与 MCP 相同的 store 查询（单库经 `ca.store`�
 
 # console script 不在 PATH 时用模块形式
 PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
+
+# 统一后端的薄客户端（任务/SSE/agent 协作）
+.venv/bin/ca serve --db ca.db --port 8765       # 后端：/api/*、/events、/mcp
+.venv/bin/ca ui --serve-url http://127.0.0.1:8765 --port 8766
 ```
 
 服务在 stderr 打印实际 URL，例如
@@ -34,8 +46,31 @@ PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
 |---|---|
 | `--db PATH` | SQLite 数据库（可重复；多于一个即联邦模式） |
 | `--db-dir DIR` | shard `*.db` 文件目录（联邦；不可读 shard 跳过） |
+| `--serve-url URL` | 薄客户端模式：把 `/api/*` + `/events` 代理到运行中的 `ca serve`（不能与 `--db`/`--db-dir` 同用） |
 | `--host HOST` | 绑定地址（默认 `127.0.0.1`） |
 | `--port PORT` | 绑定端口（默认 `8766`；`0` 表示由系统选空闲端口） |
+
+## 远程模式（统一后端）
+
+`ca ui --serve-url http://127.0.0.1:8765` 提供同样的单页 UI，但把查询与事件转发到
+常驻的 [`ca serve`](server.zh.md) 进程：
+
+- `GET /api/ui`（本地实现）返回 `{mode:"remote", serve_url, features}`；旧的内嵌
+  server 返回 `{mode:"embedded"}`。
+- 查询端点（`/api/search`、`/api/function`、`/api/graph`、`/api/cfg`、
+  `/api/source`、`/api/explain` 等）原样代理；非白名单 POST 返回
+  `405 READ_ONLY`；查询代理超时 30s。后端不可达时 UI 返回统一错误信封
+  `502 SERVE_UNAVAILABLE`。
+- `GET /events` 经代理**流式透传**（不缓冲）：`job.updated` 事件 + heartbeat 注释行，
+  支持 `Last-Event-ID` 重放。顶栏连接徽章显示 连接中/已连接/重连中/已断开；
+  EventSource 自动重连，UI 在重连后重新拉取当前 job，避免漏掉 `done` 事件。
+- **远程模式下 AI 解释改为任务**：打开解释分区时创建
+  `POST /api/jobs {type:"explain", symbol, payload:{lang}}`，通过 SSE 渲染
+  排队中/运行中/完成/失败。MCP agent 可用 `explain_jobs` 领取、`submit_explanation`
+  提交，结果实时出现并显示 `MCP agent` provider 徽章。若 jobs/SSE 不可用，UI 回退
+  同步 `/api/explain`（服务端仍保留 heuristic/LLM fallback），功能不中断。
+- 全程只读，UI 代理不会写索引。远程 `--serve-url` 建议仅用回环或可信隧道；本里程碑
+  后端无认证。
 
 ## 页面
 

@@ -256,6 +256,14 @@ SQLite 表：`meta`、`tus`、`functions`、`params`、`types`、`fields`、`cal
   p50 3.7–10.0ms（见 `benchmarks/results/federated_bench.json`）。带 sidecar
   原地查询比单文件 immutable 副本更快。
 
+## 统一后端服务（`ca serve`）
+
+`ca serve --db DB`（或 `--db-dir DIR`）为两个客户端提供同一常驻后端：浏览器用
+`/api/*` + `/events`（SSE），agent 用 `/mcp` 或
+`ca mcp --serve-url http://127.0.0.1:8765`。服务还持有持久 job 队列
+（创建/领取/完成，`explain` 跨客户端闭环），写在独立状态库中，索引 shard 保持只读。
+端点、job/SSE 语义、安全与限制见 [server.zh.md](server.zh.md)。
+
 ## Agent 接入：MCP、调用图、增量更新
 
 CA 设计为跑在源码所在机器上，AI agent 不复制仓库而是直接查询。三个接口支撑该流程：

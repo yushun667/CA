@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: usage.md
-  sha256: 7e5a0d276888168cfc5e02e000fb8b6b36e6b4fcce7e913af1c7a1be91a481e8
+  sha256: 6f8d54f017edba7a2e9be8755594c078a34fc5440cc6d8461ccf09a0106a7fbc
 zh:
   file: usage.zh.md
-  sha256: 95bd2abcf1ab78fa81ee91cf4888fadc5e9a41ecaffcda2d868561ebfdefc69b
+  sha256: 2be46e5a486ec93a5f1c77fc9881abb6a52097384b00d7e2dcfc1ff5001f630d

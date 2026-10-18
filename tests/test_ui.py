@@ -14,10 +14,12 @@ import re
 import shutil
 import socket
 import sqlite3
+import time
 import subprocess
 import threading
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote
 
@@ -506,6 +508,174 @@ def _stop_server(server, thread: threading.Thread) -> None:
     server.server_close()
 
 
+# --------------------------------------------------------------------------- #
+# Thin-client proxy (ca ui --serve-url) against a fake ``ca serve`` backend
+# --------------------------------------------------------------------------- #
+
+
+class FakeServeHandler(BaseHTTPRequestHandler):
+    """Minimal stand-in for the unified backend's HTTP/SSE surface."""
+
+    server_version = "ca-serve-fake/0.1"
+    sys_version = ""
+
+    def log_message(self, *_args) -> None:
+        pass
+
+    def _send_json(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server API
+        path = self.path.split("?", 1)[0]
+        if path == "/api/health":
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "data": {
+                        "status": "ok",
+                        "server": "ca-serve",
+                        "features": {"jobs": True, "sse": True, "mcp": True},
+                    },
+                },
+            )
+        elif path == "/api/search":
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "data": {"query": "proc", "items": [], "upstream": True},
+                },
+            )
+        elif path == "/api/slow":
+            time.sleep(0.5)
+            self._send_json(200, {"ok": True, "data": {"slow": True}})
+        elif path == "/api/nope":
+            self._send_json(
+                404,
+                {"ok": False, "error": {"code": "NOT_FOUND", "message": "nope"}},
+            )
+        elif path == "/events":
+            self.send_response(200)
+            self.send_header(
+                "Content-Type", "text/event-stream; charset=utf-8"
+            )
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(
+                b'id: 1\ndata: {"type":"job.updated","event":"created",'
+                b'"job":{"id":"job-1","status":"queued"}}\n\n'
+            )
+            self.wfile.flush()
+            self.wfile.write(b": ping\n\n")
+            self.wfile.flush()
+            self.wfile.write(
+                b'id: 2\ndata: {"type":"job.updated","event":"done",'
+                b'"job":{"id":"job-1","status":"done"}}\n\n'
+            )
+            self.wfile.flush()
+        else:
+            self._send_json(
+                404,
+                {"ok": False, "error": {"code": "NOT_FOUND", "message": path}},
+            )
+
+    def do_POST(self) -> None:  # noqa: N802 - http.server API
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length)
+        try:
+            parsed = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            parsed = {}
+        self.server.received.append((self.path, parsed))  # type: ignore[attr-defined]
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "job": {
+                        "id": "job-new",
+                        "kind": "explain",
+                        "status": "queued",
+                    }
+                },
+            },
+        )
+
+
+@pytest.fixture()
+def fake_serve():
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), FakeServeHandler)
+    upstream.received = []  # type: ignore[attr-defined]
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{upstream.server_address[1]}", upstream
+    finally:
+        upstream.shutdown()
+        thread.join(timeout=10)
+        upstream.server_close()
+
+
+def _start_proxy(serve_url: str, timeout: float = 2.0):
+    from ca.ui.server import make_proxy_server
+
+    server = make_proxy_server(
+        serve_url, host="127.0.0.1", port=0, timeout=timeout
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, UiClient(server.url.rstrip("/"))
+
+
+@pytest.fixture()
+def proxy_client(fake_serve):
+    server, thread, http = _start_proxy(fake_serve[0])
+    try:
+        yield http
+    finally:
+        _stop_server(server, thread)
+
+
+def _post_json(client: UiClient, path: str, payload: dict):
+    request = urllib.request.Request(
+        f"{client.base_url}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def _read_sse(url: str) -> tuple[str, bytes]:
+    with urllib.request.urlopen(url, timeout=10) as response:
+        content_type = response.headers.get("Content-Type", "")
+        chunks = []
+        while True:
+            chunk = response.read(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return content_type, b"".join(chunks)
+
+
+def _closed_port() -> int:
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
 @pytest.fixture()
 def client(dataset: dict[str, object]):
     server, thread, http = _start_server([str(dataset["db"])])
@@ -777,6 +947,7 @@ def test_static_single_page_has_no_external_assets(client: UiClient) -> None:
     assert "/app.js" in html and "/style.css" in html and "/i18n.js" in html
     # v7: search results live in a floating dropdown, not a left results panel.
     assert 'id="search-dropdown"' in html
+    assert 'id="conn-status"' in html
     assert 'id="results"' in html and 'id="results-count"' in html
     assert '<aside class="sidebar"' not in html
     assert "https://" not in html and "http://" not in html
@@ -802,6 +973,14 @@ def test_static_single_page_has_no_external_assets(client: UiClient) -> None:
     assert "accordion-body" in script
     assert "search-dropdown" in script
     assert "source.nodeHint" in script
+    # Remote mode: thin client + explain jobs/SSE.
+    assert "/api/ui" in script
+    assert "EventSource" in script
+    assert "/api/jobs" in script
+    assert "loadUiMode" in script
+    assert "applyExplainJob" in script
+    assert "explain.agent" in script
+    assert "jobs.waitingAgent" in script
     # AI explanation tab replaced the duplicated callers/callees tabs.
     assert "tab.explain" in script
     assert "renderExplainSection" in script
@@ -1357,6 +1536,117 @@ console.log(JSON.stringify(html));
     assert all("<script" not in line for line in html)
 
 
+def test_remote_explain_job_state_machine() -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not available to execute the UI job hooks")
+    script = """
+const appPath = %s;
+const storage = new Map();
+const memory = {
+  getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+  setItem: (key, value) => storage.set(key, String(value)),
+};
+global.window = {
+  sessionStorage: memory,
+  localStorage: memory,
+  location: { hash: "", search: "" },
+  history: { replaceState() {}, pushState() {} },
+  addEventListener() {},
+  setTimeout: () => 0,
+  clearTimeout() {},
+};
+global.document = {
+  readyState: "loading",
+  addEventListener() {},
+  querySelectorAll: () => [],
+  getElementById: () => null,
+  documentElement: { lang: "en" },
+  title: "",
+  body: {},
+};
+Object.defineProperty(globalThis, "navigator", {
+  value: { languages: ["en"], language: "en" },
+  configurable: true,
+});
+window.CA_I18N = { t: (key) => key, getLanguage: () => "en" };
+require(appPath);
+const hooks = window.CA_UI_TEST;
+const normalized = hooks.normalizeExplainResult(
+  {
+    provider: "agent",
+    model: "mcp-agent",
+    language: "zh",
+    explanation: "agent explanation",
+    evidence: ["kernel/kalloc.c"],
+  },
+  { id: "job:1", symbol: "kfree", payload: { lang: "zh" } }
+);
+hooks.applyExplainJob({
+  id: "job:1",
+  status: "queued",
+  symbol: "kfree",
+  payload: { symbol: "kfree" },
+});
+const queued = hooks.explainState();
+hooks.applyExplainJob({
+  id: "job:1",
+  status: "done",
+  symbol: "kfree",
+  result: {
+    provider: "heuristic",
+    language: "en",
+    explanation: "local heuristic explanation",
+    elapsed_ms: 7,
+  },
+});
+const done = hooks.explainState();
+hooks.applyExplainJob({
+  id: "job:2",
+  status: "failed",
+  symbol: "kfree",
+  error: "agent crashed",
+});
+const failed = hooks.explainState();
+console.log(
+  JSON.stringify({
+    normalized: normalized,
+    queued: queued,
+    done: done,
+    failed: failed,
+  })
+);
+"""
+    script = script % json.dumps(str(STATIC_DIR / "app.js"))
+    result = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    normalized = data["normalized"]
+    assert normalized["provider"] == "agent"
+    assert normalized["model"] == "mcp-agent"
+    assert normalized["language"] == "zh"
+    assert normalized["explanation"] == "agent explanation"
+    assert normalized["evidence"] == ["kernel/kalloc.c"]
+    assert normalized["symbol"] == "kfree"
+
+    assert data["queued"]["explainJob"]["status"] == "queued"
+    assert data["queued"]["explainLoading"] is True
+
+    done = data["done"]
+    assert done["explainJob"]["status"] == "done"
+    assert done["explainLoading"] is False
+    assert done["explain"]["provider"] == "heuristic"
+    assert done["explain"]["explanation"] == "local heuristic explanation"
+    assert done["explain"]["elapsed_ms"] == 7
+
+    failed = data["failed"]
+    assert failed["explainJob"]["status"] == "failed"
+    assert failed["explainLoading"] is False
+    assert failed["explainError"]
+
+
 def test_function_jump_history_stack() -> None:
     node = shutil.which("node")
     if not node:
@@ -1573,6 +1863,116 @@ def test_explain_api_llm_failure_falls_back_to_heuristic(
 
 
 # --------------------------------------------------------------------------- #
+# Thin-client proxy behaviour (P1)
+# --------------------------------------------------------------------------- #
+
+
+def test_embedded_mode_advertises_itself(client: UiClient) -> None:
+    status, payload = client.json("/api/ui")
+    assert status == 200
+    data = payload["data"]
+    assert data["mode"] == "embedded"
+    assert data["serve_url"] == ""
+    assert data["features"]["jobs"] is False
+
+
+def test_proxy_advertises_remote_mode(
+    proxy_client: UiClient, fake_serve
+) -> None:
+    status, payload = proxy_client.json("/api/ui")
+    assert status == 200
+    data = payload["data"]
+    assert data["mode"] == "remote"
+    assert data["serve_url"] == fake_serve[0]
+    assert data["features"]["jobs"] is True
+    assert data["features"]["sse"] is True
+
+
+def test_proxy_forwards_get_with_query_string(proxy_client: UiClient) -> None:
+    status, payload = proxy_client.json("/api/health")
+    assert status == 200
+    assert payload["data"]["server"] == "ca-serve"
+    status, payload = proxy_client.json("/api/search?q=proc&limit=3")
+    assert status == 200
+    assert payload["data"]["upstream"] is True
+
+
+def test_proxy_forwards_job_post_and_rejects_other_posts(
+    proxy_client: UiClient, fake_serve
+) -> None:
+    body = {"type": "explain", "symbol": "main", "payload": {"lang": "zh"}}
+    status, payload = _post_json(proxy_client, "/api/jobs", body)
+    assert status == 200
+    assert payload["data"]["job"]["id"] == "job-new"
+    received = fake_serve[1].received  # type: ignore[attr-defined]
+    assert received == [("/api/jobs", body)]
+
+    status, payload = _post_json(proxy_client, "/api/search", {"q": "x"})
+    assert status == 405
+    assert payload["error"]["code"] == "READ_ONLY"
+
+
+def test_proxy_streams_sse_chunks(proxy_client: UiClient) -> None:
+    content_type, body = _read_sse(f"{proxy_client.base_url}/events")
+    assert "text/event-stream" in content_type
+    text = body.decode("utf-8")
+    assert 'data: {"type":"job.updated","event":"created"' in text
+    assert 'data: {"type":"job.updated","event":"done"' in text
+    assert ": ping" in text
+
+
+def test_proxy_passes_through_upstream_errors(proxy_client: UiClient) -> None:
+    status, payload = proxy_client.json("/api/nope")
+    assert status == 404
+    assert payload["error"]["code"] == "NOT_FOUND"
+
+
+def test_proxy_returns_502_when_backend_is_down() -> None:
+    server, thread, http = _start_proxy(
+        f"http://127.0.0.1:{_closed_port()}", timeout=1.0
+    )
+    try:
+        status, payload = http.json("/api/health")
+        assert status == 502
+        assert payload["error"]["code"] == "SERVE_UNAVAILABLE"
+        status, _headers, body = http.request("/events")
+        assert status == 502
+        assert json.loads(body.decode("utf-8"))["error"]["code"] == (
+            "SERVE_UNAVAILABLE"
+        )
+    finally:
+        _stop_server(server, thread)
+
+
+def test_proxy_query_timeout_returns_502(fake_serve) -> None:
+    server, thread, http = _start_proxy(fake_serve[0], timeout=0.15)
+    try:
+        status, payload = http.json("/api/slow")
+        assert status == 502
+        assert payload["error"]["code"] == "SERVE_UNAVAILABLE"
+    finally:
+        _stop_server(server, thread)
+
+
+def test_proxy_serves_static_assets(proxy_client: UiClient) -> None:
+    status, headers, body = proxy_client.get("/")
+    assert status == 200
+    assert "text/html" in headers.get("Content-Type", "")
+    assert b"CA source explorer" in body
+    status, _headers, body = proxy_client.get("/app.js")
+    assert status == 200
+    assert b"/api/health" in body
+
+
+def test_make_proxy_server_validates_url() -> None:
+    from ca.cli.dbsource import DatabaseSourceError
+    from ca.ui.server import make_proxy_server
+
+    with pytest.raises(DatabaseSourceError):
+        make_proxy_server("127.0.0.1:8765")
+
+
+# --------------------------------------------------------------------------- #
 # CLI wiring
 # --------------------------------------------------------------------------- #
 
@@ -1621,3 +2021,15 @@ def test_make_server_requires_a_database(tmp_path: Path) -> None:
     with pytest.raises(DatabaseSourceError):
         make_server(None, str(tmp_path / "missing-dir"))
 
+
+
+def test_accordion_tab_ids_include_explain_only() -> None:
+    """The explain tab must survive normalizeTab(); callers/callees were removed."""
+
+    source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    match = re.search(r"const TAB_IDS = \[(.*?)\];", source, re.S)
+    assert match is not None, "TAB_IDS block missing"
+    tab_ids = re.findall(r'"([a-z]+)"', match.group(1))
+    assert "explain" in tab_ids, f"explain missing from TAB_IDS: {tab_ids}"
+    assert "callers" not in tab_ids
+    assert "callees" not in tab_ids

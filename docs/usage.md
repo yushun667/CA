@@ -297,6 +297,15 @@ accept a directory (or repeated `--db`) and merge the shards read-only:
   `benchmarks/results/federated_bench.json`). Querying shards in place with
   sidecars is faster than single-file immutable copies.
 
+## Unified backend service (`ca serve`)
+
+`ca serve --db DB` (or `--db-dir DIR`) runs one long-lived backend for both
+clients: browsers use `/api/*` + `/events` (SSE), agents use `/mcp` or
+`ca mcp --serve-url http://127.0.0.1:8765`. It also owns a durable job queue
+(create/claim/done, `explain` cross-client loop) in a separate state database so
+index shards stay read-only. See [server.md](server.md) for endpoints, job/SSE
+semantics, security and limits.
+
 ## Agent access: MCP, call graph, incremental updates
 
 CA is designed to run on the machine that owns the sources; AI agents query it

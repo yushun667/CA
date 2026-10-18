@@ -1,10 +1,9 @@
 # Agent platform and server deployment
 
-Status: phase 3 acceptance in progress (OpenHarmony first).
+Status: phase 3 acceptance in progress; phase 4 adds the unified backend.
 
-This document describes how CA is deployed on a source machine and queried by AI
-agents. It is a current-structure document; phase rationale lives in
-`../decisions/active/`.
+Deployment and agent query path on the source machine; current structure only,
+rationale lives in `../decisions/active/`.
 
 ## Purpose and users
 
@@ -17,15 +16,16 @@ semantics, call structure). Phase 3 targets OpenHarmony C/C++ first.
 
 | Component | Responsibility |
 |---|---|
-| `ca mcp` | MCP JSON-RPC server (stdio/HTTP); 15 tools: base facts (symbols, callers, callees, graph, detail, stats) + `ensure_deep`, `deep_status`, `prewarm`; stable envelopes and `deep_ready` |
+| `ca mcp` | MCP JSON-RPC server (stdio/HTTP); 18 tools (base facts, callbacks, batch/brief, deep tools), `--serve-url` proxy; stable envelopes and `deep_ready` |
 | `ca.cli.deep` + `ca.store.deep` | L0 base facts; L1 `ensure_deep` materializes CFG/branches/returns/resources/call_targets per requested function; L2 prewarm; `deep_status` keeps L0 independent of deep coverage |
-| `ca.pipeline` resilience | Chunks <=16 TUs, broken-pool retry (halved then per-TU), wave-level pool rebuild (`CA_POOL_RECYCLE_CHUNKS`), stable-id idempotence and per-TU cache |
+| `ca.pipeline` resilience | Chunk cap 16 TUs, broken-pool retry, wave-level pool rebuild (`CA_POOL_RECYCLE_CHUNKS`), stable-id idempotence, per-TU cache |
 | Parser backend | Default libclang 18; OH uses matched libclang 15 via `CA_LIBCLANG_LIBRARY` (see decisions) |
-| `ca graph` (`src/ca/cli/graph.py`) | Forward/reverse/both traversal with depth and hard limits, path/cycle queries, table/JSON/DOT output; merges direct calls and candidate edges |
-| `ca.analyze.callbacks` | Indirect-call candidate resolution: registration assignments, arrays, parameter passing, typedefs, return pointers; emits `CallTargetRecord(kind=indirect_candidate, confidence, reason)` filtered by function-pointer signature |
-| `ca.store.graph` / `ca.store.workspace` / `ca.store.deep` | Persist `call_targets`, graph helpers, workspace/project/variant metadata and `deep_status`; `store_schema_version=3`; L0 queries work with zero deep rows |
-| Offline/incremental modes | `ca index` builds a full offline snapshot; `ca update --changed-files ...` reparses only changed TUs; daemon design in [docs/incremental.md](../../docs/incremental.md) |
-| `ca ui` (`src/ca/ui/server.py`) | local read-only web UI: vanilla page + JSON API + SVG graph; loopback only |
+| `ca graph` (`src/ca/cli/graph.py`) | Forward/reverse/both traversal (depth/limits, path/cycle, table/JSON/DOT); merges direct + candidate edges |
+| `ca.analyze.callbacks` | Indirect-call candidate resolution (assignments, arrays, params, typedefs, return pointers) filtered by function-pointer signature; emits `CallTargetRecord(kind=indirect_candidate, confidence, reason)` |
+| `ca.store.graph` / `ca.store.workspace` / `ca.store.deep` | Persist `call_targets`, graph helpers, workspace metadata and `deep_status`; L0 queries work with zero deep rows |
+| Offline/incremental modes | `ca index` builds a snapshot; `ca update --changed-files ...` reparses changed TUs; see [docs/incremental.md](../../docs/incremental.md) |
+| `ca ui` (`src/ca/ui/server.py`) | local read-only web UI: vanilla page + JSON API + SVG graph; loopback only; `--serve-url` proxies to the backend |
+| `ca serve` (`src/ca/server/`) | unified backend for browser/MCP clients; see [unified-serve-backend.md](unified-serve-backend.md) |
 | `ca.build.openharmony` | OpenHarmony corpus logic: repo manifest/projects, GN/ninja command construction, `ninja -t compdb` normalization, metadata; operates on the working copy only |
 
 ## Data flow and query path
@@ -36,8 +36,8 @@ OpenHarmony working copy
   -> ninja -t compdb (real C/C++ flags, no full compile)
   -> offline batch index on the source server (L0 base + main-file deep)
   -> sharded SQLite snapshots (one DB per shard/workspace)
-  -> ca mcp (stdio over SSH or HTTP on the LAN)
-  -> AI agent tools
+  -> ca serve (single backend) -> /api/* + /events, /mcp, /api/jobs
+  -> AI agent tools (via /mcp or `ca mcp --serve-url`)
        \-> ensure_deep / prewarm materialize L1 facts lazily and cache them
 ```
 

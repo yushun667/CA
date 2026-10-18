@@ -68,6 +68,14 @@ slicing (queries are indexed, so this stays cheap for modest offsets).
 | `deep_status` | `symbols` (optional) | deep_ready coverage (`total_functions/deep_ready/pending/failed/coverage`) and per-symbol status |
 | `prewarm` | `limit`, `jobs`, `background` | analyze the hottest queried pending symbols (L2 queue); background=true returns immediately |
 
+### Unified backend (`ca serve`)
+
+Instead of opening the database per process, agents can proxy stdio MCP to a
+long-lived backend: `ca mcp --serve-url http://127.0.0.1:8765`. The server
+exposes the same 18 tools over HTTP `/mcp` plus two job tools
+(`explain_jobs`, `submit_explanation`) for the UI/agent cross-client loop; see
+[server.md](server.md).
+
 ### Federated mode (`--db-dir`)
 
 `ca mcp --db-dir <dir>` (or repeated `--db`) serves a read-only federated view

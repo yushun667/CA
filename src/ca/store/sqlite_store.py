@@ -22,9 +22,10 @@ safe.
 
 Schema versioning: ``meta.schema_version`` tracks the core contract
 (``ca.core.schema.SCHEMA_VERSION``) while ``meta.store_schema_version`` tracks
-the additive physical layout (``"4"`` adds ``call_targets``, the
-``workspaces``/``projects``/``variants`` metadata tables, ``deep_status`` and the
-cross-TU callback tables ``callback_registrations``/``callback_target_links``). Upgrades are
+the additive physical layout (``"5"`` adds ``call_targets``, the
+``workspaces``/``projects``/``variants`` metadata tables, ``deep_status``, the
+cross-TU callback tables ``callback_registrations``/``callback_target_links`` and
+the backend job queue ``jobs``/``job_events``). Upgrades are
 non-destructive: ``open()`` applies ``CREATE TABLE IF NOT EXISTS`` and
 ``finalize()`` adds indexes, so a phase-2 database stays queryable before
 ``finalize()`` and gains the new tables/indexes afterwards.
@@ -116,7 +117,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from ca.core.schema import SCHEMA_VERSION, AnalysisResult, ParseResult
-from ca.store import callbacks, deep, graph, queries, workspace, writer
+from ca.store import callbacks, deep, graph, jobs as job_queue, queries, workspace, writer
 
 _SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 _MEMORY_PATHS = {":memory:", "file::memory:", "file::memory:?cache=shared"}
@@ -133,6 +134,7 @@ class SqliteStore:
         self._registry: workspace.WorkspaceRegistry | None = None
         self._deep: deep.DeepStatusStore | None = None
         self._callbacks: callbacks.CallbackRegistry | None = None
+        self._jobs: job_queue.JobQueue | None = None
         self._in_transaction = False
 
     # ------------------------------------------------------------------ #
@@ -177,6 +179,7 @@ class SqliteStore:
         self._registry = workspace.WorkspaceRegistry(connection)
         self._deep = deep.DeepStatusStore(connection, self._queries)
         self._callbacks = callbacks.CallbackRegistry(connection)
+        self._jobs = job_queue.JobQueue(connection)
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -205,6 +208,7 @@ class SqliteStore:
             self._registry = None
             self._deep = None
             self._callbacks = None
+            self._jobs = None
 
     def __enter__(self) -> "SqliteStore":
         self.open()
@@ -475,6 +479,105 @@ class SqliteStore:
         return self._require_deep().invalidate_deep(function_ids, tu_ids)
 
     # ------------------------------------------------------------------ #
+    # Unified-backend job queue + event log
+    # ------------------------------------------------------------------ #
+    @property
+    def jobs(self) -> job_queue.JobQueue:
+        """Job queue bound to this store's connection (tables in this DB)."""
+
+        return self._require_jobs()
+
+    def create_job(self, kind: str, payload: Any = None, *, job_id: str | None = None) -> str:
+        return self._require_jobs().create_job(kind, payload, job_id=job_id)
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        return self._require_jobs().get_job(job_id)
+
+    def list_jobs(
+        self,
+        *,
+        kind: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        return self._require_jobs().list_jobs(
+            kind=kind, status=status, limit=limit, offset=offset
+        )
+
+    def claim_job(
+        self,
+        kind: str | None = None,
+        *,
+        claimed_by: str = "",
+        lease_seconds: int = job_queue.DEFAULT_LEASE_SECONDS,
+    ) -> dict[str, Any] | None:
+        return self._require_jobs().claim_job(
+            kind, claimed_by=claimed_by, lease_seconds=lease_seconds
+        )
+
+    def complete_job(
+        self, job_id: str, result: Any = None, *, claimed_by: str | None = None
+    ) -> bool:
+        return self._require_jobs().complete_job(job_id, result, claimed_by=claimed_by)
+
+    def fail_job(
+        self, job_id: str, error: str = "", *, claimed_by: str | None = None
+    ) -> bool:
+        return self._require_jobs().fail_job(job_id, error, claimed_by=claimed_by)
+
+    def requeue_job(
+        self, job_id: str, *, error: str = "", claimed_by: str | None = None
+    ) -> bool:
+        return self._require_jobs().requeue_job(
+            job_id, error=error, claimed_by=claimed_by
+        )
+
+    def renew_job_lease(
+        self,
+        job_id: str,
+        *,
+        claimed_by: str = "",
+        lease_seconds: int = job_queue.DEFAULT_LEASE_SECONDS,
+    ) -> bool:
+        return self._require_jobs().renew_job_lease(
+            job_id, claimed_by=claimed_by, lease_seconds=lease_seconds
+        )
+
+    def recover_running(self) -> int:
+        return self._require_jobs().recover_running()
+
+    def requeue_expired(self) -> int:
+        return self._require_jobs().requeue_expired()
+
+    def job_stats(self) -> dict[str, Any]:
+        return self._require_jobs().job_stats()
+
+    def count_jobs(self, *, kind: str | None = None, status: str | None = None) -> int:
+        return self._require_jobs().count_jobs(kind=kind, status=status)
+
+    def list_job_events(
+        self,
+        *,
+        since_id: int = 0,
+        job_id: str | None = None,
+        limit: int = 100,
+        types: Any = None,
+    ) -> list[dict[str, Any]]:
+        return self._require_jobs().list_job_events(
+            since_id=since_id, job_id=job_id, limit=limit, types=types
+        )
+
+    def latest_job_event_id(self) -> int:
+        return self._require_jobs().latest_job_event_id()
+
+    def append_job_event(self, job_id: str, event_type: str, data: Any = None) -> int:
+        return self._require_jobs().append_job_event(job_id, event_type, data)
+
+    def prune_job_events(self, keep_last: int = 10000) -> int:
+        return self._require_jobs().prune_job_events(keep_last)
+
+    # ------------------------------------------------------------------ #
     # Internals
     # ------------------------------------------------------------------ #
     def _require_connection(self) -> sqlite3.Connection:
@@ -491,6 +594,11 @@ class SqliteStore:
         if self._graph is None:
             raise RuntimeError("SqliteStore is not open; call open() first")
         return self._graph
+
+    def _require_jobs(self) -> job_queue.JobQueue:
+        if self._jobs is None:
+            raise RuntimeError("SqliteStore is not open; call open() first")
+        return self._jobs
 
     def _require_callbacks(self) -> callbacks.CallbackRegistry:
         if self._callbacks is None:

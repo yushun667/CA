@@ -13,4 +13,6 @@
 - 2026-10-18-layered-indexing-and-agent-api.md、2026-10-18-layered-indexing-and-agent-api.zh.md、2026-10-18-layered-indexing-and-agent-api.i18n.yaml
 
 - 2026-10-18-readonly-web-ui.md、2026-10-18-readonly-web-ui.zh.md、2026-10-18-readonly-web-ui.i18n.yaml
+
+- 2026-10-18-unified-serve-backend.md、2026-10-18-unified-serve-backend.zh.md、2026-10-18-unified-serve-backend.i18n.yaml
 新增/修改决策追加一行；完全取代的移至 `../superseded/` 并更新链接。

@@ -1,6 +1,6 @@
 # Agent 平台与服务器部署
 
-Status: 阶段 3 验收进行中（OpenHarmony 优先）。
+Status: 阶段 3 验收进行中（OpenHarmony 优先）；阶段 4 以统一 `ca serve` 后端起步。
 
 本文件描述 CA 在源码机上如何部署、如何被 AI agent 查询；理由见
 `../decisions/active/`。
@@ -23,7 +23,8 @@ coding agent（引用/影响/调用关系）、测试生成 agent（分支条件
 | `ca.analyze.callbacks` | 间接调用候选解析：注册赋值、数组、参数传递、typedef、返回指针；按函数指针签名过滤，产出 `CallTargetRecord(kind=indirect_candidate, confidence, reason)` |
 | `ca.store.graph` / `ca.store.workspace` / `ca.store.deep` | `call_targets` 持久化、图查询、workspace/project/variant 元数据与 `deep_status`；`store_schema_version=3`；L0 查询在零深析行时也可用 |
 | 离线/增量模式 | `ca index` 建立离线全量快照；`ca update --changed-files ...` 只重解析变更 TU；daemon 设计见 [docs/incremental.zh.md](../../docs/incremental.zh.md) |
-| `ca ui`（`src/ca/ui/server.py`） | 本地只读 Web UI（`--db`/`--db-dir`），vanilla 单页、JSON API、SVG 调用图；仅回环、无认证/写操作；20 项 UI 测试 |
+| `ca ui`（`src/ca/ui/server.py`）| 本地只读 Web UI：vanilla 页面 + JSON API + SVG 图；仅 loopback；`--serve-url` 模式代理统一后端 |
+| `ca serve`（`src/ca/server/`）| 浏览器/MCP 客户端共用的统一后端；见 [unified-serve-backend.zh.md](unified-serve-backend.zh.md) |
 | `ca.build.openharmony` | OpenHarmony 语料逻辑：repo manifest/project、GN/ninja 命令构造、`ninja -t compdb` 归一化、metadata；只操作工作副本 |
 
 ## 数据流与查询路径
@@ -34,8 +35,8 @@ OpenHarmony 工作副本
   -> ninja -t compdb（真实 C/C++ flags，无需全量编译）
   -> 源码机上的离线批处理索引（L0 基础 + 主文件深析）
   -> 分片 SQLite 快照（每 shard/workspace 一个 DB）
-  -> ca mcp（SSH 上的 stdio 或 LAN HTTP）
-  -> AI agent 工具
+  -> ca serve（单后端）-> /api/* + /events、/mcp、/api/jobs
+  -> AI agent 工具（经 /mcp 或 `ca mcp --serve-url`）
        \-> ensure_deep / prewarm 按需物化 L1 事实并缓存
 ```
 

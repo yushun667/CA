@@ -160,6 +160,14 @@
     explainError: "",
     sidebarCollapsed: readStoredFlag(SIDEBAR_KEY),
     layout: readStoredLayout(),
+    // ca serve thin-client mode: embedded (--db) vs remote (--serve-url).
+    mode: "embedded",
+    serveUrl: "",
+    features: { jobs: false, sse: false },
+    connection: "embedded",
+    eventSource: null,
+    explainJob: null,
+    jobPollTimer: null,
   };
 
   const els = {};
@@ -324,6 +332,205 @@
       throw wrapped;
     }
     return payload.data;
+  }
+
+  async function apiPost(path, payload) {
+    let response;
+    try {
+      response = await fetch(path, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload || {}),
+      });
+    } catch (error) {
+      throw new Error(t("error.unreachable", { message: error.message }));
+    }
+    let body = null;
+    try {
+      body = await response.json();
+    } catch (_error) {
+      body = null;
+    }
+    if (!body || body.ok !== true) {
+      const detail =
+        body && body.error
+          ? `${body.error.code}: ${body.error.message}`
+          : `HTTP ${response.status}`;
+      const wrapped = new Error(detail);
+      wrapped.status = response.status;
+      throw wrapped;
+    }
+    return body.data;
+  }
+
+  // ------------------------------------------------- remote mode / event stream
+  async function loadUiMode() {
+    try {
+      const info = await api("/api/ui");
+      state.mode = info.mode === "remote" ? "remote" : "embedded";
+      state.serveUrl = info.serve_url || "";
+      state.features = info.features || { jobs: false, sse: false };
+    } catch (_error) {
+      // Older embedded UI servers do not expose /api/ui.
+      state.mode = "embedded";
+      state.serveUrl = "";
+      state.features = { jobs: false, sse: false };
+    }
+    if (state.mode === "embedded") {
+      state.connection = "embedded";
+    }
+    renderConnectionStatus();
+    if (state.mode === "remote" && state.features.sse) {
+      connectEvents();
+    }
+  }
+
+  function renderConnectionStatus() {
+    const element = document.getElementById("conn-status");
+    if (!element) return;
+    if (state.mode !== "remote") {
+      element.hidden = true;
+      return;
+    }
+    element.hidden = false;
+    const keys = {
+      connecting: "conn.connecting",
+      online: "conn.online",
+      reconnecting: "conn.reconnecting",
+      offline: "conn.offline",
+    };
+    element.className = `conn-badge ${state.connection}`;
+    element.textContent = t(keys[state.connection] || "conn.connecting");
+    element.title = state.serveUrl || "";
+  }
+
+  function connectEvents() {
+    if (typeof EventSource === "undefined") {
+      state.connection = "offline";
+      renderConnectionStatus();
+      return;
+    }
+    if (state.eventSource) {
+      state.eventSource.close();
+      state.eventSource = null;
+    }
+    state.connection =
+      state.connection === "online" ? "reconnecting" : "connecting";
+    renderConnectionStatus();
+    const source = new EventSource("/events");
+    state.eventSource = source;
+    source.onopen = () => {
+      state.connection = "online";
+      renderConnectionStatus();
+      resyncExplainJob();
+    };
+    source.onerror = () => {
+      state.connection =
+        typeof navigator !== "undefined" && navigator.onLine === false
+          ? "offline"
+          : "reconnecting";
+      renderConnectionStatus();
+    };
+    source.onmessage = (event) => handleSseEvent(event.data);
+  }
+
+  function handleSseEvent(raw) {
+    let message = null;
+    try {
+      message = JSON.parse(raw);
+    } catch (_error) {
+      return;
+    }
+    if (!message || message.type !== "job.updated" || !message.job) return;
+    const job = message.job;
+    if (state.explainJob && job.id === state.explainJob.id) {
+      applyExplainJob(job);
+    }
+  }
+
+  function normalizeExplainResult(result, job) {
+    const payload = result || {};
+    const kind = payload.provider || "agent";
+    return {
+      symbol: (job && (job.symbol || (job.payload || {}).symbol)) || "",
+      provider: kind,
+      model: payload.model || (kind === "agent" ? "mcp-agent" : ""),
+      language: payload.language || currentLanguage(),
+      explanation: payload.explanation || payload.summary || "",
+      evidence: Array.isArray(payload.evidence) ? payload.evidence : [],
+      facts_summary: payload.facts_summary || null,
+      fallback_reason: payload.fallback_reason || "",
+      elapsed_ms: Number(payload.elapsed_ms) || 0,
+      cached: Boolean(payload.cached),
+    };
+  }
+
+  function applyExplainJob(job) {
+    if (!job || !job.id) return;
+    state.explainJob = {
+      id: job.id,
+      status: job.status || "queued",
+      error: typeof job.error === "string" ? job.error : "",
+    };
+    if (job.status === "done") {
+      state.explain = normalizeExplainResult(job.result, job);
+      state.explainLoading = false;
+      state.explainError = "";
+      clearJobPoll();
+    } else if (job.status === "failed") {
+      state.explainLoading = false;
+      state.explainError =
+        state.explainJob.error || t("explain.jobFailed");
+      clearJobPoll();
+    } else {
+      state.explainLoading = true;
+      state.explainError = "";
+    }
+    if (state.tab === "explain") renderAccordionContent();
+  }
+
+  function clearJobPoll() {
+    if (state.jobPollTimer) {
+      window.clearTimeout(state.jobPollTimer);
+      state.jobPollTimer = null;
+    }
+  }
+
+  function scheduleJobPoll() {
+    clearJobPoll();
+    const job = state.explainJob;
+    if (!job || job.status === "done" || job.status === "failed") return;
+    state.jobPollTimer = window.setTimeout(async () => {
+      const current = state.explainJob;
+      if (!current || !current.id || current.status !== job.status) return;
+      try {
+        const data = await api(
+          `/api/jobs/${encodeURIComponent(current.id)}`
+        );
+        if (state.explainJob && state.explainJob.id === current.id) {
+          applyExplainJob(data.job);
+        }
+      } catch (_error) {
+        /* keep waiting; SSE may still deliver the result */
+      }
+      scheduleJobPoll();
+    }, 1500);
+  }
+
+  async function resyncExplainJob() {
+    const job = state.explainJob;
+    if (!job || !job.id) return;
+    try {
+      const data = await api(`/api/jobs/${encodeURIComponent(job.id)}`);
+      if (state.explainJob && state.explainJob.id === job.id) {
+        applyExplainJob(data.job);
+      }
+    } catch (_error) {
+      /* keep the current snapshot */
+    }
   }
 
   // ---------------------------------------------------------------- routing
@@ -511,6 +718,8 @@
       state.explain = null;
       state.explainLoading = false;
       state.explainError = "";
+      state.explainJob = null;
+      clearJobPoll();
       state.tab = tab;
       state.route = "function";
       if (!options.hash) {
@@ -555,12 +764,11 @@
 
   const TAB_IDS = [
     "overview",
-    "callers",
-    "callees",
     "branches",
     "returns",
     "resources",
     "findings",
+    "explain",
   ];
 
   function normalizeTab(tab) {
@@ -1013,6 +1221,19 @@
     return "en";
   }
 
+  async function fetchExplainSync(symbol, language) {
+    const data = await api(
+      `/api/explain?symbol=${encodeURIComponent(
+        symbol
+      )}&lang=${encodeURIComponent(language)}`
+    );
+    if (state.selectedSymbol !== symbol) return;
+    state.explain = data;
+    state.explainJob = null;
+    state.explainLoading = false;
+    if (state.tab === "explain") renderAccordionContent();
+  }
+
   async function loadExplain(force = false) {
     const symbol = state.selectedSymbol;
     if (!symbol || state.explainLoading) return;
@@ -1022,23 +1243,45 @@
     if (force || (state.explain && state.explain.language !== language)) {
       state.explain = null;
     }
+    if (force) state.explainJob = null;
+    clearJobPoll();
     renderAccordionContent();
     try {
-      const data = await api(
-        `/api/explain?symbol=${encodeURIComponent(
-          symbol
-        )}&lang=${encodeURIComponent(language)}`
-      );
+      if (state.mode === "remote" && state.features.jobs) {
+        const data = await apiPost("/api/jobs", {
+          type: "explain",
+          symbol,
+          payload: { lang: language },
+        });
+        if (state.selectedSymbol !== symbol) return;
+        state.explainJob = {
+          id: data.job.id,
+          status: data.job.status || "queued",
+          error: "",
+        };
+        state.explainLoading = true;
+        if (state.features.sse && !state.eventSource) connectEvents();
+        scheduleJobPoll();
+        if (state.tab === "explain") renderAccordionContent();
+        return;
+      }
+    } catch (error) {
+      // Jobs are unavailable: fall back to the synchronous explain endpoint
+      // (the server keeps its own heuristic/LLM fallback).
       if (state.selectedSymbol !== symbol) return;
-      state.explain = data;
+      if (error && error.status === 401) {
+        state.explainError = friendlyError(error);
+        state.explainLoading = false;
+        return;
+      }
+    }
+    try {
+      await fetchExplainSync(symbol, language);
     } catch (error) {
       if (state.selectedSymbol !== symbol) return;
       state.explainError = friendlyError(error);
-    } finally {
-      if (state.selectedSymbol === symbol) {
-        state.explainLoading = false;
-        if (state.tab === "explain") renderAccordionContent();
-      }
+      state.explainLoading = false;
+      if (state.tab === "explain") renderAccordionContent();
     }
   }
 
@@ -1049,11 +1292,26 @@
         `${t("explain.error")}: ${state.explainError}`
       )}</div><div class="source-actions"><button type="button" class="ghost" id="explain-refresh">${escapeHtml(
         t("explain.refresh")
+      )}</button><button type="button" class="ghost" id="explain-retry">${escapeHtml(
+        t("explain.retry")
       )}</button></div></section>`;
       return;
     }
     const data = state.explain;
     const language = currentLanguage();
+    const job = state.explainJob;
+    if (job && (job.status === "queued" || job.status === "running")) {
+      const statusKey =
+        job.status === "queued" ? "jobs.queued" : "jobs.running";
+      panel.innerHTML = `<section class="section"><div class="section-head">${title}<span class="note">${escapeHtml(
+        t(statusKey)
+      )}</span></div><div class="view-loading">${escapeHtml(
+        t(statusKey)
+      )} · ${escapeHtml(t("jobs.waitingAgent"))}</div><div class="source-actions"><button type="button" class="ghost" id="explain-refresh">${escapeHtml(
+        t("explain.refresh")
+      )}</button></div></section>`;
+      return;
+    }
     if (state.explainLoading || !data || data.language !== language) {
       panel.innerHTML = `<section class="section"><div class="section-head">${title}<span class="note">${escapeHtml(
         t("explain.loading")
@@ -1063,13 +1321,29 @@
       if (!state.explainLoading) loadExplain();
       return;
     }
-    const providerBadge =
-      data.provider === "llm"
-        ? badge(data.model || t("explain.ai"), "definition")
-        : badge(t("explain.heuristic"), "warning");
+    const providerKind = data.provider || "agent";
+    const providerLabel =
+      providerKind === "llm"
+        ? data.model || t("explain.ai")
+        : providerKind === "agent"
+        ? t("explain.agent")
+        : t("explain.heuristic");
+    const providerBadge = badge(
+      providerLabel,
+      providerKind === "heuristic" ? "warning" : "definition"
+    );
+    const evidence =
+      Array.isArray(data.evidence) && data.evidence.length
+        ? `<div class="explain-evidence"><strong>${escapeHtml(
+            t("explain.evidence")
+          )}</strong><ul>${data.evidence
+            .slice(0, 10)
+            .map((item) => `<li>${escapeHtml(String(item))}</li>`)
+            .join("")}</ul></div>`
+        : "";
     const facts = data.facts_summary || {};
     const meta = t("explain.meta", {
-      provider: data.provider === "llm" ? t("explain.ai") : t("explain.heuristic"),
+      provider: providerLabel,
       ms: Math.round(Number(data.elapsed_ms) || 0),
     });
     const fallback = data.fallback_reason
@@ -1078,7 +1352,7 @@
         )}</p>`
       : "";
     const disclaimer =
-      data.provider === "heuristic"
+      providerKind === "heuristic"
         ? `<p class="empty">${escapeHtml(t("explain.disclaimer"))}</p>`
         : "";
     const sourceInfo = facts.source || {};
@@ -1094,7 +1368,7 @@
         t("explain.copy")
       )}</button></div></div>
       <div class="explain-meta">${escapeHtml(meta)} · ${escapeHtml(sourceNote)}</div>
-      ${fallback}${disclaimer}
+      ${fallback}${disclaimer}${evidence}
       <pre class="explain-body">${escapeHtml(data.explanation || "")}</pre>
     </section>`;
   }
@@ -2547,6 +2821,35 @@
   async function loadHealth() {
     try {
       const health = await api("/api/health");
+      if (health && health.db_ok === undefined) {
+        health.db_ok = (health.status || "ok") === "ok";
+      }
+      // The unified `ca serve` health payload has no table counts; fetch the
+      // read-only stats endpoint (proxied) so the header/welcome cards are real.
+      if (
+        state.mode === "remote" &&
+        health &&
+        health.database &&
+        !health.database.counts
+      ) {
+        try {
+          const stats = await api("/api/stats");
+          const tables = stats.tables || {};
+          health.database.counts = {
+            functions: Number(tables.functions) || 0,
+            calls: Number(tables.calls) || 0,
+            branches: Number(tables.branches) || 0,
+            returns: Number(tables.returns) || 0,
+            resource_ops: Number(tables.resource_ops) || 0,
+            callback_registrations: Number(tables.callback_registrations) || 0,
+          };
+          health.database.db_bytes = stats.db_bytes;
+          health.database.schema_version = stats.schema_version;
+          health.database.sqlite_version = stats.sqlite_version;
+        } catch (_error) {
+          /* stats unavailable: keep the header minimal */
+        }
+      }
       state.health = health;
       renderDbInfo(health);
       renderWelcomeCards(health);
@@ -2596,7 +2899,10 @@
       resetLayout();
       return;
     }
-    if (event.target.closest("#explain-refresh")) {
+    if (
+      event.target.closest("#explain-refresh") ||
+      event.target.closest("#explain-retry")
+    ) {
       loadExplain(true);
       return;
     }
@@ -2838,17 +3144,28 @@
     els.callbacksButton = document.getElementById("callbacks-button");
     els.brand = document.getElementById("brand");
     bindEvents();
+    await loadUiMode();
     await loadHealth();
     await applyRoute();
   }
 
   // Small read-only hooks so tests can exercise the jump history without a DOM.
   window.CA_UI_TEST = {
+    normalizeExplainResult,
+    applyExplainJob,
     pushFunctionHistory,
     popFunctionHistory,
     clearFunctionHistory,
     historyLength: () => functionHistory.length,
     historyEntries: () => functionHistory.map((entry) => ({ ...entry })),
+    explainState: () => ({
+      mode: state.mode,
+      connection: state.connection,
+      explainJob: state.explainJob ? { ...state.explainJob } : null,
+      explain: state.explain ? { ...state.explain } : null,
+      explainError: state.explainError,
+      explainLoading: state.explainLoading,
+    }),
   };
 
   if (document.readyState === "loading") {

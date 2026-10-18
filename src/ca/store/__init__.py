@@ -13,6 +13,14 @@ and multi-repo workspace/project/variant metadata (``ca.store.workspace``).
 """
 
 from ca.store.federated import FederatedStore, discover_databases
+from ca.store.jobs import JOB_STATUSES, JobQueue, JobStore
 from ca.store.sqlite_store import SqliteStore
 
-__all__ = ["FederatedStore", "SqliteStore", "discover_databases"]
+__all__ = [
+    "FederatedStore",
+    "JOB_STATUSES",
+    "JobQueue",
+    "JobStore",
+    "SqliteStore",
+    "discover_databases",
+]

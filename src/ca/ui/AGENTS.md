@@ -4,7 +4,7 @@
 
 ## 关键文件
 
-- `server.py`：`make_server()`/`serve()`/`cmd_ui()`；端点路由（含只读源码窗口 `/api/source` 与 CFG `/api/cfg`）、统一 `{ok,data,error}` 信封、静态白名单、SIGINT/SIGTERM 优雅退出。
+- `server.py`：`make_server()`/`serve()`（内嵌 DB）与 `make_proxy_server()`/`serve_proxy()`（`--serve-url` 薄客户端：本地静态 + 同源反代 `/api/*`、`/events` 流式透传，上游失败 502）；端点路由（含 `/api/source`、`/api/cfg`、`/api/ui`）、统一信封、静态白名单、优雅退出。
 - `static/`：单页前端（`index.html`/`i18n.js`/`highlight.js`/`app.js`/`style.css`/`favicon.svg`，中英双语）；零 CDN、零外网请求。修改规则见 [static/AGENTS.md](static/AGENTS.md)。
 - `../../tests/test_ui.py`：线程内随机端口起 server + 临时 DB 的 API/静态页/只读/联邦断言。
 
@@ -16,6 +16,7 @@
 
 ## 局部规则
 
+- 远程模式（`--serve-url`）下 explain 走 `POST /api/jobs` + `/events` SSE（agent 可 claim/submit），jobs 不可用时回退同步 `/api/explain`；连接状态/重连与 i18n 见 `docs/ui.md` 与 `docs/server.md`。
 - 改 API 或页面行为同步 `docs/ui.md`/`.zh.md`/`.i18n.yaml` 与 `docs/usage.*` 入口。
 - 前端不引入构建工具或外部依赖；所有数据文本必须转义后再插入 DOM。
 - 测试：`.venv/bin/python -m pytest tests/test_ui.py -q`；手工验证 `ca ui --db <db>`。

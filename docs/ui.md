@@ -10,6 +10,16 @@ The frontend is plain HTML/CSS/JavaScript: no CDN, no external fonts, no Node
 build step, no third-party runtime dependency and no network request other than
 this server. The HTTP server uses the Python standard library (`http.server`).
 
+`ca ui` runs in one of two modes:
+
+- **embedded** (`--db` / `--db-dir`, the default): the UI process opens the
+  index itself and answers `/api/*` directly.
+- **remote** (`--serve-url`, thin client): the UI process only serves the static
+  assets and **reverse-proxies** `/api/*` and `/events` to a running
+  [`ca serve`](server.md) backend on the same browser origin. The browser never
+  talks to the backend directly, so no CORS/CSP changes are needed and the UI
+  stays read-only.
+
 ## Starting the UI
 
 ```sh
@@ -26,6 +36,10 @@ this server. The HTTP server uses the Python standard library (`http.server`).
 
 # module form when the console script is not on PATH
 PYTHONPATH=src .venv/bin/python -m ca ui --db ca.db
+
+# thin client for the unified backend (task/SSE/agent collaboration)
+.venv/bin/ca serve --db ca.db --port 8765       # backend: /api/*, /events, /mcp
+.venv/bin/ca ui --serve-url http://127.0.0.1:8765 --port 8766
 ```
 
 The server prints the exact URL on stderr, e.g.
@@ -38,8 +52,36 @@ the port cannot be bound.
 |---|---|
 | `--db PATH` | SQLite database (repeatable; more than one value means federated) |
 | `--db-dir DIR` | directory of shard `*.db` files (federated; unreadable shards are skipped) |
+| `--serve-url URL` | thin-client mode: proxy `/api/*` + `/events` to a running `ca serve` (cannot be combined with `--db`/`--db-dir`) |
 | `--host HOST` | bind address (default `127.0.0.1`) |
 | `--port PORT` | bind port (default `8766`; `0` lets the OS pick a free port) |
+
+## Remote mode (unified backend)
+
+`ca ui --serve-url http://127.0.0.1:8765` serves the same single-page UI but
+forwards queries and events to a long-lived [`ca serve`](server.md) process:
+
+- `GET /api/ui` (local) reports `{mode:"remote", serve_url, features}`; older
+  embedded servers return `{mode:"embedded"}`.
+- Query endpoints (`/api/search`, `/api/function`, `/api/graph`, `/api/cfg`,
+  `/api/source`, `/api/explain`, …) are proxied verbatim; non-whitelisted POSTs
+  return `405 READ_ONLY`, and a query timeout is 30 s. If the backend is down,
+  the UI answers `502 SERVE_UNAVAILABLE` with the standard error envelope.
+- `GET /events` is streamed through the proxy (no buffering): `job.updated`
+  events with heartbeat comments and `Last-Event-ID` replay support. A connection
+  badge in the top bar shows `connecting / connected / reconnecting /
+  disconnected`; EventSource reconnects automatically and the UI re-fetches the
+  active job after a reconnect so missed `done` events cannot be lost.
+- **AI explanation becomes a job in remote mode**: opening the explain section
+  creates `POST /api/jobs {type:"explain", symbol, payload:{lang}}` and renders
+  `queued / running / done / failed` from SSE. An MCP agent can claim the job
+  with `explain_jobs` and submit it with `submit_explanation`; the result appears
+  live with an `MCP agent` provider badge. If jobs/SSE are unavailable the UI
+  falls back to the synchronous `/api/explain` endpoint (which keeps the server
+  side heuristic/LLM fallback), so the section still works.
+- Everything stays read-only; the UI proxy cannot write to the index. Remote
+  `--serve-url` values should be loopback or a trusted tunnel; the backend has no
+  authentication in this milestone.
 
 ## Pages
 

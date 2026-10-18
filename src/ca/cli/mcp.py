@@ -807,6 +807,72 @@ def _tool_failure(name: str, error: ToolError) -> dict[str, Any]:
     }
 
 
+def _normalize_serve_url(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        raise ValueError("serve URL is empty")
+    if "://" not in value:
+        value = "http://" + value
+    value = value.rstrip("/")
+    if not value.endswith("/mcp"):
+        value += "/mcp"
+    return value
+
+
+def run_stdio_proxy(serve_url: str) -> int:
+    """Proxy stdio JSON-RPC lines to a ``ca serve`` backend's HTTP ``/mcp``."""
+
+    import urllib.error
+    import urllib.request
+
+    try:
+        endpoint = _normalize_serve_url(serve_url)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for line in sys.stdin:
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            message = json.loads(text)
+        except json.JSONDecodeError:
+            print(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}), flush=True)
+            continue
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(message).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                body = response.read()
+        except urllib.error.HTTPError as exc:
+            body = exc.read() or json.dumps({
+                "jsonrpc": "2.0",
+                "id": message.get("id") if isinstance(message, dict) else None,
+                "error": {"code": -32603, "message": f"backend HTTP {exc.code}"},
+            }).encode("utf-8")
+        except Exception as exc:
+            body = json.dumps({
+                "jsonrpc": "2.0",
+                "id": message.get("id") if isinstance(message, dict) else None,
+                "error": {"code": -32603, "message": f"backend unreachable: {exc}"},
+            }).encode("utf-8")
+        payload = body.decode("utf-8", errors="replace").strip()
+        if not payload:
+            continue
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            print(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "invalid backend response"}}), flush=True)
+            continue
+        for item in decoded if isinstance(decoded, list) else [decoded]:
+            print(json.dumps(item, ensure_ascii=False), flush=True)
+    return 0
+
+
 def run_stdio(
     db_path: Any, repo: str = "", compdb: str = "", federated: bool = False
 ) -> int:

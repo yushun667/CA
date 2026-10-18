@@ -58,6 +58,10 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 5000
+PROXY_TIMEOUT = 30.0
+PROXY_SSE_IDLE_TIMEOUT = 60.0
+PROXY_MAX_BODY = 1024 * 1024
+PROXY_POST_PATHS = ("/api/jobs",)
 DEFAULT_SOURCE_CONTEXT = 3
 MAX_SOURCE_CONTEXT = 10
 MAX_SOURCE_LINES = 400
@@ -1314,6 +1318,16 @@ def _make_handler(service: QueryService) -> type[BaseHTTPRequestHandler]:
                 if path in ("/api/health", "/health"):
                     self._ok(api_health(service, self.server.started_at))
                     return
+                if path == "/api/ui":
+                    self._ok(
+                        {
+                            "mode": "embedded",
+                            "serve_url": "",
+                            "version": TOOL_VERSION,
+                            "features": {"jobs": False, "sse": False, "mcp": False},
+                        }
+                    )
+                    return
                 if path == "/api/search":
                     self._ok(api_search(service, params))
                     return
@@ -1429,6 +1443,386 @@ class UiHTTPServer(ThreadingHTTPServer):
         return f"http://{host}:{port}/"
 
 
+class UiProxyHTTPServer(ThreadingHTTPServer):
+    """Thin UI server: static assets + same-origin reverse proxy to ``ca serve``."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(
+        self,
+        address: tuple[str, int],
+        serve_url: str,
+        *,
+        timeout: float = PROXY_TIMEOUT,
+    ) -> None:
+        self.serve_url = serve_url.rstrip("/")
+        self.upstream_timeout = float(timeout)
+        self.started_at = time.time()
+        super().__init__(address, _make_proxy_handler(self))
+
+    @property
+    def url(self) -> str:
+        host, port = self.server_address[:2]
+        if ":" in str(host):  # IPv6 literal
+            return f"http://[{host}]:{port}/"
+        return f"http://{host}:{port}/"
+
+
+def _make_proxy_handler(server: "UiProxyHTTPServer") -> type[BaseHTTPRequestHandler]:
+    class ProxyHandler(BaseHTTPRequestHandler):
+        server_version = f"ca-ui/{TOOL_VERSION}"
+        sys_version = ""
+
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+            print(
+                f"[ui] {self.address_string()} {format % args}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        # -- response helpers ------------------------------------------------
+
+        def _headers(self) -> None:
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Security-Policy", _CSP)
+
+        def _send_raw(
+            self, status: int, content_type: str, body: bytes
+        ) -> None:
+            self.send_response(int(status))
+            self._headers()
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_json(self, status: int, payload: Any) -> None:
+            body = json.dumps(payload, ensure_ascii=False, default=str).encode(
+                "utf-8"
+            )
+            self._send_raw(
+                status, "application/json; charset=utf-8", body
+            )
+
+        def _error(self, status: int, code: str, message: str) -> None:
+            self._send_json(
+                status,
+                {"ok": False, "error": {"code": code, "message": message}},
+            )
+
+        def _send_static(self, name: str) -> None:
+            content_type = STATIC_FILES.get(name)
+            if content_type is None:
+                self._error(
+                    int(HTTPStatus.NOT_FOUND), "NOT_FOUND", f"not found: {name}"
+                )
+                return
+            try:
+                body = (STATIC_DIR / name).read_bytes()
+            except OSError as exc:
+                self._error(
+                    int(HTTPStatus.INTERNAL_SERVER_ERROR),
+                    "STATIC_UNAVAILABLE",
+                    f"cannot read {name}: {exc}",
+                )
+                return
+            self._send_raw(int(HTTPStatus.OK), content_type, body)
+
+        # -- upstream proxy --------------------------------------------------
+
+        def _upstream_url(self) -> str:
+            return f"{self.server.serve_url}{self.path}"
+
+        def _proxy_json(self, method: str, body: bytes | None) -> None:
+            headers = {"Accept": "application/json"}
+            if body is not None:
+                headers["Content-Type"] = (
+                    self.headers.get("Content-Type")
+                    or "application/json; charset=utf-8"
+                )
+            request = urllib.request.Request(
+                self._upstream_url(),
+                data=body,
+                headers=headers,
+                method=method,
+            )
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=self.server.upstream_timeout
+                ) as response:
+                    payload = response.read()
+                    status = int(response.status)
+                    content_type = response.headers.get(
+                        "Content-Type", "application/json; charset=utf-8"
+                    )
+            except urllib.error.HTTPError as exc:  # pass upstream errors through
+                payload = exc.read()
+                status = int(exc.code)
+                content_type = exc.headers.get(
+                    "Content-Type", "application/json; charset=utf-8"
+                )
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                self._error(
+                    int(HTTPStatus.BAD_GATEWAY),
+                    "SERVE_UNAVAILABLE",
+                    f"cannot reach CA serve backend at {self.server.serve_url}:"
+                    f" {type(exc).__name__}: {exc}",
+                )
+                return
+            self._send_raw(status, content_type, payload)
+
+        def _proxy_events(self) -> None:
+            headers = {"Accept": "text/event-stream"}
+            last_event_id = self.headers.get("Last-Event-ID")
+            if last_event_id:
+                headers["Last-Event-ID"] = last_event_id
+            request = urllib.request.Request(
+                self._upstream_url(), headers=headers, method="GET"
+            )
+            try:
+                response = urllib.request.urlopen(
+                    request, timeout=PROXY_SSE_IDLE_TIMEOUT
+                )
+            except urllib.error.HTTPError as exc:
+                payload = exc.read()
+                self._send_raw(
+                    int(exc.code),
+                    exc.headers.get(
+                        "Content-Type", "application/json; charset=utf-8"
+                    ),
+                    payload,
+                )
+                return
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                self._error(
+                    int(HTTPStatus.BAD_GATEWAY),
+                    "SERVE_UNAVAILABLE",
+                    f"cannot reach CA serve event stream at"
+                    f" {self.server.serve_url}: {type(exc).__name__}: {exc}",
+                )
+                return
+            try:
+                status = int(getattr(response, "status", 200))
+                self.send_response(status)
+                self._headers()
+                self.send_header(
+                    "Content-Type",
+                    response.headers.get(
+                        "Content-Type", "text/event-stream; charset=utf-8"
+                    ),
+                )
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("X-Accel-Buffering", "no")
+                # Close-delimited HTTP/1.0 stream: force the connection to close
+                # when the upstream ends so EventSource can reconnect cleanly.
+                self.close_connection = True
+                self.end_headers()
+                # ``read(8192)`` blocks until 8192 bytes for close-delimited /
+                # chunked bodies; ``read1`` forwards each arrived chunk so SSE
+                # events reach the browser immediately.
+                reader = getattr(response, "read1", None)
+                while True:
+                    chunk = reader(8192) if reader is not None else response.readline()
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+            except (OSError, TimeoutError, ValueError):
+                pass  # client disconnected or upstream stalled; EventSource reconnects
+            finally:
+                response.close()
+
+        def _read_body(self) -> bytes | None:
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            if length <= 0 or length > PROXY_MAX_BODY:
+                self._error(
+                    int(HTTPStatus.BAD_REQUEST),
+                    "INVALID_BODY",
+                    "invalid or too large request body",
+                )
+                return None
+            return self.rfile.read(length)
+
+        # -- routing ---------------------------------------------------------
+
+        def do_GET(self) -> None:  # noqa: N802 - http.server API
+            parsed = urlsplit(self.path)
+            path = parsed.path or "/"
+            try:
+                if path in ("/", "/index.html"):
+                    self._send_static("index.html")
+                    return
+                if path.startswith("/") and path.count("/") == 1:
+                    name = path[1:]
+                    if name in STATIC_FILES:
+                        self._send_static(name)
+                        return
+                if path == "/api/ui":
+                    self._send_json(
+                        int(HTTPStatus.OK),
+                        {
+                            "ok": True,
+                            "data": {
+                                "mode": "remote",
+                                "serve_url": self.server.serve_url,
+                                "version": TOOL_VERSION,
+                                "features": {
+                                    "jobs": True,
+                                    "sse": True,
+                                    "mcp": True,
+                                },
+                            },
+                        },
+                    )
+                    return
+                if path == "/events":
+                    self._proxy_events()
+                    return
+                if path.startswith("/api/"):
+                    self._proxy_json("GET", None)
+                    return
+                self._error(
+                    int(HTTPStatus.NOT_FOUND), "NOT_FOUND", f"not found: {path}"
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                print(traceback.format_exc(), file=sys.stderr, flush=True)
+                self._error(
+                    int(HTTPStatus.INTERNAL_SERVER_ERROR),
+                    "INTERNAL",
+                    f"{type(exc).__name__}: {exc}",
+                )
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server API
+            path = urlsplit(self.path).path or "/"
+            if path != "/api/jobs" and not path.startswith("/api/jobs/"):
+                self._error(
+                    int(HTTPStatus.METHOD_NOT_ALLOWED),
+                    "READ_ONLY",
+                    "only /api/jobs endpoints accept POST from the UI",
+                )
+                return
+            body = self._read_body()
+            if body is None:
+                return
+            try:
+                self._proxy_json("POST", body)
+            except Exception as exc:  # pragma: no cover - defensive
+                print(traceback.format_exc(), file=sys.stderr, flush=True)
+                self._error(
+                    int(HTTPStatus.INTERNAL_SERVER_ERROR),
+                    "INTERNAL",
+                    f"{type(exc).__name__}: {exc}",
+                )
+
+        def _read_only(self) -> None:
+            self._error(
+                int(HTTPStatus.METHOD_NOT_ALLOWED),
+                "READ_ONLY",
+                "the CA UI is read-only; only GET and /api/jobs POST are supported",
+            )
+
+        do_PUT = _read_only  # noqa: N815 - http.server API
+        do_PATCH = _read_only  # noqa: N815
+        do_DELETE = _read_only  # noqa: N815
+        do_OPTIONS = _read_only  # noqa: N815
+
+    return ProxyHandler
+
+
+def make_proxy_server(
+    serve_url: str,
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = 0,
+    timeout: float = PROXY_TIMEOUT,
+) -> UiProxyHTTPServer:
+    """Build (but do not start) a thin UI proxy server for ``ca serve``.
+
+    The browser keeps talking to the local UI origin; ``/api/*`` and ``/events``
+    are forwarded verbatim to the unified backend, so no CORS/CSP changes are
+    needed. ``port=0`` lets the OS pick a free port (used by tests).
+    """
+
+    url = str(serve_url or "").strip().rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        raise DatabaseSourceError(
+            f"--serve-url must be an http(s) URL, got {serve_url!r}"
+        )
+    try:
+        return UiProxyHTTPServer((host, int(port)), url, timeout=timeout)
+    except OSError as exc:
+        raise DatabaseSourceError(f"cannot bind {host}:{port}: {exc}") from exc
+
+
+def serve_proxy(
+    serve_url: str,
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    timeout: float = PROXY_TIMEOUT,
+) -> int:
+    """Serve the thin UI until SIGINT/SIGTERM; returns a CLI exit code."""
+
+    try:
+        server = make_proxy_server(
+            serve_url, host=host, port=port, timeout=timeout
+        )
+    except DatabaseSourceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"[ui] CA web UI (thin client) listening on {server.url}"
+        f" (serve={server.serve_url})",
+        file=sys.stderr,
+        flush=True,
+    )
+    print("[ui] press Ctrl-C to stop", file=sys.stderr, flush=True)
+
+    stop = threading.Event()
+    previous: dict[int, Any] = {}
+
+    def _on_signal(signum: int, _frame: Any) -> None:
+        stop.set()
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous[signum] = signal.signal(signum, _on_signal)
+        except (ValueError, OSError):  # not in the main thread
+            pass
+    thread = threading.Thread(
+        target=server.serve_forever,
+        kwargs={"poll_interval": 0.2},
+        name="ca-ui-proxy-http",
+        daemon=True,
+    )
+    started = False
+    try:
+        thread.start()
+        started = True
+        while not stop.wait(0.2):
+            pass
+    except KeyboardInterrupt:  # pragma: no cover - interactive path
+        pass
+    finally:
+        for signum, handler in previous.items():
+            try:
+                signal.signal(signum, handler)
+            except (ValueError, OSError):  # pragma: no cover - non-main thread
+                pass
+        if started:
+            server.shutdown()
+            thread.join(timeout=5.0)
+        server.server_close()
+    print("[ui] server stopped", file=sys.stderr, flush=True)
+    return 0
+
+
 def make_server(
     db_values: Any,
     db_dir: str | None = None,
@@ -1514,11 +1908,31 @@ def serve(
 
 
 def cmd_ui(args: Any) -> int:
-    """``ca ui`` subcommand implementation."""
+    """``ca ui`` subcommand implementation.
 
+    ``--serve-url`` selects the thin-client mode (static UI + same-origin proxy
+    to the unified ``ca serve`` backend); otherwise the embedded read-only mode
+    opens the database directly, preserving the previous behaviour.
+    """
+
+    serve_url = getattr(args, "serve_url", None)
+    db_values = getattr(args, "db", None)
+    db_dir = getattr(args, "db_dir", None)
+    if serve_url:
+        if db_values or db_dir:
+            print(
+                "error: --serve-url cannot be combined with --db/--db-dir",
+                file=sys.stderr,
+            )
+            return 1
+        return serve_proxy(
+            serve_url,
+            host=getattr(args, "host", DEFAULT_HOST),
+            port=getattr(args, "port", DEFAULT_PORT),
+        )
     return serve(
-        getattr(args, "db", None),
-        getattr(args, "db_dir", None),
+        db_values,
+        db_dir,
         host=getattr(args, "host", DEFAULT_HOST),
         port=getattr(args, "port", DEFAULT_PORT),
     )

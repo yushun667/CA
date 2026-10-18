@@ -1197,6 +1197,9 @@ def cmd_mcp(args: Any) -> int:
     from ca.cli import mcp as mcp_module
     from ca.cli.dbsource import DatabaseSourceError, resolve_paths
 
+    serve_url = getattr(args, "serve_url", None)
+    if serve_url:
+        return mcp_module.run_stdio_proxy(serve_url)
     db_values, db_dir = _db_selector(args)
     try:
         paths, errors = resolve_paths(db_values, db_dir)
@@ -1224,6 +1227,23 @@ def cmd_mcp(args: Any) -> int:
     return mcp_module.run_stdio(
         paths, repo=args.repo, compdb=args.compdb, federated=federated
     )
+
+
+def cmd_serve(args: Any) -> int:
+    """Run the unified backend (query API + jobs/SSE + MCP endpoint)."""
+
+    from ca.server import ServeConfig, serve
+
+    config = ServeConfig(
+        db_values=getattr(args, "db", None),
+        db_dir=getattr(args, "db_dir", None),
+        host=getattr(args, "host", "127.0.0.1"),
+        port=int(getattr(args, "port", 8765)),
+        state_db=getattr(args, "state_db", None),
+        repo=str(getattr(args, "repo", "") or ""),
+        compdb=str(getattr(args, "compdb", "") or ""),
+    )
+    return serve(config)
 
 
 def cmd_version(args: Any) -> int:

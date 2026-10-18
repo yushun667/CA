@@ -538,7 +538,7 @@ FTS_MIN_CHARS = 3
 # this key versions the physical layout (2 = phase-3 call_targets/workspace
 # tables). Old databases are upgraded in place by open() (CREATE TABLE IF NOT
 # EXISTS) plus finalize() (secondary indexes); no destructive migration runs.
-STORE_SCHEMA_VERSION = "4"
+STORE_SCHEMA_VERSION = "5"
 STORE_SCHEMA_META_KEY = "store_schema_version"
 
 # Legacy backfill: phase-3 databases predate deep_status. Any function that

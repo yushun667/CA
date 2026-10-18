@@ -13,6 +13,7 @@
 | [store/AGENTS.md](store/AGENTS.md) | 修改库表、写入或查询时 | SQLite 存储与查询 API |
 | [cli/AGENTS.md](cli/AGENTS.md) | 修改命令行或索引编排时 | CLI 与端到端行为 |
 | [ui/AGENTS.md](ui/AGENTS.md) | 修改人类 Web UI、HTTP API 或前端静态页时 | 只读本地浏览器界面与 JSON API |
+| [server/AGENTS.md](server/AGENTS.md) | 修改统一后端 `ca serve`、jobs/SSE 或 /mcp 端点时 | 单进程后端 + 任务队列/事件 + MCP/UI 双客户端 |
 
 ## 关键文件
 

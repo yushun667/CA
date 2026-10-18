@@ -64,6 +64,13 @@ scripts/bootstrap.sh                       # venv + 固定依赖 + editable 安�
 | `deep_status` | `symbols`（可选） | deep_ready 覆盖率（`total_functions/deep_ready/pending/failed/coverage`）与每符号状态 |
 | `prewarm` | `limit`、`jobs`、`background` | 分析查询频次最高的待深析符号（L2 队列）；background=true 立即返回 |
 
+### 统一后端（`ca serve`）
+
+agent 可通过 stdio 代理连接常驻后端，而不必每进程打开数据库：
+`ca mcp --serve-url http://127.0.0.1:8765`。服务在 HTTP `/mcp` 暴露同样 18 个工具，
+另加两个 job 工具（`explain_jobs`、`submit_explanation`）用于 UI/agent 跨客户端闭环；
+见 [server.zh.md](server.zh.md)。
+
 ### 联邦模式（`--db-dir`）
 
 `ca mcp --db-dir <dir>`（或重复 `--db`）以只读联邦方式暴露目录下所有 shard 数据库；

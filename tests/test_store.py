@@ -399,6 +399,8 @@ EXPECTED_TABLE_COUNTS = {
     "workspaces": 0,
     "projects": 0,
     "variants": 0,
+    "jobs": 0,
+    "job_events": 0,
 }
 
 

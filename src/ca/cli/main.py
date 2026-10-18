@@ -314,6 +314,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="directory of shard *.db files (federated MCP server)")
     mcp.add_argument("--transport", choices=("stdio", "http"), default="stdio",
                      help="transport (default: stdio)")
+    mcp.add_argument(
+        "--serve-url", default=None,
+        help="proxy stdio MCP to a running `ca serve` backend (URL or host:port)",
+    )
     mcp.add_argument("--repo", default=None,
                      help="repository root (required for ensure_deep/prewarm tools)")
     mcp.add_argument("--compdb", default=None,
@@ -448,6 +452,13 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--db-dir", default=None,
                     help="directory of shard *.db files (federated UI)")
     ui.add_argument(
+        "--serve-url", default=None,
+        help=(
+            "proxy the UI to a running `ca serve` backend (thin client);"
+            " cannot be combined with --db/--db-dir"
+        ),
+    )
+    ui.add_argument(
         "--host", default="127.0.0.1",
         help="bind host (default: 127.0.0.1, loopback only)",
     )
@@ -456,6 +467,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="bind port (default: 8766; 0 picks a free port)",
     )
     ui.set_defaults(func=_cmd_ui)
+
+    serve_parser = sub.add_parser(
+        "serve",
+        help="run the unified backend: query API + jobs/SSE + MCP endpoint",
+        description=(
+            "One long-lived process owns the read-only query service (single DB"
+            " or shards) and a writable job state database; browsers use"
+            " /api/* + /events and agents use /mcp (or `ca mcp --serve-url`)."
+        ),
+    )
+    serve_parser.add_argument(
+        "--db", action="append", default=None,
+        help="SQLite database path (repeatable for a federated backend)",
+    )
+    serve_parser.add_argument("--db-dir", default=None,
+                              help="directory of shard *.db files")
+    serve_parser.add_argument("--host", default="127.0.0.1",
+                              help="bind host (default: 127.0.0.1)")
+    serve_parser.add_argument("--port", type=int, default=8765,
+                              help="bind port (default: 8765)")
+    serve_parser.add_argument(
+        "--state-db", default=None,
+        help="writable job state DB (default: <db-dir>/.ca/jobs.db)",
+    )
+    serve_parser.add_argument("--repo", default=None,
+                              help="repository root for deep tools (optional)")
+    serve_parser.add_argument("--compdb", default=None,
+                              help="compile_commands.json for deep tools (optional)")
+    serve_parser.set_defaults(func=commands.cmd_serve)
 
     version = sub.add_parser("version", help="print tool and schema versions")
     version.add_argument(

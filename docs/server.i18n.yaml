@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-18
+en:
+  file: server.md
+  sha256: 834a0c0d056a57b0a703dff829544fb98ce58151488fd1a051fb5590543fc880
+zh:
+  file: server.zh.md
+  sha256: f47932049041e1dff2bbaaa6c9cdbdb9b2460e74362a6d4acfd240dd1d40d01c
