@@ -196,6 +196,7 @@ export function createProjectsPage(React, bag) {
     const [dirBrowser, setDirBrowser] = React.useState(null) // {loading,path,parent,home,entries,error}
 
     const mountedRef = React.useRef(true)
+    const autoIndexRef = React.useRef(false)
     const noticeTimer = React.useRef(null)
 
     React.useEffect(
@@ -386,7 +387,62 @@ export function createProjectsPage(React, bag) {
 
     // -- create + prepare -------------------------------------------------- //
 
+    /**
+     * A freshly prepared project starts with an empty database. Kick off the
+     * index job automatically so "choose a directory" really ends with a
+     * searchable project; the long task is visible/cancellable on #/tasks.
+     */
+    async function maybeAutoStartIndex(project) {
+      if (autoIndexRef.current) return
+      autoIndexRef.current = true
+      try {
+        const health = await api.caGet('/api/health')
+        const data = health && health.data ? health.data : null
+        const database = data && data.database ? data.database : null
+        const counts = database && database.counts ? database.counts : null
+        const functions = counts ? Number(counts.functions) || 0 : 0
+        if (functions > 0) return
+      } catch (_error) {
+        /* no schema yet counts as empty */
+      }
+      const repo = project && typeof project.sourceRoot === 'string' ? project.sourceRoot : ''
+      const db = project && typeof project.db === 'string' ? project.db : ''
+      if (!repo || !db) {
+        // Federated shard projects need per-shard indexing; do not guess.
+        showNotice(
+          t(
+            'projects.indexManual',
+            null,
+            'Index is empty: start an index task from the Tasks page for this source tree.',
+          ),
+        )
+        return
+      }
+      try {
+        const params = { repo, db }
+        if (project.compdb) params.compdb = project.compdb
+        await api.tasks.start('index', params)
+        showNotice(
+          t(
+            'projects.indexStarted',
+            null,
+            'Empty index detected: indexing started automatically — open Tasks for progress.',
+          ),
+        )
+      } catch (error) {
+        const apiError = toApiError(error)
+        showNotice(
+          t(
+            'projects.indexStartFailed',
+            { message: apiError.message },
+            'Could not start indexing: {message}',
+          ),
+        )
+      }
+    }
+
     async function createAndPrepare(input) {
+      autoIndexRef.current = false
       setBusy('create')
       setActionError(null)
       setCreating({ phase: 'creating', project: null, steps: [], logs: [], error: null, startedAt: Date.now() })
@@ -482,6 +538,7 @@ export function createProjectsPage(React, bag) {
             showNotice(t('projects.prepareDone', null, 'Project ready.'))
             notifyProjectsChanged()
             void loadProjects()
+            if (project) void maybeAutoStartIndex(project)
             // The prepare started the backend for this project; activate it so
             // the project list (and next page load) uses it as the active one.
             try {
