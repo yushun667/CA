@@ -76,3 +76,15 @@ test('renderStyles writes CSS text, not the reference count', async (t) => {
   disposeB()
   assert.equal(css().trim(), '')
 })
+
+test('the panel keeps clear of the host title bar and labels its icons', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const bundle = await readFile(new URL('../client.js', import.meta.url), 'utf8')
+  // Full-page host plugins must offset content by the desktop title-bar strip
+  // (window controls and the leading seat live there); see the DSH layout
+  // package, which defines --dsh-frame-top-clearance for darwin/windows.
+  assert.match(bundle, /padding-top: var\(--dsh-frame-top-clearance, 0px\)/)
+  // Icon-only header controls need a visible hover hint.
+  assert.match(bundle, /ca-tooltip/)
+  assert.match(bundle, /onMouseEnter/)
+})

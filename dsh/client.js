@@ -13879,6 +13879,25 @@ function createPageErrorBoundary(React, ui, t) {
 
 const SHELL_CSS = `
 .ca-main { position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+
+.ca-tooltip {
+  position: fixed;
+  z-index: 200;
+  transform: translateX(-50%);
+  max-width: 280px;
+  padding: 4px 9px;
+  border: 1px solid var(--dsw-alias-border-l2, #e5e7eb);
+  border-radius: var(--dsw-radius-sm, 6px);
+  background: var(--dsw-alias-bg-overlay, #ffffff);
+  color: var(--dsw-alias-label-primary, #1f2328);
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: var(--dsw-elevation-panel, 0 10px 30px rgba(0, 0, 0, 0.16));
+  pointer-events: none;
+}
 .ca-topbar { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; min-height: 48px; padding: 0 12px; border-bottom: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-1, #ffffff); }
 .ca-brand { display: inline-flex; align-items: center; gap: 9px; padding: 4px 6px; border: 0; background: transparent; border-radius: var(--dsw-radius-sm, 6px); color: var(--dsw-alias-label-primary, #1f2328); cursor: pointer; text-align: left; }
 .ca-brand:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.1)); }
@@ -14690,7 +14709,29 @@ function createShell(React, bag) {
     )
   }
 
-  function TopBar() {
+  /** Fixed-position hover/focus tooltip used by the icon-only top bar controls. */
+  function useHoverTooltip(React) {
+    const [tip, setTip] = React.useState(null)
+    const showTip = React.useCallback((event, label) => {
+      const target = event && event.currentTarget
+      if (!target || !label || typeof target.getBoundingClientRect !== 'function') return
+      const rect = target.getBoundingClientRect()
+      const half = 90
+      const min = 8 + half
+      const max = Math.max(min, window.innerWidth - 8 - half)
+      setTip({
+        x: Math.round(Math.min(Math.max(rect.left + rect.width / 2, min), max)),
+        y: Math.round(rect.bottom + 6),
+        label: String(label),
+      })
+    }, [])
+    const hideTip = React.useCallback(() => setTip(null), [])
+    return { tip, showTip, hideTip }
+  }
+
+  function TopBar(props) {
+    const showTip = props.showTip
+    const hideTip = props.hideTip
     const backend = state.backend
     const runningTasks =
       state.counts && Number(state.counts.running) > 0 ? Number(state.counts.running) : 0
@@ -14732,9 +14773,17 @@ function createShell(React, bag) {
               size: 'sm',
               active,
               'aria-expanded': undefined,
-              onClick: () => navigate({ page: item.page }),
-              title: translate(item.label, null, item.fallback),
+              onClick: () => {
+                hideTip()
+                navigate({ page: item.page })
+              },
               ariaLabel: translate(item.label, null, item.fallback),
+              onMouseEnter: (event) => showTip(event, translate(item.label, null, item.fallback)),
+              onMouseLeave: hideTip,
+              onFocus: (event) => {
+                if (event.currentTarget.matches(':focus-visible')) showTip(event, translate(item.label, null, item.fallback))
+              },
+              onBlur: hideTip,
             },
             h(ui.Icon, { name: item.icon, size: 14 }),
             h(
@@ -14755,9 +14804,25 @@ function createShell(React, bag) {
           {
             type: 'button',
             className: 'ca-status-pill',
-            onClick: () => navigate({ page: 'backend' }),
-            title: backend && backend.baseUrl ? backend.baseUrl : translate('shell.nav.backend', null, 'Backend'),
+            onClick: () => {
+              hideTip()
+              navigate({ page: 'backend' })
+            },
             'aria-label': `${translate('shell.backendStatus', null, 'Backend')}: ${backendStateLabel(backend)}`,
+            onMouseEnter: (event) =>
+              showTip(
+                event,
+                `${translate('shell.backendStatus', null, 'Backend')}: ${backendStateLabel(backend)}${
+                  backend && backend.baseUrl ? ` · ${backend.baseUrl}` : ''
+                }`,
+              ),
+            onMouseLeave: hideTip,
+            onFocus: (event) => {
+              if (event.currentTarget.matches(':focus-visible')) {
+                showTip(event, `${translate('shell.backendStatus', null, 'Backend')}: ${backendStateLabel(backend)}`)
+              }
+            },
+            onBlur: hideTip,
           },
           h('span', {
             className: `ca-status-dot ${
@@ -14962,6 +15027,7 @@ function createShell(React, bag) {
 
   function App() {
     ui.useStyles(SHELL_CSS)
+    const { tip, showTip, hideTip } = useHoverTooltip(React)
 
     const [tick, setTick] = React.useState(0)
     const forceRender = React.useCallback(() => setTick((value) => value + 1), [])
@@ -15015,10 +15081,13 @@ function createShell(React, bag) {
     return h(
       'div',
       { className: 'ca-app' },
-      h(TopBar),
+      h(TopBar, { showTip, hideTip }),
       h(StoppedBanner),
       h(ProjectErrorBanner),
       h('main', { className: 'ca-main' }, body),
+      tip
+        ? h('div', { className: 'ca-tooltip', role: 'tooltip', style: { left: `${tip.x}px`, top: `${tip.y}px` } }, tip.label)
+        : null,
     )
   }
 
@@ -17147,10 +17216,15 @@ const BASE_CSS = `
   position: relative;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  /* The desktop host draws macOS window controls (and its leading seat) in a
+     title bar strip above every panel. Host full-page plugins use the same
+     --dsh-frame-top-clearance custom property to stay below that strip. */
+  padding-top: var(--dsh-frame-top-clearance, 0px);
   background: var(--dsw-alias-bg-base, #ffffff);
   color: var(--dsw-alias-label-primary, #1f2328);
   font-family: var(--dsw-font-family, system-ui, -apple-system, "Segoe UI", sans-serif);
@@ -17664,6 +17738,10 @@ function createUI(React, ctx) {
           title: props.title,
           style: props.style,
           onClick: props.onClick,
+          onMouseEnter: props.onMouseEnter,
+          onMouseLeave: props.onMouseLeave,
+          onFocus: props.onFocus,
+          onBlur: props.onBlur,
         },
         ariaLabelProps(props),
         props['aria-expanded'] !== undefined ? { 'aria-expanded': props['aria-expanded'] } : null,
@@ -17684,6 +17762,10 @@ function createUI(React, ctx) {
           disabled: props.disabled ? true : undefined,
           title: props.title || props.label,
           onClick: props.onClick,
+          onMouseEnter: props.onMouseEnter,
+          onMouseLeave: props.onMouseLeave,
+          onFocus: props.onFocus,
+          onBlur: props.onBlur,
           style: Object.assign({ width: size, minWidth: size, height: size }, props.style || {}),
         },
         ariaLabelProps({ ariaLabel: props.label }),

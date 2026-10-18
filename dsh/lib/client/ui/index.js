@@ -27,10 +27,15 @@ const BASE_CSS = `
   position: relative;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  /* The desktop host draws macOS window controls (and its leading seat) in a
+     title bar strip above every panel. Host full-page plugins use the same
+     --dsh-frame-top-clearance custom property to stay below that strip. */
+  padding-top: var(--dsh-frame-top-clearance, 0px);
   background: var(--dsw-alias-bg-base, #ffffff);
   color: var(--dsw-alias-label-primary, #1f2328);
   font-family: var(--dsw-font-family, system-ui, -apple-system, "Segoe UI", sans-serif);
@@ -544,6 +549,10 @@ export function createUI(React, ctx) {
           title: props.title,
           style: props.style,
           onClick: props.onClick,
+          onMouseEnter: props.onMouseEnter,
+          onMouseLeave: props.onMouseLeave,
+          onFocus: props.onFocus,
+          onBlur: props.onBlur,
         },
         ariaLabelProps(props),
         props['aria-expanded'] !== undefined ? { 'aria-expanded': props['aria-expanded'] } : null,
@@ -564,6 +573,10 @@ export function createUI(React, ctx) {
           disabled: props.disabled ? true : undefined,
           title: props.title || props.label,
           onClick: props.onClick,
+          onMouseEnter: props.onMouseEnter,
+          onMouseLeave: props.onMouseLeave,
+          onFocus: props.onFocus,
+          onBlur: props.onBlur,
           style: Object.assign({ width: size, minWidth: size, height: size }, props.style || {}),
         },
         ariaLabelProps({ ariaLabel: props.label }),
