@@ -54,6 +54,9 @@ class WatchConfig:
     json_output: bool = False
     changed_files: list[str] = field(default_factory=list)
     state_file: str | None = None
+    backend: str = "auto"
+    backend_used: str = "poll"
+    fallback_reason: str = ""
 
     @property
     def state_path(self) -> Path:
@@ -82,6 +85,8 @@ class WatchCycleResult:
     db_write: dict[str, Any] = field(default_factory=dict)
     incremental_rows: dict[str, Any] = field(default_factory=dict)
     callback_refresh: dict[str, Any] = field(default_factory=dict)
+    backend: str = "poll"
+    fallback_reason: str = ""
     db_size: int | None = None
     deep_invalidated: bool = False
     elapsed_seconds: float = 0.0
@@ -106,6 +111,8 @@ class WatchCycleResult:
             "db_write": dict(self.db_write),
             "incremental_rows": dict(self.incremental_rows),
             "callback_refresh": dict(self.callback_refresh),
+            "backend": self.backend,
+            "fallback_reason": self.fallback_reason,
             "db_size": self.db_size,
             "deep_invalidated": self.deep_invalidated,
             "elapsed_seconds": round(self.elapsed_seconds, 3),
@@ -279,6 +286,8 @@ def _bad_source_messages(
 
 
 def _emit_result(config: WatchConfig, result: WatchCycleResult) -> None:
+    result.backend = getattr(config, "backend_used", "poll")
+    result.fallback_reason = getattr(config, "fallback_reason", "")
     if config.json_output:
         print(json.dumps(result.to_dict(), ensure_ascii=False), flush=True)
         return
@@ -287,7 +296,9 @@ def _emit_result(config: WatchConfig, result: WatchCycleResult) -> None:
         f"[watch] cycle={result.cycle} changed={len(result.changed)}"
         f" header={result.header_change} affected={result.affected_count}"
         f" {state} cache={result.cache_hits}/{result.cache_hits + result.cache_misses}"
-        f" elapsed={result.elapsed_seconds:.2f}s",
+        f" backend={result.backend}"
+        + (f" fallback={result.fallback_reason}" if result.fallback_reason else "")
+        + f" elapsed={result.elapsed_seconds:.2f}s",
         file=sys.stderr,
         flush=True,
     )
@@ -301,8 +312,14 @@ def run_cycle(
     previous: dict[str, tuple[int, float]] | None,
     *,
     update_runner: Callable[..., Any] | None = None,
+    event_paths: Sequence[str] | None = None,
 ) -> tuple[WatchCycleResult, dict[str, tuple[int, float]] | None]:
-    """Run one poll cycle; returns (result, snapshot_to_persist)."""
+    """Run one cycle; returns ``(result, snapshot_to_persist)``.
+
+    ``event_paths`` supplies native backend events directly (already filtered
+    and debounced) instead of relying on a snapshot diff. The snapshot is still
+    taken for state reconciliation and to catch deletions/lost events.
+    """
 
     from ca.cli.commands import run_update
 
@@ -316,13 +333,28 @@ def run_cycle(
         return result, current
 
     first_changed = diff_snapshots(previous, current)
-    if not first_changed:
-        result.elapsed_seconds = time.perf_counter() - started
-        return result, previous
-
-    latest = _debounced_snapshot(config, current, config.debounce)
-    changed_paths = diff_snapshots(previous, latest)
-    result.changed = [_relative(config, path) for path in changed_paths]
+    if event_paths is None:
+        if not first_changed:
+            result.elapsed_seconds = time.perf_counter() - started
+            return result, previous
+        latest = _debounced_snapshot(config, current, config.debounce)
+        changed_paths = diff_snapshots(previous, latest)
+    else:
+        latest = current
+        changed_paths = list(
+            dict.fromkeys(
+                [
+                    *(str(Path(path).expanduser()) for path in event_paths),
+                    *diff_snapshots(previous, current),
+                ]
+            )
+        )
+        if not changed_paths:
+            result.elapsed_seconds = time.perf_counter() - started
+            return result, previous
+    result.changed = list(
+        dict.fromkeys(_relative(config, path) for path in changed_paths)
+    )
     errors = _compdb_mismatch_messages(config, changed_paths)
     if errors:
         result.errors.extend(errors)
@@ -455,6 +487,127 @@ def _run_manual_batch(
     return int(getattr(update, "exit_code", 1))
 
 
+def _resolve_native_backend(
+    config: WatchConfig, *, start: bool
+) -> tuple[Any | None, str]:
+    """Return ``(watcher-or-None, fallback_reason)`` for the requested backend."""
+
+    requested = getattr(config, "backend", "auto")
+    if requested == "poll":
+        return None, ""
+    from ca.cli import native_watch
+
+    reason = ""
+    try:
+        watcher = native_watch.create_native_watcher(config.repo, start=start)
+    except Exception as exc:  # defensive: backend must never break the daemon
+        watcher = None
+        reason = f"{type(exc).__name__}: {exc}"
+    if watcher is not None:
+        return watcher, ""
+    if not reason:
+        try:
+            _available, reason = native_watch.availability()
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+    reason = reason or "native watcher unavailable"
+    if requested == "native":
+        raise RuntimeError(reason)
+    config.fallback_reason = reason
+    print(f"[watch] backend=poll fallback={reason}", file=sys.stderr, flush=True)
+    return None, reason
+
+
+def _baseline_state(
+    config: WatchConfig, update_runner: Callable[..., Any] | None
+) -> dict[str, tuple[int, float]]:
+    """Load the persisted snapshot, creating a baseline cycle when absent."""
+
+    previous = load_state(config)
+    if previous is not None:
+        return previous
+    baseline, manifest = run_cycle(
+        config, 1, None, update_runner=update_runner
+    )
+    save_state(config, manifest or {})
+    _emit_result(config, baseline)
+    return manifest or {}
+
+
+def _run_poll_daemon(
+    config: WatchConfig,
+    previous: dict[str, tuple[int, float]],
+    should_stop: Callable[[], bool],
+    update_runner: Callable[..., Any] | None,
+) -> None:
+    cycle = 1
+    while not should_stop():
+        cycle += 1
+        result, manifest = run_cycle(
+            config, cycle, previous, update_runner=update_runner
+        )
+        if manifest is not None:
+            save_state(config, manifest)
+            previous = manifest
+        _emit_result(config, result)
+        if should_stop():
+            break
+        deadline = time.monotonic() + max(0.05, config.interval)
+        while not should_stop() and time.monotonic() < deadline:
+            time.sleep(min(0.2, max(0.01, deadline - time.monotonic())))
+
+
+def _run_native_daemon(
+    config: WatchConfig,
+    watcher: Any,
+    previous: dict[str, tuple[int, float]],
+    should_stop: Callable[[], bool],
+    update_runner: Callable[..., Any] | None,
+) -> None:
+    """Event-driven loop; every ~10 intervals a snapshot cycle reconciles."""
+
+    cycle = 1
+    last_reconcile = time.monotonic()
+    interval = max(0.05, float(config.interval))
+    reconcile_after = max(1.0, interval * 10.0)
+    while not should_stop():
+        events = watcher.wait(interval)
+        if events:
+            pending = list(dict.fromkeys(events))
+            if config.debounce > 0:
+                while not should_stop():
+                    more = watcher.wait(max(0.05, float(config.debounce)))
+                    if not more:
+                        break
+                    pending.extend(more)
+                    pending = list(dict.fromkeys(pending))
+            cycle += 1
+            result, manifest = run_cycle(
+                config,
+                cycle,
+                previous,
+                update_runner=update_runner,
+                event_paths=pending,
+            )
+            if manifest is not None:
+                save_state(config, manifest)
+                previous = manifest
+            _emit_result(config, result)
+            last_reconcile = time.monotonic()
+            continue
+        if time.monotonic() - last_reconcile >= reconcile_after:
+            cycle += 1
+            result, manifest = run_cycle(
+                config, cycle, previous, update_runner=update_runner
+            )
+            if manifest is not None:
+                save_state(config, manifest)
+                previous = manifest
+            _emit_result(config, result)
+            last_reconcile = time.monotonic()
+    watcher.stop()
+
+
 def run_watch(
     config: WatchConfig, update_runner: Callable[..., Any] | None = None
 ) -> int:
@@ -491,8 +644,28 @@ def run_watch(
             except (ValueError, OSError):  # pragma: no cover - non-main thread
                 pass
         if config.changed_files:
+            try:
+                watcher, _reason = _resolve_native_backend(config, start=False)
+            except RuntimeError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            if watcher is not None:
+                watcher.stop()
+            config.backend_used = "poll"
+            if config.backend != "poll" and not config.fallback_reason:
+                config.fallback_reason = "manual batch uses snapshot cycle"
             return _run_manual_batch(config, update_runner)
         if config.once:
+            try:
+                watcher, _reason = _resolve_native_backend(config, start=False)
+            except RuntimeError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            if watcher is not None:
+                watcher.stop()
+            config.backend_used = "poll"
+            if config.backend != "poll" and not config.fallback_reason:
+                config.fallback_reason = "once mode uses snapshot cycle"
             previous = load_state(config)
             result, manifest = run_cycle(
                 config, 1, previous, update_runner=update_runner
@@ -503,29 +676,41 @@ def run_watch(
             if result.skipped and result.skip_reason in ("compdb_stale", "no_affected_tus"):
                 return 0
             return 0 if not result.errors else 1
-        previous = load_state(config)
-        if previous is None:
-            baseline, manifest = run_cycle(
-                config, 1, None, update_runner=update_runner
-            )
-            save_state(config, manifest or {})
-            _emit_result(config, baseline)
-            previous = manifest or {}
-        cycle = 1
-        while not stop:
-            cycle += 1
-            result, manifest = run_cycle(
-                config, cycle, previous, update_runner=update_runner
-            )
-            if manifest is not None:
-                save_state(config, manifest)
-                previous = manifest
-            _emit_result(config, result)
-            if stop:
-                break
-            deadline = time.monotonic() + max(0.05, config.interval)
-            while not stop and time.monotonic() < deadline:
-                time.sleep(min(0.2, max(0.01, deadline - time.monotonic())))
+        watcher: Any | None = None
+        try:
+            watcher, _reason = _resolve_native_backend(config, start=True)
+        except RuntimeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if watcher is None:
+            config.backend_used = "poll"
+        else:
+            config.backend_used = "native"
+        previous = _baseline_state(config, update_runner)
+        if watcher is not None:
+            try:
+                _run_native_daemon(
+                    config, watcher, previous, lambda: stop, update_runner
+                )
+                return 0
+            except Exception as exc:  # native runtime failure -> polling fallback
+                import traceback
+
+                print(
+                    f"[watch] native backend failed ({type(exc).__name__}: {exc});"
+                    " falling back to polling",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print(traceback.format_exc(), file=sys.stderr, flush=True)
+                try:
+                    watcher.stop()
+                except Exception:
+                    pass
+                config.backend_used = "poll"
+                config.fallback_reason = f"native runtime error: {type(exc).__name__}: {exc}"
+                previous = load_state(config) or previous
+        _run_poll_daemon(config, previous, lambda: stop, update_runner)
         return 0
     finally:
         for signum, handler in previous_handlers.items():

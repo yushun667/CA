@@ -122,16 +122,24 @@ pass（`finalize=False`），并在之前删除仅关联被替换注册的旧候
 
 ## Watcher：`ca watch`
 
-`ca watch` 在 Agent 查询期间保持数据库新鲜：轮询源码/头文件的 `size+mtime`
-（可移植；原生 inotify/FSEvents 后端留待后续），静默去抖后合并为一批变更，复用
-`ca update` 的 TU 规划器映射受影响 TU，并在进程内运行增量更新路径。
+`ca watch` 在 Agent 查询期间保持数据库新鲜：优先使用原生事件后端——Linux
+**inotify**（libc ctypes 递归 watch）或 macOS **FSEvents**（CoreServices、文件级
+事件、~0.1s 延迟），并保留可移植的 `size+mtime` 轮询作为回退。事件按 C/C++
+源/头后缀过滤、去重、debounce 后直接作为 changed paths 传给与 `ca update` 相同的
+规划器/增量写路径；启动 baseline 与周期性 snapshot 对账用于兜底丢事件。
+`--backend auto|native|poll` 选择模式：`auto` 优先 native、不可用/初始化失败回退
+poll，`native` 不可用直接报错，`poll` 保持旧行为。
 
 ```sh
 # 单次轮询（测试/脚本）；--json 输出一个 JSON 对象
 ca watch --repo <repo> --db ca.db --compdb <compdb> --once --json
 
 # 持续监听（SIGINT/SIGTERM 在当前轮询结束后退出）
-ca watch --repo <repo> --db ca.db --compdb <compdb> --interval 5 --debounce 2
+ca watch --repo <repo> --db ca.db --compdb <compdb> --interval 5 --debounce 2 \
+    --backend auto
+
+# 强制原生事件（inotify/FSEvents；不可用则 exit 1）
+ca watch --repo <repo> --db ca.db --compdb <compdb> --backend native
 
 # 手动批处理（语义同 ca update，watch 指标格式）
 ca watch --repo <repo> --db ca.db --compdb <compdb> --changed-files kernel/a.c
@@ -148,13 +156,21 @@ ca watch --repo <repo> --db ca.db --compdb <compdb> --changed-files kernel/a.c
               "added_rows": 64, "fts_deleted": 3, "fts_inserted": 3},
  "incremental_rows": {"removed": 63, "added": 64},
  "callback_refresh": {"mode": "skipped", "reason": "no callback registrations or indirect calls"},
+ "backend": "native", "fallback_reason": "",
  "deep_invalidated": true, "elapsed_seconds": 0.359, "errors": []}
 ```
 
 行为与限制：
 
+- **原生后端**：Linux inotify 递归监听仓库（跳过 `.git`、`.tmp`、`build`、`out`、
+  `node_modules`、`.ca-cache` 等），处理 create/modify/close_write/delete/move/
+  attrib，新目录自动加 watch、删除目录清理；文件事件按
+  `.c/.cc/.cpp/.cxx/.c++/.h/.hh/.hpp/.hxx/.inc` 过滤。macOS 用 FSEvents 文件级
+  事件，跑在独立 run-loop 线程。平台/框架/初始化不可用时返回 `None`，`auto`
+  记录 `backend="poll"` + `fallback_reason`。native 事件直接作为 changed paths；
+  每 10 个 interval 仍跑一次 snapshot 对账兜底丢事件。
 - **状态**：`<db>.watch.json` 保存上次 size+mtime 快照，仅在更新成功后推进；失败
-  轮询保留旧快照，下一轮重试同一变更集。
+  轮询保留旧快照，下一轮重试同一变更集；native 循环也维护该快照用于对账与重启。
 - **单实例**：`<db>.watch.lock`（flock）；第二个 watcher 以 code 2 退出。查询不受
   影响（SQLite WAL；watcher 是唯一写者）。
 - **头文件变更**：只有传递 include 包含该头文件的 TU 重解析（依赖感知，与
@@ -166,7 +182,13 @@ ca watch --repo <repo> --db ca.db --compdb <compdb> --changed-files kernel/a.c
   有回调注册/间接调用时会触发回调刷新 pass（为 AST 事实重新解析 TU），否则
   跳过；大规模变更/构建文件仍走全量重建，建议直接 `ca index`。
 - **失败隔离**：每轮异常写入 `errors`，不杀死 daemon；SIGINT/SIGTERM 在当前轮询
-  结束后退出并释放锁。
+  结束后退出并释放锁。native 运行时失败会回退到 poll 继续运行（记录
+  `backend="poll"`/`fallback_reason`）；`--backend native` 启动失败退出 1，
+  `--backend auto` 自动回退。
+- **平台限制**：inotify 受内核 watch 上限约束（watcher 最多 5 万目录），
+  进程未运行时发生的变更不会产生事件；FSEvents 有 0.1s 合并延迟，可能同时给出
+  目录根路径（已按后缀过滤）。不支持的平台始终使用 poll；`--once`/
+  `--changed-files` 无论 backend 都走 snapshot cycle。
 
 最小 systemd unit（Linux 服务器）：
 

@@ -434,8 +434,9 @@ def build_parser() -> argparse.ArgumentParser:
         "watch",
         help="watch the repository and keep the database incrementally fresh",
         description=(
-            "Poll source/header mtimes (portable; no native events required),"
-            " debounce bursts, and run the incremental update path when files"
+            "Watch source/header files with a native event backend (Linux"
+            " inotify / macOS FSEvents) or a portable polling fallback;"
+            " debounce bursts and run the incremental update path when files"
             " change. Single instance per database; failures are retried;"
             " new/deleted files missing from the compile database are reported"
             " as compdb_stale and skipped."
@@ -459,6 +460,13 @@ def build_parser() -> argparse.ArgumentParser:
                        help="apply one manual batch instead of snapshotting")
     watch.add_argument("--once", action="store_true",
                        help="run one poll cycle and exit (tests/scripts)")
+    watch.add_argument(
+        "--backend", choices=("auto", "native", "poll"), default="auto",
+        help=(
+            "event backend: auto=native when available with poll fallback,"
+            " native=require inotify/FSEvents, poll=portable snapshot poller"
+        ),
+    )
     watch.add_argument("--json", action="store_true", dest="json_output")
     watch.set_defaults(func=commands.cmd_watch)
 

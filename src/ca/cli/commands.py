@@ -1625,6 +1625,7 @@ def cmd_watch(args: Any) -> int:
         json_output=args.json_output,
         changed_files=list(args.changed_files or []),
         state_file=args.state_file,
+        backend=getattr(args, "backend", "auto"),
     )
     return watch_module.run_watch(config)
 

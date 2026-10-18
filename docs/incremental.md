@@ -143,18 +143,27 @@ candidate set.
 
 ## Watcher: `ca watch`
 
-`ca watch` keeps a database fresh while agents query it. It polls source/header
-`size+mtime` (portable; native inotify/FSEvents backends are future work),
-debounces bursts into one change set, maps the change set onto translation units
-with the same planner as `ca update`, and runs the incremental update path in
-process.
+`ca watch` keeps a database fresh while agents query it. It prefers a native
+event backend — Linux **inotify** (recursive libc ctypes watches) or macOS
+**FSEvents** (CoreServices, file-level events, ~0.1 s latency) — and keeps the
+portable `size+mtime` poller as the fallback. Events are filtered to C/C++
+source/header suffixes, deduplicated and debounced, then passed directly as
+changed paths to the same planner/incremental update path as `ca update`. A
+periodic snapshot reconciliation (and the startup baseline) catches dropped
+events. `--backend auto|native|poll` selects the mode: `auto` tries native and
+falls back to polling on unavailable platforms/init failures, `native` fails
+loudly if unavailable, and `poll` keeps the old behaviour.
 
 ```sh
 # one poll cycle (tests/scripts); prints one JSON object with --json
 ca watch --repo <repo> --db ca.db --compdb <compdb> --once --json
 
 # keep watching (SIGINT/SIGTERM stop after the current cycle)
-ca watch --repo <repo> --db ca.db --compdb <compdb> --interval 5 --debounce 2
+ca watch --repo <repo> --db ca.db --compdb <compdb> --interval 5 --debounce 2 \
+    --backend auto
+
+# require native events (inotify/FSEvents; exit 1 if unavailable)
+ca watch --repo <repo> --db ca.db --compdb <compdb> --backend native
 
 # manual batch (same semantics as ca update, watch-style metrics)
 ca watch --repo <repo> --db ca.db --compdb <compdb> --changed-files kernel/a.c
@@ -171,14 +180,25 @@ Cycle metrics (`--json` prints one JSON object per cycle):
               "added_rows": 64, "fts_deleted": 3, "fts_inserted": 3},
  "incremental_rows": {"removed": 63, "added": 64},
  "callback_refresh": {"mode": "skipped", "reason": "no callback registrations or indirect calls"},
+ "backend": "native", "fallback_reason": "",
  "deep_invalidated": true, "elapsed_seconds": 0.359, "errors": []}
 ```
 
 Behaviour and limits:
 
+- **Native backends**: Linux inotify recursively watches the repo (skipping
+  `.git`, `.tmp`, `build`, `out`, `node_modules`, `.ca-cache`, …), handles
+  create/modify/close_write/delete/move/attrib, adds watches for new
+  directories and drops deleted ones; file events are filtered to
+  `.c/.cc/.cpp/.cxx/.c++/.h/.hh/.hpp/.hxx/.inc`. macOS uses FSEvents
+  file-level events on a private run-loop thread. Both return `None` when the
+  platform/framework/initialization is unavailable; `auto` then records
+  `backend="poll"` + `fallback_reason`. Native watchers use the event paths
+  directly; a snapshot cycle runs every 10 intervals to reconcile lost events.
 - **State**: `<db>.watch.json` stores the last size+mtime snapshot and is only
   advanced after a successful update; a failed cycle keeps the old snapshot so
-  the same change set is retried next round.
+  the same change set is retried next round. The native loop still maintains
+  this snapshot for reconciliation and restart correctness.
 - **Single instance**: `<db>.watch.lock` (flock). A second watcher exits with
   code 2. Queries are unaffected (SQLite WAL; watcher is the only writer).
 - **Header change**: TUs whose transitive includes contain the header are
@@ -194,7 +214,16 @@ Behaviour and limits:
   cycles without callback data skip it. Mass changes and build files still use
   the full rebuild path, so `ca index` remains the right tool for those.
 - **Failures**: per-cycle exceptions are recorded in `errors`, never kill the
-  daemon; SIGINT/SIGTERM stop after the current cycle and release the lock.
+  daemon; SIGINT/SIGTERM stop after the current cycle and release the lock. A
+  native backend runtime failure falls back to polling for the rest of the
+  process (logged, `backend="poll"`, `fallback_reason` set). Native startup
+  failure under `--backend native` exits 1; `--backend auto` falls back.
+- **Platform limits**: inotify has a kernel watch limit (the watcher caps at
+  50k directories) and does not report events for files changed while the
+  process was not running; FSEvents coalesces events (latency 0.1 s) and may
+  deliver a directory root alongside file paths (filtered). Unsupported
+  platforms always use polling; `--once`/`--changed-files` use a snapshot cycle
+  regardless of backend.
 
 Minimal systemd unit (Linux server):
 
