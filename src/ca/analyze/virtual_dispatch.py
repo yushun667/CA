@@ -39,6 +39,29 @@ def _call_records(unit: Any, function: FunctionRecord) -> Iterator[Any]:
             yield call
 
 
+def _descendant_types(unit: Any, root_id: str) -> set[str]:
+    """Type ids derived from ``root_id`` using local ``TypeRecord.base_types``."""
+
+    types = list(getattr(unit, "types", ()) or ())
+    if not root_id:
+        return set()
+    children: dict[str, list[str]] = defaultdict(list)
+    known: set[str] = {root_id}
+    for record in types:
+        known.add(record.id)
+        for base_id in getattr(record, "base_types", ()) or ():
+            children[str(base_id)].append(record.id)
+    descendants: set[str] = {root_id}
+    stack = [root_id]
+    while stack:
+        current = stack.pop()
+        for child in children.get(current, ()):
+            if child not in descendants:
+                descendants.add(child)
+                stack.append(child)
+    return descendants & known
+
+
 def _override_index(functions: list[FunctionRecord]) -> dict[str, list[FunctionRecord]]:
     index: dict[str, list[FunctionRecord]] = defaultdict(list)
     for candidate in functions:
@@ -63,6 +86,7 @@ def resolve_virtual_targets(
         return []
     by_id = {record.id: record for record in functions}
     override_index = _override_index(functions)
+    receiver_descendants: dict[str, set[str]] = {}
     records: list[CallTargetRecord] = []
     for call in _call_records(unit, function):
         if not (getattr(call, "kind", "") == "virtual" or getattr(call, "is_virtual", False)):
@@ -81,6 +105,15 @@ def resolve_virtual_targets(
                 for candidate in override_index.get(base_id, ()):
                     if candidate.id in seen_ids:
                         continue
+                    if getattr(call, "kind", "") == "virtual_this":
+                        caller_type = function.parent_id
+                        if caller_type:
+                            allowed = receiver_descendants.setdefault(
+                                caller_type, _descendant_types(unit, caller_type)
+                            )
+                            candidate_type = getattr(candidate, "parent_id", "") or ""
+                            if candidate_type and allowed and candidate_type not in allowed:
+                                continue
                     seen_ids.add(candidate.id)
                     next_frontier.append(candidate.id)
                     records.append(

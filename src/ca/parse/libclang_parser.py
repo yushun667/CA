@@ -1806,6 +1806,27 @@ class _Extractor:
 
     # -- calls -------------------------------------------------------------- #
 
+    @staticmethod
+    def _is_this_member_call(cursor: ci.Cursor) -> bool:
+        """True when a member call's receiver expression is the implicit ``this``.
+
+        libclang represents both ``f()`` and ``this->f()`` as a CALL_EXPR whose
+        callee MEMBER_REF_EXPR has a CXX_THIS_EXPR operand. A call through
+        another expression (``p->f()``, ``obj.f()``) is not narrowed here.
+        """
+
+        children = list(cursor.get_children())
+        if not children:
+            return False
+        callee = children[0]
+        if callee.kind != ci.CursorKind.MEMBER_REF_EXPR:
+            return False
+        operands = list(callee.get_children())
+        # Unqualified calls (``f()``) omit the implicit this operand entirely;
+        # ``this->f()`` carries an explicit CXX_THIS_EXPR. Calls through another
+        # expression (``p->f()``) carry that expression instead.
+        return not operands or operands[0].kind == ci.CursorKind.CXX_THIS_EXPR
+
     def _add_call(self, cursor: ci.Cursor, caller_id: str) -> None:
         if not self.paths.contains(cursor.location):
             return
@@ -1849,7 +1870,7 @@ class _Extractor:
             except Exception:  # pragma: no cover - C cursors have no virtual flag
                 is_virtual = False
             if is_virtual:
-                kind = "virtual"
+                kind = "virtual_this" if self._is_this_member_call(cursor) else "virtual"
         elif reference is not None:
             callee_name = reference.spelling
             callee_qualified_name = cu.qualified_name(reference, reference.spelling)

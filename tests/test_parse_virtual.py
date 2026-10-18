@@ -148,3 +148,15 @@ def test_virtual_metadata_with_header_declaration_index() -> None:
         if function.is_definition
     }["ast_virtual::Derived::value"]
     assert base_value.id in derived_value.overrides
+
+
+def test_implicit_this_virtual_call_is_marked() -> None:
+    parsed = parse_compilation_unit(make_unit("ast_virtual_this.cpp"))
+    assert parsed.parse_ok is True, parsed.error
+    calls = {call.callee_qualified_name: call for call in parsed.calls}
+    implicit = calls["vthis::IService::Open"]
+    # Both the implicit and explicit call resolve to IService::Open; the parser
+    # distinguishes them so resolution can narrow the implicit receiver.
+    kinds = {call.kind for call in parsed.calls if call.callee_name == "Open"}
+    assert kinds == {"virtual", "virtual_this"}
+    assert implicit.is_virtual is True

@@ -112,18 +112,75 @@ SELECT c.id AS call_id, c.caller_id AS caller_id, cf.name AS caller_name,
        COALESCE(tf.file, '') AS callee_file, COALESCE(tf.line, 0) AS callee_line,
        c.file AS call_file, c.line AS call_line, 'virtual_candidate' AS kind,
        ('virtual override depth=' || edges.depth) AS reason, 0 AS is_resolved,
-       'virtual_candidate' AS source, 2 AS source_rank
+       'virtual_candidate' AS source, 2 AS source_rank,
+       c.kind AS call_kind, cf.parent_id AS caller_type_id,
+       tf.parent_id AS callee_type_id
 FROM calls AS c
 JOIN edges ON c.callee_id = edges.base_function_id
 LEFT JOIN functions AS cf ON cf.id = c.caller_id
 LEFT JOIN functions AS tf ON tf.id = edges.function_id
-WHERE c.kind = 'virtual' AND c.caller_id IN ({{marks}})
+WHERE c.kind IN ('virtual', 'virtual_this') AND c.caller_id IN ({{marks}})
 ORDER BY call_file, call_line, caller_id, callee_id
 LIMIT ?
 """
 
 def _placeholders(count: int) -> str:
     return ", ".join("?" for _ in range(count))
+
+
+def _descendant_types(connection: sqlite3.Connection, roots: set[str]) -> dict[str, set[str]]:
+    """Transitive descendants per root using ``type_bases`` (root included)."""
+
+    closure = {root: {root} for root in roots if root}
+    if not roots:
+        return closure
+    try:
+        rows = connection.execute("SELECT type_id, base_type_id FROM type_bases").fetchall()
+    except sqlite3.OperationalError:
+        return closure
+    children: dict[str, list[str]] = {}
+    for type_id, base_id in rows:
+        children.setdefault(str(base_id), []).append(str(type_id))
+    for root in tuple(closure):
+        stack = [root]
+        seen = closure[root]
+        while stack:
+            current = stack.pop()
+            for child in children.get(current, ()):
+                if child not in seen:
+                    seen.add(child)
+                    stack.append(child)
+    return closure
+
+
+def _filter_this_candidates(connection: sqlite3.Connection, rows: list[Any]) -> list[Any]:
+    """Narrow implicit-``this`` virtual candidates to receiver subclasses.
+
+    ``f()`` inside ``Base::g`` can only dispatch to an override declared on
+    ``Base`` or a derived class; ``p->f()`` keeps the full override set because
+    its receiver expression is not ``this``. Internal helper columns are removed.
+    """
+
+    roots = {
+        str(row["caller_type_id"])
+        for row in rows
+        if row["call_kind"] == "virtual_this" and row["caller_type_id"]
+    }
+    closure = _descendant_types(connection, roots)
+    filtered: list[Any] = []
+    for row in rows:
+        keep = True
+        if row["call_kind"] == "virtual_this" and row["caller_type_id"]:
+            callee_type = str(row["callee_type_id"] or "")
+            if callee_type:
+                keep = callee_type in closure.get(str(row["caller_type_id"]), set())
+        if keep:
+            data = dict(row)
+            data.pop("call_kind", None)
+            data.pop("caller_type_id", None)
+            data.pop("callee_type_id", None)
+            filtered.append(data)
+    return filtered
 
 
 def forward_edges(
@@ -140,8 +197,7 @@ def forward_edges(
     except sqlite3.OperationalError:  # missing virtual tables on old databases
         return []
     result = []
-    for row in rows:
-        data = dict(row)
+    for data in _filter_this_candidates(connection, list(rows)):
         data["candidate"] = True
         data["is_resolved"] = bool(data["is_resolved"])
         result.append(data)
@@ -172,12 +228,15 @@ SELECT c.id AS call_id, c.caller_id AS caller_id, cf.name AS caller_name,
        COALESCE(tf.file, '') AS callee_file, COALESCE(tf.line, 0) AS callee_line,
        c.file AS call_file, c.line AS call_line, 'virtual_candidate' AS kind,
        ('virtual override depth=' || edges.depth) AS reason, 0 AS is_resolved,
-       'virtual_candidate' AS source, 2 AS source_rank
+       'virtual_candidate' AS source, 2 AS source_rank,
+       c.kind AS call_kind, cf.parent_id AS caller_type_id,
+       tf.parent_id AS callee_type_id
 FROM calls AS c
 JOIN edges ON c.callee_id = edges.ancestor_id
 LEFT JOIN functions AS cf ON cf.id = c.caller_id
 LEFT JOIN functions AS tf ON tf.id = edges.function_id
-WHERE c.kind = 'virtual' AND edges.function_id IN ({_placeholders(seed_count)})
+WHERE c.kind IN ('virtual', 'virtual_this')
+  AND edges.function_id IN ({_placeholders(seed_count)})
 ORDER BY call_file, call_line, caller_id, callee_id
 LIMIT ?
 """
@@ -197,8 +256,7 @@ def reverse_edges(
     except sqlite3.OperationalError:  # missing virtual tables on old databases
         return []
     result = []
-    for row in rows:
-        data = dict(row)
+    for data in _filter_this_candidates(connection, list(rows)):
         data["candidate"] = True
         data["is_resolved"] = bool(data["is_resolved"])
         result.append(data)

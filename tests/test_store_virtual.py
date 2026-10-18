@@ -211,3 +211,38 @@ def test_cross_tu_candidates_work_without_materialized_call_targets() -> None:
         assert direct
     finally:
         store.close()
+
+
+def test_implicit_this_virtual_candidates_are_receiver_narrowed(tmp_path: Path) -> None:
+    store = SqliteStore(str(tmp_path / "this.db"))
+    store.open()
+    store.begin()
+    parsed = parse_compilation_unit(make_unit("ast_virtual_this.cpp"))
+    assert parsed.parse_ok is True, parsed.error
+    store.add_parse_result(parsed.parse_result())
+    for function in parsed.functions:
+        if function.is_definition:
+            store.add_analysis_result(analyze_function(parsed, function))
+    store.commit()
+    store.finalize()
+    try:
+        implicit = [
+            row
+            for row in store.query_callees("CallImplicit", limit=100)
+            if row["kind"] == "virtual_candidate"
+        ]
+        implicit_files = {row["callee_file"] for row in implicit}
+        assert implicit
+        assert all("ast_virtual_this.cpp" in path for path in implicit_files)
+        assert {row["callee_name"] for row in implicit} == {"Open"}
+        explicit = [
+            row
+            for row in store.query_callees("CallExplicit", limit=100)
+            if row["kind"] == "virtual_candidate"
+        ]
+        assert explicit
+        # Explicit receiver keeps the full override set, including Sibling.
+        assert {row["callee_name"] for row in explicit} == {"Open"}
+        assert len(explicit) >= 3
+    finally:
+        store.close()

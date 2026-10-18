@@ -35,6 +35,11 @@ database adds the missing tables/columns in place.
   calls in `store.load_forward_edges`/`load_reverse_edges` using the persisted
   override relation from all indexed shards. No extra materialization step is
   needed; old databases without the tables degrade to direct edges.
+- Implicit-``this`` calls (``f()`` inside a member) are recorded as
+  `kind="virtual_this"`; candidates are narrowed to overrides declared on the
+  receiver class or its derived classes (`type_bases` closure). Calls with an
+  explicit receiver (`p->f()`) keep the full override set because the dynamic
+  type is unknown.
 - For a call through `Base::m`, candidates are the known overrides of `m`
   (transitive override chain, at most 3 levels). `callees` returns them with
   `kind="virtual_candidate"` and a human-readable `reason`; `callers` of
