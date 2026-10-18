@@ -1,0 +1,569 @@
+{
+  "meta": {
+    "tool": "benchmarks/agent_eval/score_llm.py",
+    "generated_at": "2026-10-18T02:30:28+0800",
+    "source_answers": ".tmp/llm_eval/<task>_<cond>.md",
+    "conditions": {
+      "A": "source only (grep/read)",
+      "C": "CA basic+deep facts via ca CLI"
+    },
+    "scoring": "GT locations from tasks.json; F1 = in-GT precision/recall; small ranges (<=4 lines) expanded; long spans count endpoints only; manual rubric 0.3 weights semantic quality; combined = 0.7*F1+0.3*manual",
+    "caveat": "single-run subagent experiment, not the production agent; answers self-report effort; scoring is single-reviewer"
+  },
+  "runs": [
+    {
+      "task": "D3",
+      "condition": "A",
+      "answer_file": ".tmp/llm_eval/D3_A.md",
+      "auto": {
+        "claims": 96,
+        "claims_in_scope": 30,
+        "gt": 33,
+        "hits": 25,
+        "precision": 0.8333,
+        "recall": 0.7576,
+        "f1": 0.7937,
+        "kind_coverage": {
+          "branch": 0.9,
+          "call": 0.684,
+          "resource": 0.714,
+          "return": 0.857
+        },
+        "phantom": [],
+        "spans": [
+          "kernel/syscall.c:137-150",
+          "kernel/sysfile.c:329-395",
+          "kernel/sysfile.c:258-326",
+          "kernel/fs.c:701-722",
+          "kernel/fs.c:350-378",
+          "kernel/fs.c:305-318",
+          "kernel/file.c:29-44",
+          "kernel/sysfile.c:39-52",
+          "kernel/file.c:59-83",
+          "kernel/fs.c:350-378"
+        ],
+        "extras_out_of_scope": [
+          "kernel/file.c:179",
+          "kernel/file.c:29",
+          "kernel/file.c:44",
+          "kernel/file.c:59",
+          "kernel/file.c:78",
+          "kernel/file.c:79",
+          "kernel/file.c:80",
+          "kernel/file.c:81",
+          "kernel/file.c:82",
+          "kernel/file.c:83",
+          "kernel/file.c:85",
+          "kernel/fs.c:305",
+          "kernel/fs.c:318",
+          "kernel/fs.c:325",
+          "kernel/fs.c:326",
+          "kernel/fs.c:341",
+          "kernel/fs.c:350",
+          "kernel/fs.c:378",
+          "kernel/fs.c:383",
+          "kernel/fs.c:391",
+          "kernel/fs.c:690",
+          "kernel/fs.c:701",
+          "kernel/fs.c:703",
+          "kernel/fs.c:704",
+          "kernel/fs.c:705",
+          "kernel/fs.c:722",
+          "kernel/fs.c:741",
+          "kernel/param.h:13",
+          "kernel/param.h:3",
+          "kernel/param.h:4",
+          "kernel/param.h:6",
+          "kernel/syscall.c:125",
+          "kernel/syscall.c:137",
+          "kernel/syscall.c:150",
+          "kernel/syscall.c:151",
+          "kernel/syscall.c:22",
+          "kernel/syscall.c:23",
+          "kernel/syscall.c:24",
+          "kernel/syscall.c:25",
+          "kernel/syscall.c:26",
+          "kernel/syscall.c:27",
+          "kernel/syscall.c:28",
+          "kernel/syscall.c:74",
+          "kernel/syscall.c:75",
+          "kernel/syscall.c:76",
+          "kernel/syscall.c:77",
+          "kernel/syscall.c:78",
+          "kernel/syscall.c:79",
+          "kernel/syscall.c:80",
+          "kernel/syscall.c:81",
+          "kernel/sysfile.c:103",
+          "kernel/sysfile.c:104",
+          "kernel/sysfile.c:105",
+          "kernel/sysfile.c:106",
+          "kernel/sysfile.c:107",
+          "kernel/sysfile.c:258",
+          "kernel/sysfile.c:264",
+          "kernel/sysfile.c:265",
+          "kernel/sysfile.c:315",
+          "kernel/sysfile.c:326"
+        ]
+      },
+      "manual_rubric": 0.95,
+      "manual_note": "六个错误点+清理动作齐全，指出 begin_op 先于 namex 的约定、fileclose 不双重释放、create 内部失败点；namei vs fdalloc 差异解释到位。",
+      "combined_score": 0.8406,
+      "effort_auto": {
+        "raw_lines": 12,
+        "lines": 820,
+        "bytes_estimate": "18",
+        "commands": 5
+      },
+      "effort_normalized": {
+        "tool_calls": "5 bash + 8 read",
+        "files": 6,
+        "bytes_estimate": "~18 KB read",
+        "note": "~820 lines; 8 min; no CA"
+      },
+      "answer_chars": 5919
+    },
+    {
+      "task": "D3",
+      "condition": "C",
+      "answer_file": ".tmp/llm_eval/D3_C.md",
+      "auto": {
+        "claims": 76,
+        "claims_in_scope": 27,
+        "gt": 33,
+        "hits": 26,
+        "precision": 0.963,
+        "recall": 0.7879,
+        "f1": 0.8667,
+        "kind_coverage": {
+          "branch": 0.9,
+          "call": 0.737,
+          "resource": 0.786,
+          "return": 0.857
+        },
+        "phantom": [],
+        "spans": [
+          "kernel/sysfile.c:329-395",
+          "kernel/fs.c:692-728",
+          "kernel/fs.c:350-378"
+        ],
+        "extras_out_of_scope": [
+          "kernel/file.c:30",
+          "kernel/file.c:39",
+          "kernel/file.c:43",
+          "kernel/file.c:60",
+          "kernel/file.c:77",
+          "kernel/file.c:80",
+          "kernel/fs.c:295",
+          "kernel/fs.c:323",
+          "kernel/fs.c:350",
+          "kernel/fs.c:351",
+          "kernel/fs.c:352",
+          "kernel/fs.c:378",
+          "kernel/fs.c:382",
+          "kernel/fs.c:385",
+          "kernel/fs.c:464",
+          "kernel/fs.c:692",
+          "kernel/fs.c:703",
+          "kernel/fs.c:707",
+          "kernel/fs.c:716",
+          "kernel/fs.c:720",
+          "kernel/fs.c:728",
+          "kernel/fs.c:731",
+          "kernel/fs.c:732",
+          "kernel/fs.c:733",
+          "kernel/fs.c:734",
+          "kernel/fs.c:735",
+          "kernel/log.c:129",
+          "kernel/log.c:155",
+          "kernel/syscall.c:58",
+          "kernel/syscall.c:76",
+          "kernel/sysfile.c:100",
+          "kernel/sysfile.c:101",
+          "kernel/sysfile.c:102",
+          "kernel/sysfile.c:103",
+          "kernel/sysfile.c:104",
+          "kernel/sysfile.c:105",
+          "kernel/sysfile.c:106",
+          "kernel/sysfile.c:107",
+          "kernel/sysfile.c:108",
+          "kernel/sysfile.c:259",
+          "kernel/sysfile.c:270",
+          "kernel/sysfile.c:324",
+          "kernel/sysfile.c:329",
+          "kernel/sysfile.c:395",
+          "kernel/sysfile.c:40",
+          "kernel/sysfile.c:51",
+          "kernel/sysfile.c:98",
+          "kernel/sysfile.c:99",
+          "user/user.h:12"
+        ]
+      },
+      "manual_rubric": 0.85,
+      "manual_note": "事实枚举齐全且诚实标注 CA 缺口；但 return 折叠到统一 exit block，无法严格配对清理路径（作者已声明推断）；缺少常量与 argstr 内部语义。",
+      "combined_score": 0.8617,
+      "effort_auto": {
+        "raw_lines": 5
+      },
+      "effort_normalized": {
+        "tool_calls": "28 CA queries",
+        "files": 0,
+        "bytes_estimate": "~40 KB stdout",
+        "note": "saved JSON 20,066 B; queries <10 s; no source"
+      },
+      "answer_chars": 6770
+    },
+    {
+      "task": "C2",
+      "condition": "A",
+      "answer_file": ".tmp/llm_eval/C2_A.md",
+      "auto": {
+        "claims": [
+          "clockintr",
+          "consoleintr",
+          "end_op",
+          "free_desc",
+          "kexit",
+          "pipeclose",
+          "piperead",
+          "pipewrite",
+          "releasesleep",
+          "reparent",
+          "uartintr",
+          "virtio_disk_intr"
+        ],
+        "gt": [
+          "clockintr",
+          "consoleintr",
+          "end_op",
+          "free_desc",
+          "kexit",
+          "pipeclose",
+          "piperead",
+          "pipewrite",
+          "releasesleep",
+          "reparent",
+          "uartintr",
+          "virtio_disk_intr"
+        ],
+        "hits": 12,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "precision_note": "caller-set mode: claimed = GT caller names listed in the answer's caller tables; all claimed names were manually verified as real callers (P=1)"
+      },
+      "manual_rubric": 0.95,
+      "manual_note": "12 调用者/15 调用点/8 文件全对；额外发现 uartintr 缺通道锁的设计缺口，按模块给出锁上下文与改法，价值高于纯清单。",
+      "combined_score": 0.985,
+      "effort_auto": {
+        "raw_lines": 6,
+        "lines": 1100
+      },
+      "effort_normalized": {
+        "tool_calls": "4 grep + 13 read + 1 ls",
+        "files": 10,
+        "bytes_estimate": "40–45 KB",
+        "note": "~1,100 lines read; no CA"
+      },
+      "answer_chars": 7116
+    },
+    {
+      "task": "C2",
+      "condition": "C",
+      "answer_file": ".tmp/llm_eval/C2_C.md",
+      "auto": {
+        "claims": [
+          "clockintr",
+          "consoleintr",
+          "end_op",
+          "free_desc",
+          "kexit",
+          "pipeclose",
+          "piperead",
+          "pipewrite",
+          "releasesleep",
+          "reparent",
+          "uartintr",
+          "virtio_disk_intr"
+        ],
+        "gt": [
+          "clockintr",
+          "consoleintr",
+          "end_op",
+          "free_desc",
+          "kexit",
+          "pipeclose",
+          "piperead",
+          "pipewrite",
+          "releasesleep",
+          "reparent",
+          "uartintr",
+          "virtio_disk_intr"
+        ],
+        "hits": 12,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "precision_note": "caller-set mode: claimed = GT caller names listed in the answer's caller tables; all claimed names were manually verified as real callers (P=1)"
+      },
+      "manual_rubric": 0.8,
+      "manual_note": "调用者清单/计数/文件分类全对；明确标注 CA 无声明记录、无 IRQ 属性、锁操作与调用点无支配关系证明；无法判断 wakeup_locked 需要哪把锁。",
+      "combined_score": 0.94,
+      "effort_auto": {
+        "raw_lines": 4,
+        "commands": 22
+      },
+      "effort_normalized": {
+        "tool_calls": "22 CA queries",
+        "files": 0,
+        "bytes_estimate": "47,188 B stdout",
+        "note": "no source"
+      },
+      "answer_chars": 5647
+    },
+    {
+      "task": "T2",
+      "condition": "A",
+      "answer_file": ".tmp/llm_eval/T2_A.md",
+      "auto": {
+        "claims": 83,
+        "claims_in_scope": 29,
+        "gt": 22,
+        "hits": 21,
+        "precision": 0.7241,
+        "recall": 0.9545,
+        "f1": 0.8235,
+        "kind_coverage": {
+          "branch": 1.0,
+          "call": 0.909,
+          "resource": 0.833,
+          "return": 1.0
+        },
+        "phantom": [],
+        "spans": [
+          "kernel/fs.c:662-685",
+          "kernel/fs.c:691-728",
+          "kernel/fs.c:591-615",
+          "kernel/fs.c:249-386"
+        ],
+        "extras_out_of_scope": [
+          "kernel/fs.c:249",
+          "kernel/fs.c:386",
+          "kernel/fs.c:400",
+          "kernel/fs.c:591",
+          "kernel/fs.c:603",
+          "kernel/fs.c:604",
+          "kernel/fs.c:605",
+          "kernel/fs.c:610",
+          "kernel/fs.c:615",
+          "kernel/fs.c:633",
+          "kernel/fs.c:634",
+          "kernel/fs.c:635",
+          "kernel/fs.c:636",
+          "kernel/fs.c:637",
+          "kernel/fs.c:638",
+          "kernel/fs.c:662",
+          "kernel/fs.c:668",
+          "kernel/fs.c:669",
+          "kernel/fs.c:670",
+          "kernel/fs.c:671",
+          "kernel/fs.c:673",
+          "kernel/fs.c:674",
+          "kernel/fs.c:675",
+          "kernel/fs.c:676",
+          "kernel/fs.c:677",
+          "kernel/fs.c:678",
+          "kernel/fs.c:679",
+          "kernel/fs.c:680",
+          "kernel/fs.c:681",
+          "kernel/fs.c:682",
+          "kernel/fs.c:683",
+          "kernel/fs.c:684",
+          "kernel/fs.c:685",
+          "kernel/fs.c:691",
+          "kernel/fs.c:728",
+          "kernel/fs.c:730",
+          "kernel/fs.c:731",
+          "kernel/fs.c:732",
+          "kernel/fs.c:733",
+          "kernel/fs.c:734",
+          "kernel/fs.c:735",
+          "kernel/fs.c:737",
+          "kernel/fs.c:738",
+          "kernel/fs.c:739",
+          "kernel/fs.c:740",
+          "kernel/fs.c:741",
+          "kernel/fs.h:29",
+          "kernel/fs.h:54",
+          "kernel/param.h:13",
+          "kernel/sysfile.c:133",
+          "kernel/sysfile.c:213",
+          "kernel/sysfile.c:431",
+          "kernel/sysfile.c:502",
+          "kernel/sysfile.c:530"
+        ]
+      },
+      "manual_rubric": 0.95,
+      "manual_note": "namex 全分支 + 调用方错误分支 + 大量可执行测试用例（含空路径/尾斜杠/孤儿 cwd 等反直觉点），测试设计质量高。",
+      "combined_score": 0.8615,
+      "effort_auto": {
+        "raw_lines": 5,
+        "files": 6,
+        "lines": 850
+      },
+      "effort_normalized": {
+        "tool_calls": "6 file reads (grep/read not itemized)",
+        "files": 6,
+        "bytes_estimate": "~17 KB read / 33,482 B file upper bound",
+        "note": "~850 lines; no CA"
+      },
+      "answer_chars": 11590
+    },
+    {
+      "task": "T2",
+      "condition": "C",
+      "answer_file": ".tmp/llm_eval/T2_C.md",
+      "auto": {
+        "claims": 50,
+        "claims_in_scope": 19,
+        "gt": 22,
+        "hits": 19,
+        "precision": 1.0,
+        "recall": 0.8636,
+        "f1": 0.9268,
+        "kind_coverage": {
+          "branch": 1.0,
+          "call": 0.727,
+          "resource": 1.0,
+          "return": 1.0
+        },
+        "phantom": [],
+        "spans": [
+          "kernel/fs.c:692-728",
+          "kernel/fs.c:663-685",
+          "kernel/fs.c:592-615"
+        ],
+        "extras_out_of_scope": [
+          "kernel/exec.c:28",
+          "kernel/fs.c:249",
+          "kernel/fs.c:284",
+          "kernel/fs.c:295",
+          "kernel/fs.c:323",
+          "kernel/fs.c:350",
+          "kernel/fs.c:382",
+          "kernel/fs.c:592",
+          "kernel/fs.c:615",
+          "kernel/fs.c:663",
+          "kernel/fs.c:685",
+          "kernel/fs.c:692",
+          "kernel/fs.c:728",
+          "kernel/fs.c:731",
+          "kernel/fs.c:732",
+          "kernel/fs.c:733",
+          "kernel/fs.c:734",
+          "kernel/fs.c:735",
+          "kernel/fs.c:738",
+          "kernel/fs.c:739",
+          "kernel/fs.c:740",
+          "kernel/fs.c:741",
+          "kernel/proc.c:219",
+          "kernel/proc.c:83",
+          "kernel/sysfile.c:124",
+          "kernel/sysfile.c:202",
+          "kernel/sysfile.c:259",
+          "kernel/sysfile.c:302",
+          "kernel/sysfile.c:329",
+          "kernel/sysfile.c:434",
+          "kernel/sysfile.c:7"
+        ]
+      },
+      "manual_rubric": 0.92,
+      "manual_note": "CA-only 下极完整：14 条分支腿逐腿映射用例（13/14 确定性，B4-T 明确标为竞态不可确定）、返回点/资源点/可达性推导、19 个用例与清理；缺口（root 的 ./..、name 输出参数、引用计数）均显式标注。",
+      "combined_score": 0.9248,
+      "effort_auto": {
+        "raw_lines": 4
+      },
+      "effort_normalized": {
+        "tool_calls": "21 CA queries",
+        "files": 0,
+        "bytes_estimate": "137,765 B stdout (required 5 queries: 25,431 B)",
+        "note": "20 data queries + help; no source"
+      },
+      "answer_chars": 19058
+    }
+  ],
+  "aggregate": {
+    "ALL": {
+      "A": {
+        "runs": 3,
+        "mean_auto_f1": 0.8724,
+        "mean_manual": 0.95,
+        "mean_combined": 0.8957,
+        "mean_answer_chars": 8208,
+        "phantom_total": 0
+      },
+      "C": {
+        "runs": 3,
+        "mean_auto_f1": 0.9312,
+        "mean_manual": 0.8567,
+        "mean_combined": 0.9088,
+        "mean_answer_chars": 10491,
+        "phantom_total": 0
+      }
+    },
+    "debug": {
+      "A": {
+        "runs": 1,
+        "mean_auto_f1": 0.7937,
+        "mean_manual": 0.95,
+        "mean_combined": 0.8406,
+        "mean_answer_chars": 5919,
+        "phantom_total": 0
+      },
+      "C": {
+        "runs": 1,
+        "mean_auto_f1": 0.8667,
+        "mean_manual": 0.85,
+        "mean_combined": 0.8617,
+        "mean_answer_chars": 6770,
+        "phantom_total": 0
+      }
+    },
+    "coding": {
+      "A": {
+        "runs": 1,
+        "mean_auto_f1": 1.0,
+        "mean_manual": 0.95,
+        "mean_combined": 0.985,
+        "mean_answer_chars": 7116,
+        "phantom_total": 0
+      },
+      "C": {
+        "runs": 1,
+        "mean_auto_f1": 1.0,
+        "mean_manual": 0.8,
+        "mean_combined": 0.94,
+        "mean_answer_chars": 5647,
+        "phantom_total": 0
+      }
+    },
+    "testgen": {
+      "A": {
+        "runs": 1,
+        "mean_auto_f1": 0.8235,
+        "mean_manual": 0.95,
+        "mean_combined": 0.8615,
+        "mean_answer_chars": 11590,
+        "phantom_total": 0
+      },
+      "C": {
+        "runs": 1,
+        "mean_auto_f1": 0.9268,
+        "mean_manual": 0.92,
+        "mean_combined": 0.9248,
+        "mean_answer_chars": 19058,
+        "phantom_total": 0
+      }
+    }
+  },
+  "missing_answers": []
+}

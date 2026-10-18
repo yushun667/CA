@@ -1,0 +1,47 @@
+[
+  {
+    "directory": "OUT",
+    "file": "../../base/startup/init/services/init_main.c",
+    "command": "../../prebuilts/clang/ohos/linux-x86_64/llvm/bin/clang -DOHOS_STANDARD_SYSTEM -I../../base/startup/init -c ../../base/startup/init/services/init_main.c -o obj/base/startup/init/init_main.o"
+  },
+  {
+    "directory": "OUT",
+    "file": "../../foundation/communication/ipc/ipc_skeleton.cpp",
+    "command": "../../prebuilts/clang/ohos/linux-x86_64/llvm/bin/clang++ -std=c++17 -DOHOS_STANDARD_SYSTEM -c ../../foundation/communication/ipc/ipc_skeleton.cpp -o obj/foundation/ipc/ipc_skeleton.o"
+  },
+  {
+    "directory": "OUT",
+    "file": "../../third_party/musl/src/stdio/printf.c",
+    "command": "../../prebuilts/clang/ohos/linux-x86_64/llvm/bin/clang --target=aarch64-linux-ohos -c ../../third_party/musl/src/stdio/printf.c -o obj/musl/printf.o"
+  },
+  {
+    "directory": "OUT",
+    "file": "../../base/startup/init/entry.S",
+    "command": "clang --target=aarch64-linux-ohos -c entry.S -o entry.o"
+  },
+  {
+    "directory": "OUT",
+    "file": "../../base/startup/init/include/init.h",
+    "command": "clang -c init.h -o init.o"
+  },
+  {
+    "directory": "OUT",
+    "file": "obj/base/startup/init/init_main.o",
+    "command": "clang -c init_main.o"
+  },
+  {
+    "directory": "OUT",
+    "file": "../../base/startup/init/services/dup.c",
+    "command": "../../prebuilts/clang/ohos/linux-x86_64/llvm/bin/clang -c ../../base/startup/init/services/dup.c -o obj/base/startup/init/dup.o"
+  },
+  {
+    "directory": "OUT",
+    "file": "../../base/startup/init/services/dup.c",
+    "command": "../../prebuilts/clang/ohos/linux-x86_64/llvm/bin/clang -c ../../base/startup/init/services/dup.c -o obj/base/startup/init/dup.o"
+  },
+  {
+    "directory": "OUT",
+    "file": "../../base/startup/init/services/no_command.c"
+  },
+  "not-an-object"
+]

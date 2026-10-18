@@ -1,0 +1,21 @@
+# Virtualenv and local tooling
+.venv/
+.tmp/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated databases and index artifacts
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+artifacts/
+
+# Build outputs
+/build/
+/dist/
+*.egg-info/

@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-18
+en:
+  file: ui.md
+  sha256: cd101ac1665f0db98eda5df744ab9bc604b7f7f1a3a2d220a17551d6a014b868
+zh:
+  file: ui.zh.md
+  sha256: b02c4043eac72716f93e792535cdf95528837171af4013359a2a8d01a5b77e68

@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-18
+en:
+  file: roadmap.md
+  sha256: b94fb636c9b8e99eab60cabb462a234d952e279e650f9a455e4f1ad51b0bce6e
+zh:
+  file: roadmap.zh.md
+  sha256: 6c66b3af1d1c73ac3c5c3deef5034eb425f720b1c298145f4b802c5314de5c01

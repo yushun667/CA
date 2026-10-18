@@ -1,0 +1,4 @@
+# Local benchmark output: regenerate with the scripts in this directory.
+*
+!.gitignore
+!AGENTS.md

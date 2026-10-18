@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>CA source explorer</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/" id="brand">
+    <span class="brand-mark" aria-hidden="true">CA</span>
+    <span class="brand-text">
+      <strong data-i18n="app.title">CA source explorer</strong>
+      <small data-i18n="app.subtitle">real compile args &rarr; Clang AST &rarr; CFG / data-flow &rarr; SQLite</small>
+    </span>
+  </a>
+  <div class="topbar-right">
+    <div class="lang-switch" role="group" data-i18n-aria-label="lang.switchLabel" aria-label="Language">
+      <button type="button" class="ghost lang-button" data-lang="zh" aria-pressed="false">中文</button>
+      <button type="button" class="ghost lang-button" data-lang="en" aria-pressed="true">EN</button>
+    </div>
+    <div class="dbinfo" id="db-info" aria-live="polite"><span data-i18n="db.connecting">connecting&hellip;</span></div>
+  </div>
+</header>
+
+<div class="toolbar">
+  <div class="search-wrap">
+    <form id="search-form" class="search" role="search">
+      <label class="visually-hidden" for="search-input" data-i18n="search.label">Search functions</label>
+      <input id="search-input" name="q" type="search"
+             data-i18n-placeholder="search.placeholder"
+             placeholder="Search functions by name, qualified name or id substring&hellip;"
+             autocomplete="off" spellcheck="false" autofocus>
+      <button type="submit" class="primary" data-i18n="search.button">Search</button>
+    </form>
+    <div id="search-dropdown" class="search-dropdown" hidden>
+      <div class="search-dropdown-head"><span data-i18n="nav.results">Results</span> <span class="count" id="results-count"></span></div>
+      <ul id="results" class="results"></ul>
+      <p id="results-empty" class="empty" data-i18n="search.startHint">Search for a function to begin. Substring matches work too, e.g. proc_ or sys_.</p>
+    </div>
+  </div>
+  <nav class="toolbar-actions" data-i18n-aria-label="nav.views" aria-label="Views">
+    <button type="button" class="ghost" id="stats-button" data-i18n="button.stats">Stats</button>
+    <button type="button" class="ghost" id="callbacks-button" data-i18n="button.callbacks">Callbacks</button>
+    <span class="keyhint"><kbd>/</kbd> <span data-i18n="search.kbdSearch">search</span> &middot; <kbd>Esc</kbd> <span data-i18n="search.kbdClear">clear</span></span>
+  </nav>
+</div>
+
+<div id="status" class="status" role="status" aria-live="polite"></div>
+
+<main class="layout">
+  <section class="content" data-i18n-aria-label="nav.details" aria-label="Details">
+    <div id="welcome" class="welcome">
+      <h1 data-i18n="welcome.title">Explore a CA index</h1>
+      <p class="lede" data-i18n="welcome.lede">CA analyzes operating-system source code from its real build:
+      exact compile arguments, Clang AST, CFG and data-flow facts stored in SQLite.
+      This local page is a read-only view over that database.</p>
+      <div class="cards" id="welcome-cards"></div>
+      <div class="tips">
+        <h2 data-i18n="welcome.tipsTitle">What you can inspect</h2>
+        <ul>
+          <li><strong data-i18n="welcome.tip1Title">Symbol search</strong> &mdash; <span data-i18n="welcome.tip1Body">exact names and substring matches across every translation unit.</span></li>
+          <li><strong data-i18n="welcome.tip2Title">Function detail</strong> &mdash; <span data-i18n="welcome.tip2Body">signature, source location, branches, assignments, return paths and resource operations.</span></li>
+          <li><strong data-i18n="welcome.tip3Title">Call graph</strong> &mdash; <span data-i18n="welcome.tip3Body">SVG traversal with direct edges and candidate callback edges (dashed, with confidence).</span></li>
+          <li><strong data-i18n="welcome.tip4Title">Callers / callees</strong> &mdash; <span data-i18n="welcome.tip4Body">merged direct calls and cross-TU callback candidates.</span></li>
+          <li><strong data-i18n="welcome.tip5Title">Stats / callbacks</strong> &mdash; <span data-i18n="welcome.tip5Body">table counts, shard provenance, and function-pointer registration facts.</span></li>
+        </ul>
+      </div>
+      <p class="empty" id="welcome-error" hidden></p>
+    </div>
+    <article id="view" class="view" hidden></article>
+  </section>
+</main>
+
+<footer class="footer">
+  <span data-i18n="footer.text">CA web UI &middot; read-only &middot; loopback only</span>
+  <span id="footer-db"></span>
+</footer>
+
+<script src="/i18n.js"></script>
+<script src="/highlight.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

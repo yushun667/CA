@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="origin" fetch=".." review="https://gitee.com/openharmony" />
+  <default revision="refs/heads/master" remote="origin" sync-j="4" />
+  <!-- Fixture for tests/test_build_openharmony.py: 4 projects, 1 include. -->
+  <project name="openharmony/build" path="build" revision="1111111111111111111111111111111111111111" />
+  <project name="openharmony/base" path="base" groups="default,ohos:standard" revision="2222222222222222222222222222222222222222" />
+  <project name="openharmony/third_party_musl" path="third_party/musl" revision="3333333333333333333333333333333333333333" />
+  <project name="openharmony/vendor_hihope" path="vendor/hihope" revision="4444444444444444444444444444444444444444" />
+  <include name="ohos/standard/default.xml" />
+</manifest>

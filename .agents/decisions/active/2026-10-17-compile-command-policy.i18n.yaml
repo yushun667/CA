@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-17
+en:
+  file: 2026-10-17-compile-command-policy.md
+  sha256: 5b3bf5b95fe0257496307ffa73cae0f53b0fedd7980c3a83f35615f2af2d2a7a
+zh:
+  file: 2026-10-17-compile-command-policy.zh.md
+  sha256: 43a7acd89d95206ec798cad0ad3b22eb0733190757f7bb1312c09e8ea845a1bb

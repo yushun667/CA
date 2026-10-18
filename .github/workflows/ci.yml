@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Keep pytest/benchmark imports working without relying on editable state.
+      PYTHONPATH: src
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install pinned dependencies and the package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -e . --no-deps
+          python -m ca version
+
+      - name: Run test suite
+        run: python -m pytest -q
+
+      - name: Layered indexing / lazy deep e2e
+        run: python -m pytest tests/test_e2e_layered.py tests/test_e2e_graph_mcp.py -q
+
+      - name: Artifact integrity (docs i18n hashes + agent_eval + results)
+        run: python scripts/check_artifacts.py
+
+      - name: Agent-eval harness import smoke
+        run: python benchmarks/agent_eval/run_eval.py --help > /dev/null
+
+      - name: Governance precommit validation
+        run: python .agents/validate.py --root . --mode precommit
+
+      - name: Accuracy gate (macro F1 >= 0.9)
+        run: python benchmarks/run_accuracy.py --fail-under 0.9
+
+      - name: Upload accuracy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-report
+          path: benchmarks/results/accuracy.json
+          if-no-files-found: ignore

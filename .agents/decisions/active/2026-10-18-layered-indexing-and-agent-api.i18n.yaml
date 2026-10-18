@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-18
+en:
+  file: 2026-10-18-layered-indexing-and-agent-api.md
+  sha256: 303270dceb5018aff615df6d6a27a2198171c785e0749cc0994e5aae678d6258
+zh:
+  file: 2026-10-18-layered-indexing-and-agent-api.zh.md
+  sha256: 2d60b09c16417ec25ba3580e1495a579f6488ba69e3037dd29d420183371210a

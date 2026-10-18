@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-17
+en:
+  file: 2026-10-17-incremental-indexing.md
+  sha256: af86e3c276ecdaabe3031d75dfbb580b40628c3134e98db0d5bfb15ef40d339e
+zh:
+  file: 2026-10-17-incremental-indexing.zh.md
+  sha256: 1a9ad63c44b35743f0b76ff789b7c2efce37602da3e541f629141ce7453a2f34

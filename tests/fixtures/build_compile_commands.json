@@ -1,0 +1,40 @@
+[
+  {
+    "directory": ".",
+    "file": "src/main.c",
+    "arguments": ["/usr/bin/cc", "-Iinclude", "-DDEBUG=1", "-c", "-o", "build/main.o", "src/main.c"]
+  },
+  {
+    "directory": ".",
+    "file": "src/util.cpp",
+    "command": "/usr/bin/c++ -std=c++17 -I include -c src/util.cpp -o build/util.o"
+  },
+  {
+    "directory": ".",
+    "file": "src/wrapped.c",
+    "arguments": ["ccache", "/usr/bin/clang", "-O2", "-c", "src/wrapped.c"]
+  },
+  {
+    "directory": ".",
+    "file": "src/head.S",
+    "command": "cc -c src/head.S"
+  },
+  {
+    "directory": ".",
+    "file": "src/object.o",
+    "command": "cc -c src/object.o"
+  },
+  {
+    "directory": ".",
+    "command": "cc -c src/missing_file.c"
+  },
+  {
+    "directory": ".",
+    "file": "src/missing_command.c"
+  },
+  "not-an-object",
+  {
+    "file": "src/no_directory.c",
+    "command": "cc -c src/no_directory.c"
+  }
+]

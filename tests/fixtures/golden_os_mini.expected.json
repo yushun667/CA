@@ -1,0 +1,215 @@
+{
+  "fixture": "golden_os_mini.c",
+  "description": "Hand-written OS-style C file; expectations are exhaustive for entities defined in this file. Scored against pipeline output for one synthesized translation unit.",
+  "scoring_keys": {
+    "functions": "function definition name",
+    "types": "type definition name",
+    "calls": "(caller name, callee name), direct calls only",
+    "branches": "(function name, whitespace-normalized condition substring)",
+    "assignments": "(function name, whitespace-normalized assignment target substring); declaration initializers count, repeated writes to one target collapse to one fact",
+    "returns": "(function name, whitespace-normalized explicit return expression substring); implicit returns excluded",
+    "resources": "(function name, resource api name, op)"
+  },
+  "functions": [
+    "node_alloc",
+    "node_free",
+    "queue_push",
+    "queue_pop",
+    "file_read_all",
+    "sum_until",
+    "lock_inc"
+  ],
+  "types": [
+    "node",
+    "spinlock",
+    "node_state",
+    "node_value",
+    "uint"
+  ],
+  "calls": [
+    {
+      "caller": "node_alloc",
+      "callee": "kmalloc"
+    },
+    {
+      "caller": "node_free",
+      "callee": "kfree"
+    },
+    {
+      "caller": "queue_push",
+      "callee": "node_alloc"
+    },
+    {
+      "caller": "file_read_all",
+      "callee": "open"
+    },
+    {
+      "caller": "file_read_all",
+      "callee": "close"
+    },
+    {
+      "caller": "lock_inc",
+      "callee": "spin_lock"
+    },
+    {
+      "caller": "lock_inc",
+      "callee": "spin_unlock"
+    }
+  ],
+  "branches": [
+    {
+      "function": "node_alloc",
+      "condition": "n == 0"
+    },
+    {
+      "function": "node_free",
+      "condition": "n != 0"
+    },
+    {
+      "function": "queue_push",
+      "condition": "n == 0"
+    },
+    {
+      "function": "queue_pop",
+      "condition": "n == 0"
+    },
+    {
+      "function": "file_read_all",
+      "condition": "handle < 0"
+    },
+    {
+      "function": "sum_until",
+      "condition": "i < count"
+    }
+  ],
+  "assignments": [
+    {
+      "function": "node_alloc",
+      "lhs": "n"
+    },
+    {
+      "function": "node_alloc",
+      "lhs": "n->value"
+    },
+    {
+      "function": "node_alloc",
+      "lhs": "n->next"
+    },
+    {
+      "function": "node_free",
+      "lhs": "n->next"
+    },
+    {
+      "function": "queue_push",
+      "lhs": "n"
+    },
+    {
+      "function": "queue_push",
+      "lhs": "n->next"
+    },
+    {
+      "function": "queue_pop",
+      "lhs": "n"
+    },
+    {
+      "function": "queue_pop",
+      "lhs": "value"
+    },
+    {
+      "function": "file_read_all",
+      "lhs": "handle"
+    },
+    {
+      "function": "sum_until",
+      "lhs": "total"
+    },
+    {
+      "function": "sum_until",
+      "lhs": "i"
+    },
+    {
+      "function": "lock_inc",
+      "lhs": "counter"
+    }
+  ],
+  "returns": [
+    {
+      "function": "node_alloc",
+      "expr": "0"
+    },
+    {
+      "function": "node_alloc",
+      "expr": "n"
+    },
+    {
+      "function": "queue_push",
+      "expr": "0"
+    },
+    {
+      "function": "queue_push",
+      "expr": "n"
+    },
+    {
+      "function": "queue_pop",
+      "expr": "-1"
+    },
+    {
+      "function": "queue_pop",
+      "expr": "value"
+    },
+    {
+      "function": "file_read_all",
+      "expr": "-1"
+    },
+    {
+      "function": "file_read_all",
+      "expr": "0"
+    },
+    {
+      "function": "sum_until",
+      "expr": "total"
+    },
+    {
+      "function": "lock_inc",
+      "expr": "0"
+    }
+  ],
+  "resources": [
+    {
+      "function": "node_alloc",
+      "api": "kmalloc",
+      "op": "acquire",
+      "resource_kind": "memory"
+    },
+    {
+      "function": "node_free",
+      "api": "kfree",
+      "op": "release",
+      "resource_kind": "memory"
+    },
+    {
+      "function": "file_read_all",
+      "api": "open",
+      "op": "acquire",
+      "resource_kind": "file"
+    },
+    {
+      "function": "file_read_all",
+      "api": "close",
+      "op": "release",
+      "resource_kind": "file"
+    },
+    {
+      "function": "lock_inc",
+      "api": "spin_lock",
+      "op": "acquire",
+      "resource_kind": "lock"
+    },
+    {
+      "function": "lock_inc",
+      "api": "spin_unlock",
+      "op": "release",
+      "resource_kind": "lock"
+    }
+  ]
+}

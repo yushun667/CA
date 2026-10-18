@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-17
+en:
+  file: 2026-10-17-linux-kernel-corpus.md
+  sha256: 0d6c74642cb2daf05c32025f37403541dd75611e90411217f138360a666c4c29
+zh:
+  file: 2026-10-17-linux-kernel-corpus.zh.md
+  sha256: 529e414ec00f79b45caf5efe0952127ea26250621cbdbb2bbe4af3ff4e7ce166

@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-18
+en:
+  file: 2026-10-18-matched-libclang-backend.md
+  sha256: b238dee8109ef575b8a8efc88255a42553e9e2f3fc55cdcc653f18d42b95a025
+zh:
+  file: 2026-10-18-matched-libclang-backend.zh.md
+  sha256: 6571a6c5ab6d3ec27a74fa5284d9fdd9f0bb09bdb549ca6d379548da523b6103

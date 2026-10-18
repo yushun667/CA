@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-17
+en:
+  file: 2026-10-17-xv6-compdb-parse-failure.md
+  sha256: ff1d78b65f0d343cb8920d9da8a941e701863372067b636f661f01c56d452392
+zh:
+  file: 2026-10-17-xv6-compdb-parse-failure.zh.md
+  sha256: 5335e86896bb0d3d584ec1e4ddc2ad299801eb652864e5420f78060e6aa24d07

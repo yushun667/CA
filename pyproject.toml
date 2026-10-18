@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ca-analyzer"
+version = "0.1.0"
+description = "CA: an OS source analysis tool. Real compile args -> Clang AST -> CFG/data-flow -> database."
+requires-python = ">=3.11"
+
+[project.scripts]
+ca = "ca.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"

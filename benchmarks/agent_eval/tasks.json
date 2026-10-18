@@ -1,0 +1,2870 @@
+{
+  "meta": {
+    "db": ".tmp/lead/final_xv6.db",
+    "corpus": ".tmp/corpus/xv6-riscv",
+    "note": "GT enumerated from DB, each locator source-validated"
+  },
+  "tasks": [
+    {
+      "id": "D1",
+      "cls": "debug",
+      "kind": "internal",
+      "targets": [
+        "sys_pause",
+        "sleep"
+      ],
+      "prompt": "用户态 sleep() 返回前，内核 sys_pause/sleep 中自旋锁的获取/释放点与关键分支分别在哪里？为什么 sleep 前必须先释放 tickslock？",
+      "gt": [
+        "internal",
+        "branches:sys_pause,sleep",
+        "returns:sys_pause,sleep",
+        "resources:sys_pause,sleep"
+      ],
+      "rubric": "0.6*F1(facts) + 0.4*manual(锁纪律解释)；事实=锁操作/分支/返回点定位。",
+      "manual_note": "解释 lost-wakeup：sleep_prepare 在持锁下设置 chan，释放锁后 sleep()，否则 wakeup 可能发生在等待前。",
+      "facts": [
+        {
+          "key": "kernel/sysproc.c:74:branch",
+          "kind": "branch",
+          "file": "kernel/sysproc.c",
+          "line": 74,
+          "detail": "if: n < 0",
+          "source": "if (n < 0)"
+        },
+        {
+          "key": "kernel/sysproc.c:78:branch",
+          "kind": "branch",
+          "file": "kernel/sysproc.c",
+          "line": 78,
+          "detail": "while: ticks - ticks0 < n",
+          "source": "while (ticks - ticks0 < n) {"
+        },
+        {
+          "key": "kernel/sysproc.c:79:branch",
+          "kind": "branch",
+          "file": "kernel/sysproc.c",
+          "line": 79,
+          "detail": "if: killed(myproc())",
+          "source": "if (killed(myproc())) {"
+        },
+        {
+          "key": "kernel/sysproc.c:81:return",
+          "kind": "return",
+          "file": "kernel/sysproc.c",
+          "line": 81,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysproc.c:89:return",
+          "kind": "return",
+          "file": "kernel/sysproc.c",
+          "line": 89,
+          "detail": "return 0",
+          "source": "return 0;"
+        },
+        {
+          "key": "kernel/sysproc.c:76:resource",
+          "kind": "resource",
+          "file": "kernel/sysproc.c",
+          "line": 76,
+          "detail": "acquire acquire",
+          "source": "acquire(&tickslock);"
+        },
+        {
+          "key": "kernel/sysproc.c:80:resource",
+          "kind": "resource",
+          "file": "kernel/sysproc.c",
+          "line": 80,
+          "detail": "release release",
+          "source": "release(&tickslock);"
+        },
+        {
+          "key": "kernel/sysproc.c:84:resource",
+          "kind": "resource",
+          "file": "kernel/sysproc.c",
+          "line": 84,
+          "detail": "release release",
+          "source": "release(&tickslock);"
+        },
+        {
+          "key": "kernel/sysproc.c:86:resource",
+          "kind": "resource",
+          "file": "kernel/sysproc.c",
+          "line": 86,
+          "detail": "acquire acquire",
+          "source": "acquire(&tickslock);"
+        },
+        {
+          "key": "kernel/sysproc.c:88:resource",
+          "kind": "resource",
+          "file": "kernel/sysproc.c",
+          "line": 88,
+          "detail": "release release",
+          "source": "release(&tickslock);"
+        },
+        {
+          "key": "kernel/sysproc.c:73:call",
+          "kind": "call",
+          "file": "kernel/sysproc.c",
+          "line": 73,
+          "detail": "argint",
+          "source": "argint(0, &n);"
+        },
+        {
+          "key": "kernel/sysproc.c:76:call",
+          "kind": "call",
+          "file": "kernel/sysproc.c",
+          "line": 76,
+          "detail": "acquire",
+          "source": "acquire(&tickslock);"
+        },
+        {
+          "key": "kernel/sysproc.c:79:call",
+          "kind": "call",
+          "file": "kernel/sysproc.c",
+          "line": 79,
+          "detail": "killed",
+          "source": "if (killed(myproc())) {"
+        },
+        {
+          "key": "kernel/sysproc.c:80:call",
+          "kind": "call",
+          "file": "kernel/sysproc.c",
+          "line": 80,
+          "detail": "release",
+          "source": "release(&tickslock);"
+        },
+        {
+          "key": "kernel/sysproc.c:83:call",
+          "kind": "call",
+          "file": "kernel/sysproc.c",
+          "line": 83,
+          "detail": "sleep_prepare",
+          "source": "sleep_prepare(&ticks);"
+        },
+        {
+          "key": "kernel/sysproc.c:84:call",
+          "kind": "call",
+          "file": "kernel/sysproc.c",
+          "line": 84,
+          "detail": "release",
+          "source": "release(&tickslock);"
+        },
+        {
+          "key": "kernel/sysproc.c:85:call",
+          "kind": "call",
+          "file": "kernel/sysproc.c",
+          "line": 85,
+          "detail": "sleep",
+          "source": "sleep();"
+        },
+        {
+          "key": "kernel/sysproc.c:86:call",
+          "kind": "call",
+          "file": "kernel/sysproc.c",
+          "line": 86,
+          "detail": "acquire",
+          "source": "acquire(&tickslock);"
+        },
+        {
+          "key": "kernel/sysproc.c:88:call",
+          "kind": "call",
+          "file": "kernel/sysproc.c",
+          "line": 88,
+          "detail": "release",
+          "source": "release(&tickslock);"
+        },
+        {
+          "key": "kernel/proc.c:567:branch",
+          "kind": "branch",
+          "file": "kernel/proc.c",
+          "line": 567,
+          "detail": "if: p->chan != 0",
+          "source": "if (p->chan != 0) {"
+        },
+        {
+          "key": "kernel/proc.c:566:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 566,
+          "detail": "acquire acquire",
+          "source": "acquire(&p->lock);"
+        },
+        {
+          "key": "kernel/proc.c:571:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 571,
+          "detail": "release release",
+          "source": "release(&p->lock);"
+        },
+        {
+          "key": "kernel/proc.c:564:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 564,
+          "detail": "myproc",
+          "source": "struct proc *p = myproc();"
+        },
+        {
+          "key": "kernel/proc.c:566:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 566,
+          "detail": "acquire",
+          "source": "acquire(&p->lock);"
+        },
+        {
+          "key": "kernel/proc.c:569:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 569,
+          "detail": "sched",
+          "source": "sched();"
+        },
+        {
+          "key": "kernel/proc.c:571:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 571,
+          "detail": "release",
+          "source": "release(&p->lock);"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "D2",
+      "cls": "debug",
+      "kind": "internal",
+      "targets": [
+        "kfork"
+      ],
+      "prompt": "用户态 fork() 返回 -1 的所有路径：列出 kfork 中的失败返回点、错误路径上的资源/锁清理点，以及哪一步失败会导致子进程资源泄漏。",
+      "gt": [
+        "internal",
+        "branches:kfork",
+        "returns:kfork",
+        "resources:kfork"
+      ],
+      "rubric": "0.7*F1(facts) + 0.3*manual(allocproc/uvmcopy 失败后 freeproc+release 解释)。",
+      "manual_note": "uvmcopy 失败时 freeproc(np)+release(&np->lock) 后 return -1；allocproc 失败直接 return -1。",
+      "facts": [
+        {
+          "key": "kernel/proc.c:266:branch",
+          "kind": "branch",
+          "file": "kernel/proc.c",
+          "line": 266,
+          "detail": "if: (np = allocproc()) == 0",
+          "source": "if ((np = allocproc()) == 0) {"
+        },
+        {
+          "key": "kernel/proc.c:271:branch",
+          "kind": "branch",
+          "file": "kernel/proc.c",
+          "line": 271,
+          "detail": "if: uvmcopy(p->pagetable, np->pagetable, p->sz) < 0",
+          "source": "if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {"
+        },
+        {
+          "key": "kernel/proc.c:285:branch",
+          "kind": "branch",
+          "file": "kernel/proc.c",
+          "line": 285,
+          "detail": "for: i < NOFILE",
+          "source": "for (i = 0; i < NOFILE; i++)"
+        },
+        {
+          "key": "kernel/proc.c:286:branch",
+          "kind": "branch",
+          "file": "kernel/proc.c",
+          "line": 286,
+          "detail": "if: p->ofile[i]",
+          "source": "if (p->ofile[i])"
+        },
+        {
+          "key": "kernel/proc.c:267:return",
+          "kind": "return",
+          "file": "kernel/proc.c",
+          "line": 267,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/proc.c:274:return",
+          "kind": "return",
+          "file": "kernel/proc.c",
+          "line": 274,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/proc.c:304:return",
+          "kind": "return",
+          "file": "kernel/proc.c",
+          "line": 304,
+          "detail": "return pid",
+          "source": "return pid;"
+        },
+        {
+          "key": "kernel/proc.c:273:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 273,
+          "detail": "release release",
+          "source": "release(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:294:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 294,
+          "detail": "release release",
+          "source": "release(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:296:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 296,
+          "detail": "acquire acquire",
+          "source": "acquire(&wait_lock);"
+        },
+        {
+          "key": "kernel/proc.c:298:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 298,
+          "detail": "release release",
+          "source": "release(&wait_lock);"
+        },
+        {
+          "key": "kernel/proc.c:300:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 300,
+          "detail": "acquire acquire",
+          "source": "acquire(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:302:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 302,
+          "detail": "release release",
+          "source": "release(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:263:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 263,
+          "detail": "myproc",
+          "source": "struct proc *p = myproc();"
+        },
+        {
+          "key": "kernel/proc.c:266:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 266,
+          "detail": "allocproc",
+          "source": "if ((np = allocproc()) == 0) {"
+        },
+        {
+          "key": "kernel/proc.c:271:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 271,
+          "detail": "uvmcopy",
+          "source": "if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {"
+        },
+        {
+          "key": "kernel/proc.c:272:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 272,
+          "detail": "freeproc",
+          "source": "freeproc(np);"
+        },
+        {
+          "key": "kernel/proc.c:273:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 273,
+          "detail": "release",
+          "source": "release(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:287:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 287,
+          "detail": "filedup",
+          "source": "np->ofile[i] = filedup(p->ofile[i]);"
+        },
+        {
+          "key": "kernel/proc.c:288:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 288,
+          "detail": "idup",
+          "source": "np->cwd = idup(p->cwd);"
+        },
+        {
+          "key": "kernel/proc.c:290:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 290,
+          "detail": "safestrcpy",
+          "source": "safestrcpy(np->name, p->name, sizeof(p->name));"
+        },
+        {
+          "key": "kernel/proc.c:294:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 294,
+          "detail": "release",
+          "source": "release(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:296:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 296,
+          "detail": "acquire",
+          "source": "acquire(&wait_lock);"
+        },
+        {
+          "key": "kernel/proc.c:298:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 298,
+          "detail": "release",
+          "source": "release(&wait_lock);"
+        },
+        {
+          "key": "kernel/proc.c:300:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 300,
+          "detail": "acquire",
+          "source": "acquire(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:302:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 302,
+          "detail": "release",
+          "source": "release(&np->lock);"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "D3",
+      "cls": "debug",
+      "kind": "internal",
+      "targets": [
+        "sys_open"
+      ],
+      "prompt": "open() 返回 -1 的可能原因：列出 sys_open 的每个错误返回点及对应的清理动作，并说明 namei/文件描述符分配失败时的差异。",
+      "gt": [
+        "internal",
+        "branches:sys_open",
+        "returns:sys_open",
+        "resources:sys_open"
+      ],
+      "rubric": "0.7*F1(facts) + 0.3*manual(namei/filealloc 失败区别、iunlockput/end_op 顺序)。",
+      "manual_note": "namei 失败 -> end_op 后 -1；filealloc/fdalloc 失败 -> fileclose+iunlockput+end_op。",
+      "facts": [
+        {
+          "key": "kernel/sysfile.c:338:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 338,
+          "detail": "if: (n = argstr(0, path, MAXPATH)) < 0",
+          "source": "if ((n = argstr(0, path, MAXPATH)) < 0)"
+        },
+        {
+          "key": "kernel/sysfile.c:343:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 343,
+          "detail": "if: omode & O_CREATE",
+          "source": "if (omode & O_CREATE) {"
+        },
+        {
+          "key": "kernel/sysfile.c:345:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 345,
+          "detail": "if: ip == 0",
+          "source": "if (ip == 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:350:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 350,
+          "detail": "if: (ip = namei(path)) == 0",
+          "source": "if ((ip = namei(path)) == 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:355:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 355,
+          "detail": "logical_and: ip->type == T_DIR",
+          "source": "if (ip->type == T_DIR && omode != O_RDONLY) {"
+        },
+        {
+          "key": "kernel/sysfile.c:362:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 362,
+          "detail": "logical_and: ip->type == T_DEVICE",
+          "source": "if (ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)) {"
+        },
+        {
+          "key": "kernel/sysfile.c:368:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 368,
+          "detail": "logical_or: (f = filealloc()) == 0",
+          "source": "if ((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:369:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 369,
+          "detail": "if: f",
+          "source": "if (f)"
+        },
+        {
+          "key": "kernel/sysfile.c:376:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 376,
+          "detail": "if: ip->type == T_DEVICE",
+          "source": "if (ip->type == T_DEVICE) {"
+        },
+        {
+          "key": "kernel/sysfile.c:387:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 387,
+          "detail": "logical_and: (omode & O_TRUNC)",
+          "source": "if ((omode & O_TRUNC) && ip->type == T_FILE) {"
+        },
+        {
+          "key": "kernel/sysfile.c:339:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 339,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:347:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 347,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:352:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 352,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:358:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 358,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:365:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 365,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:373:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 373,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:394:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 394,
+          "detail": "return fd",
+          "source": "return fd;"
+        },
+        {
+          "key": "kernel/sysfile.c:341:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 341,
+          "detail": "acquire begin_op",
+          "source": "begin_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:346:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 346,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:351:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 351,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:354:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 354,
+          "detail": "acquire ilock",
+          "source": "ilock(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:356:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 356,
+          "detail": "release iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:357:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 357,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:363:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 363,
+          "detail": "release iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:364:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 364,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:368:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 368,
+          "detail": "acquire filealloc",
+          "source": "if ((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:370:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 370,
+          "detail": "release fileclose",
+          "source": "fileclose(f);"
+        },
+        {
+          "key": "kernel/sysfile.c:371:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 371,
+          "detail": "release iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:372:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 372,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:391:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 391,
+          "detail": "release iunlock",
+          "source": "iunlock(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:392:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 392,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:337:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 337,
+          "detail": "argint",
+          "source": "argint(1, &omode);"
+        },
+        {
+          "key": "kernel/sysfile.c:338:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 338,
+          "detail": "argstr",
+          "source": "if ((n = argstr(0, path, MAXPATH)) < 0)"
+        },
+        {
+          "key": "kernel/sysfile.c:341:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 341,
+          "detail": "begin_op",
+          "source": "begin_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:344:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 344,
+          "detail": "create",
+          "source": "ip = create(path, T_FILE, 0, 0);"
+        },
+        {
+          "key": "kernel/sysfile.c:346:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 346,
+          "detail": "end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:350:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 350,
+          "detail": "namei",
+          "source": "if ((ip = namei(path)) == 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:351:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 351,
+          "detail": "end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:354:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 354,
+          "detail": "ilock",
+          "source": "ilock(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:356:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 356,
+          "detail": "iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:357:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 357,
+          "detail": "end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:363:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 363,
+          "detail": "iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:364:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 364,
+          "detail": "end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:368:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 368,
+          "detail": "filealloc",
+          "source": "if ((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:370:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 370,
+          "detail": "fileclose",
+          "source": "fileclose(f);"
+        },
+        {
+          "key": "kernel/sysfile.c:371:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 371,
+          "detail": "iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:372:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 372,
+          "detail": "end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:388:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 388,
+          "detail": "itrunc",
+          "source": "itrunc(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:391:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 391,
+          "detail": "iunlock",
+          "source": "iunlock(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:392:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 392,
+          "detail": "end_op",
+          "source": "end_op();"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "D4",
+      "cls": "debug",
+      "kind": "internal",
+      "targets": [
+        "bget",
+        "bread"
+      ],
+      "prompt": "文件读取偶发读到旧数据：bget/bread 中与缓冲区有效性、引用计数和睡眠等待相关的分支与资源操作在哪里？谁负责把 b->valid 置为 1？",
+      "gt": [
+        "internal",
+        "branches:bget,bread",
+        "returns:bget,bread",
+        "resources:bget,bread"
+      ],
+      "rubric": "0.7*F1(facts) + 0.3*manual(valid 由 virtio_disk_rw 完成后置位；bget 引用计数/睡眠)。",
+      "manual_note": "bread: bget 后若 !b->valid 调 virtio_disk_rw(b,0) 再置 valid=1；bget 在 refcnt>0 时 acquiresleep 等释放。",
+      "facts": [
+        {
+          "key": "kernel/bio.c:65:branch",
+          "kind": "branch",
+          "file": "kernel/bio.c",
+          "line": 65,
+          "detail": "for: b != &bcache.head",
+          "source": "for (b = bcache.head.next; b != &bcache.head; b = b->next) {"
+        },
+        {
+          "key": "kernel/bio.c:66:branch",
+          "kind": "branch",
+          "file": "kernel/bio.c",
+          "line": 66,
+          "detail": "logical_and: b->dev == dev",
+          "source": "if (b->dev == dev && b->blockno == blockno) {"
+        },
+        {
+          "key": "kernel/bio.c:76:branch",
+          "kind": "branch",
+          "file": "kernel/bio.c",
+          "line": 76,
+          "detail": "for: b != &bcache.head",
+          "source": "for (b = bcache.head.prev; b != &bcache.head; b = b->prev) {"
+        },
+        {
+          "key": "kernel/bio.c:77:branch",
+          "kind": "branch",
+          "file": "kernel/bio.c",
+          "line": 77,
+          "detail": "if: b->refcnt == 0",
+          "source": "if (b->refcnt == 0) {"
+        },
+        {
+          "key": "kernel/bio.c:70:return",
+          "kind": "return",
+          "file": "kernel/bio.c",
+          "line": 70,
+          "detail": "return b",
+          "source": "return b;"
+        },
+        {
+          "key": "kernel/bio.c:84:return",
+          "kind": "return",
+          "file": "kernel/bio.c",
+          "line": 84,
+          "detail": "return b",
+          "source": "return b;"
+        },
+        {
+          "key": "kernel/bio.c:62:resource",
+          "kind": "resource",
+          "file": "kernel/bio.c",
+          "line": 62,
+          "detail": "acquire acquire",
+          "source": "acquire(&bcache.lock);"
+        },
+        {
+          "key": "kernel/bio.c:68:resource",
+          "kind": "resource",
+          "file": "kernel/bio.c",
+          "line": 68,
+          "detail": "release release",
+          "source": "release(&bcache.lock);"
+        },
+        {
+          "key": "kernel/bio.c:82:resource",
+          "kind": "resource",
+          "file": "kernel/bio.c",
+          "line": 82,
+          "detail": "release release",
+          "source": "release(&bcache.lock);"
+        },
+        {
+          "key": "kernel/bio.c:62:call",
+          "kind": "call",
+          "file": "kernel/bio.c",
+          "line": 62,
+          "detail": "acquire",
+          "source": "acquire(&bcache.lock);"
+        },
+        {
+          "key": "kernel/bio.c:68:call",
+          "kind": "call",
+          "file": "kernel/bio.c",
+          "line": 68,
+          "detail": "release",
+          "source": "release(&bcache.lock);"
+        },
+        {
+          "key": "kernel/bio.c:69:call",
+          "kind": "call",
+          "file": "kernel/bio.c",
+          "line": 69,
+          "detail": "acquiresleep",
+          "source": "acquiresleep(&b->lock);"
+        },
+        {
+          "key": "kernel/bio.c:82:call",
+          "kind": "call",
+          "file": "kernel/bio.c",
+          "line": 82,
+          "detail": "release",
+          "source": "release(&bcache.lock);"
+        },
+        {
+          "key": "kernel/bio.c:83:call",
+          "kind": "call",
+          "file": "kernel/bio.c",
+          "line": 83,
+          "detail": "acquiresleep",
+          "source": "acquiresleep(&b->lock);"
+        },
+        {
+          "key": "kernel/bio.c:87:call",
+          "kind": "call",
+          "file": "kernel/bio.c",
+          "line": 87,
+          "detail": "panic",
+          "source": "panic(\"bget: no buffers\");"
+        },
+        {
+          "key": "kernel/bio.c:97:branch",
+          "kind": "branch",
+          "file": "kernel/bio.c",
+          "line": 97,
+          "detail": "if: !b->valid",
+          "source": "if (!b->valid) {"
+        },
+        {
+          "key": "kernel/bio.c:101:return",
+          "kind": "return",
+          "file": "kernel/bio.c",
+          "line": 101,
+          "detail": "return b",
+          "source": "return b;"
+        },
+        {
+          "key": "kernel/bio.c:96:call",
+          "kind": "call",
+          "file": "kernel/bio.c",
+          "line": 96,
+          "detail": "bget",
+          "source": "b = bget(dev, blockno);"
+        },
+        {
+          "key": "kernel/bio.c:98:call",
+          "kind": "call",
+          "file": "kernel/bio.c",
+          "line": 98,
+          "detail": "virtio_disk_rw",
+          "source": "virtio_disk_rw(b, 0);"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "D5",
+      "cls": "debug",
+      "kind": "finding",
+      "targets": [
+        "proc_mapstacks"
+      ],
+      "prompt": "深层分析报告 proc_mapstacks 存在 kalloc 泄漏告警。请定位告警对应的分配点，并判断这是真 bug 还是误报；说明依据。",
+      "gt": [
+        "finding:proc_mapstacks",
+        "calls:proc_mapstacks"
+      ],
+      "rubric": "0.5*F1(facts) + 0.5*manual(判定误报：内核栈页表常驻，无释放路径是有意的)。",
+      "manual_note": "已知 finding 为误报（kernel page table 生命周期 = 内核生命周期），说明深析 finding 需人工确认。",
+      "facts": [
+        {
+          "key": "finding:proc_mapstacks",
+          "kind": "finding",
+          "file": "kernel/proc.c",
+          "line": 33,
+          "detail": "leak: kalloc acquiring 'pa' may leak: a path reaches the function exit without a release",
+          "source": "proc_mapstacks(pagetable_t kpgtbl)"
+        },
+        {
+          "key": "kernel/proc.c:38:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 38,
+          "detail": "kalloc",
+          "source": "char *pa = kalloc();"
+        },
+        {
+          "key": "kernel/proc.c:40:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 40,
+          "detail": "panic",
+          "source": "panic(\"kalloc\");"
+        },
+        {
+          "key": "kernel/proc.c:42:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 42,
+          "detail": "kvmmap",
+          "source": "kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "C1",
+      "cls": "coding",
+      "kind": "callers",
+      "symbols": [
+        "log_write"
+      ],
+      "prompt": "要修改 kernel/log.c 的 log_write 语义（例如允许重复记录/改变返回值），列出所有直接调用者（函数名）及所在文件，评估影响面。",
+      "gt": [
+        "callers:log_write"
+      ],
+      "rubric": "0.8*F1(caller set) + 0.2*manual(指出 writei/iupdate 等写路径受影响)。",
+      "manual_note": "调用者：bzero balloc bfree ialloc iupdate ifree bmap writei（均在 fs.c）。",
+      "facts": [
+        {
+          "key": "fn:balloc",
+          "kind": "caller",
+          "file": "kernel/fs.c",
+          "line": 80,
+          "detail": "balloc calls log_write",
+          "source": "log_write(bp);"
+        },
+        {
+          "key": "fn:bfree",
+          "kind": "caller",
+          "file": "kernel/fs.c",
+          "line": 105,
+          "detail": "bfree calls log_write",
+          "source": "log_write(bp);"
+        },
+        {
+          "key": "fn:bmap",
+          "kind": "caller",
+          "file": "kernel/fs.c",
+          "line": 451,
+          "detail": "bmap calls log_write",
+          "source": "log_write(bp);"
+        },
+        {
+          "key": "fn:bzero",
+          "kind": "caller",
+          "file": "kernel/fs.c",
+          "line": 59,
+          "detail": "bzero calls log_write",
+          "source": "log_write(bp);"
+        },
+        {
+          "key": "fn:ialloc",
+          "kind": "caller",
+          "file": "kernel/fs.c",
+          "line": 213,
+          "detail": "ialloc calls log_write",
+          "source": "log_write(bp); // mark it allocated on the disk"
+        },
+        {
+          "key": "fn:ifree",
+          "kind": "caller",
+          "file": "kernel/fs.c",
+          "line": 338,
+          "detail": "ifree calls log_write",
+          "source": "log_write(bp);"
+        },
+        {
+          "key": "fn:iupdate",
+          "kind": "caller",
+          "file": "kernel/fs.c",
+          "line": 241,
+          "detail": "iupdate calls log_write",
+          "source": "log_write(bp);"
+        },
+        {
+          "key": "fn:writei",
+          "kind": "caller",
+          "file": "kernel/fs.c",
+          "line": 562,
+          "detail": "writei calls log_write",
+          "source": "log_write(bp);"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "C2",
+      "cls": "coding",
+      "kind": "callers",
+      "symbols": [
+        "wakeup"
+      ],
+      "prompt": "要把 wakeup(chan) 改成 wakeup_locked 语义，列出所有直接调用者（函数名）及文件，说明哪些模块需要同步修改。",
+      "gt": [
+        "callers:wakeup"
+      ],
+      "rubric": "0.8*F1(caller set) + 0.2*manual(按模块归类 proc/fs/pipe/console/uart/virtio/trap)。",
+      "manual_note": "12 个调用者函数，跨 7-8 个文件；适合用 callers 查询而非通读。",
+      "facts": [
+        {
+          "key": "fn:clockintr",
+          "kind": "caller",
+          "file": "kernel/trap.c",
+          "line": 172,
+          "detail": "clockintr calls wakeup",
+          "source": "wakeup(&ticks);"
+        },
+        {
+          "key": "fn:consoleintr",
+          "kind": "caller",
+          "file": "kernel/console.c",
+          "line": 183,
+          "detail": "consoleintr calls wakeup",
+          "source": "wakeup(&cons.r);"
+        },
+        {
+          "key": "fn:end_op",
+          "kind": "caller",
+          "file": "kernel/log.c",
+          "line": 170,
+          "detail": "end_op calls wakeup",
+          "source": "wakeup(&log);"
+        },
+        {
+          "key": "fn:free_desc",
+          "kind": "caller",
+          "file": "kernel/virtio_disk.c",
+          "line": 181,
+          "detail": "free_desc calls wakeup",
+          "source": "wakeup(&disk.free[0]);"
+        },
+        {
+          "key": "fn:kexit",
+          "kind": "caller",
+          "file": "kernel/proc.c",
+          "line": 353,
+          "detail": "kexit calls wakeup",
+          "source": "wakeup(p->parent);"
+        },
+        {
+          "key": "fn:pipeclose",
+          "kind": "caller",
+          "file": "kernel/pipe.c",
+          "line": 64,
+          "detail": "pipeclose calls wakeup",
+          "source": "wakeup(&pi->nread);"
+        },
+        {
+          "key": "fn:piperead",
+          "kind": "caller",
+          "file": "kernel/pipe.c",
+          "line": 140,
+          "detail": "piperead calls wakeup",
+          "source": "wakeup(&pi->nwrite); //DOC: piperead-wakeup"
+        },
+        {
+          "key": "fn:pipewrite",
+          "kind": "caller",
+          "file": "kernel/pipe.c",
+          "line": 89,
+          "detail": "pipewrite calls wakeup",
+          "source": "wakeup(&pi->nread);"
+        },
+        {
+          "key": "fn:releasesleep",
+          "kind": "caller",
+          "file": "kernel/sleeplock.c",
+          "line": 42,
+          "detail": "releasesleep calls wakeup",
+          "source": "wakeup(lk);"
+        },
+        {
+          "key": "fn:reparent",
+          "kind": "caller",
+          "file": "kernel/proc.c",
+          "line": 317,
+          "detail": "reparent calls wakeup",
+          "source": "wakeup(initproc);"
+        },
+        {
+          "key": "fn:uartintr",
+          "kind": "caller",
+          "file": "kernel/uart.c",
+          "line": 145,
+          "detail": "uartintr calls wakeup",
+          "source": "wakeup(&tx_chan);"
+        },
+        {
+          "key": "fn:virtio_disk_intr",
+          "kind": "caller",
+          "file": "kernel/virtio_disk.c",
+          "line": 327,
+          "detail": "virtio_disk_intr calls wakeup",
+          "source": "wakeup(b);"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "C3",
+      "cls": "coding",
+      "kind": "callers",
+      "symbols": [
+        "readi"
+      ],
+      "prompt": "要修改 readi 的返回值/越界约定，列出所有直接调用者（函数名），并区分用户拷贝路径与文件系统内部路径。",
+      "gt": [
+        "callers:readi"
+      ],
+      "rubric": "0.8*F1(caller set) + 0.2*manual(区分 fileread/exec/dir 路径)。",
+      "manual_note": "调用者：fileread kexec loadseg isdirempty dirlookup dirlink。",
+      "facts": [
+        {
+          "key": "fn:dirlink",
+          "kind": "caller",
+          "file": "kernel/fs.c",
+          "line": 634,
+          "detail": "dirlink calls readi",
+          "source": "if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))"
+        },
+        {
+          "key": "fn:dirlookup",
+          "kind": "caller",
+          "file": "kernel/fs.c",
+          "line": 601,
+          "detail": "dirlookup calls readi",
+          "source": "if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))"
+        },
+        {
+          "key": "fn:fileread",
+          "kind": "caller",
+          "file": "kernel/file.c",
+          "line": 122,
+          "detail": "fileread calls readi",
+          "source": "if ((r = readi(f->ip, 1, addr, f->off, n)) > 0)"
+        },
+        {
+          "key": "fn:isdirempty",
+          "kind": "caller",
+          "file": "kernel/sysfile.c",
+          "line": 193,
+          "detail": "isdirempty calls readi",
+          "source": "if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))"
+        },
+        {
+          "key": "fn:kexec",
+          "kind": "caller",
+          "file": "kernel/exec.c",
+          "line": 49,
+          "detail": "kexec calls readi",
+          "source": "if (readi(ip, 0, (uint64)&elf, 0, sizeof(elf)) != sizeof(elf))"
+        },
+        {
+          "key": "fn:loadseg",
+          "kind": "caller",
+          "file": "kernel/exec.c",
+          "line": 171,
+          "detail": "loadseg calls readi",
+          "source": "if (readi(ip, 0, (uint64)pa, offset + i, n) != n)"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "C4",
+      "cls": "coding",
+      "kind": "reverse2",
+      "symbols": [
+        "kalloc"
+      ],
+      "prompt": "kalloc 的分配语义若要改为可失败/可追踪，直接和间接（2 跳）受影响的调用者函数有哪些？列出函数名集合。",
+      "gt": [
+        "reverse2:kalloc"
+      ],
+      "rubric": "0.8*F1(2-hop caller set) + 0.2*manual(区分直接 13 处 vs 2-hop 传播面)。",
+      "manual_note": "call graph 递归查询一次即可得到 2-hop 集合；grep+通读需多轮扩展。",
+      "facts": [
+        {
+          "key": "fn:allocproc",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "allocproc",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:copyin",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "copyin",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:copyinstr",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "copyinstr",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:copyout",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "copyout",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:growproc",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "growproc",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:ismapped",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "ismapped",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:kexec",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "kexec",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:kfork",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "kfork",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:kvminit",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "kvminit",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:kvmmake",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "kvmmake",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:main",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "main",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:mappages",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "mappages",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:pipealloc",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "pipealloc",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:proc_mapstacks",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "proc_mapstacks",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:proc_pagetable",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "proc_pagetable",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:sys_exec",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "sys_exec",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:sys_pipe",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "sys_pipe",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:userinit",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "userinit",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:usertrap",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "usertrap",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:uvmalloc",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "uvmalloc",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:uvmclear",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "uvmclear",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:uvmcopy",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "uvmcopy",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:uvmcreate",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "uvmcreate",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:uvmunmap",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "uvmunmap",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:virtio_disk_init",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "virtio_disk_init",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:vmfault",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "vmfault",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:walk",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "walk",
+          "source": "kalloc(void)"
+        },
+        {
+          "key": "fn:walkaddr",
+          "kind": "caller",
+          "file": "kernel/kalloc.c",
+          "line": 69,
+          "detail": "walkaddr",
+          "source": "kalloc(void)"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "C5",
+      "cls": "coding",
+      "kind": "callers",
+      "symbols": [
+        "filealloc"
+      ],
+      "prompt": "filealloc 返回 0 的错误语义若要改动，哪些函数需要检查？另外说明为什么sys_open 的调用者（syscall 入口）在静态调用图中不可见。",
+      "gt": [
+        "callers:filealloc"
+      ],
+      "rubric": "0.7*F1(caller set) + 0.3*manual(指出 syscall 表函数指针分发导致入口边缺失)。",
+      "manual_note": "直接调用者 pipealloc(2 处)/sys_open(1 处)；initcode/table dispatch 是间接边，本 DB call_targets 为空，暴露静态分析盲区。",
+      "facts": [
+        {
+          "key": "fn:pipealloc",
+          "kind": "caller",
+          "file": "kernel/pipe.c",
+          "line": 29,
+          "detail": "pipealloc calls filealloc",
+          "source": "if ((*f0 = filealloc()) == 0 || (*f1 = filealloc()) == 0)"
+        },
+        {
+          "key": "fn:sys_open",
+          "kind": "caller",
+          "file": "kernel/sysfile.c",
+          "line": 368,
+          "detail": "sys_open calls filealloc",
+          "source": "if ((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0) {"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "T1",
+      "cls": "testgen",
+      "kind": "internal",
+      "targets": [
+        "kfork"
+      ],
+      "prompt": "为 kfork 生成测试要点：覆盖哪些分支、错误返回、资源清理点？给出可映射到断言/故障注入的测试清单。",
+      "gt": [
+        "internal",
+        "branches:kfork",
+        "returns:kfork",
+        "resources:kfork"
+      ],
+      "rubric": "0.7*F1(facts) + 0.3*manual(错误注入点：allocproc/uvmcopy 失败；锁配对)。",
+      "manual_note": "测试要点：allocproc 失败、uvmcopy 失败、fd 表复制、锁配对 release。",
+      "facts": [
+        {
+          "key": "kernel/proc.c:266:branch",
+          "kind": "branch",
+          "file": "kernel/proc.c",
+          "line": 266,
+          "detail": "if: (np = allocproc()) == 0",
+          "source": "if ((np = allocproc()) == 0) {"
+        },
+        {
+          "key": "kernel/proc.c:271:branch",
+          "kind": "branch",
+          "file": "kernel/proc.c",
+          "line": 271,
+          "detail": "if: uvmcopy(p->pagetable, np->pagetable, p->sz) < 0",
+          "source": "if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {"
+        },
+        {
+          "key": "kernel/proc.c:285:branch",
+          "kind": "branch",
+          "file": "kernel/proc.c",
+          "line": 285,
+          "detail": "for: i < NOFILE",
+          "source": "for (i = 0; i < NOFILE; i++)"
+        },
+        {
+          "key": "kernel/proc.c:286:branch",
+          "kind": "branch",
+          "file": "kernel/proc.c",
+          "line": 286,
+          "detail": "if: p->ofile[i]",
+          "source": "if (p->ofile[i])"
+        },
+        {
+          "key": "kernel/proc.c:267:return",
+          "kind": "return",
+          "file": "kernel/proc.c",
+          "line": 267,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/proc.c:274:return",
+          "kind": "return",
+          "file": "kernel/proc.c",
+          "line": 274,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/proc.c:304:return",
+          "kind": "return",
+          "file": "kernel/proc.c",
+          "line": 304,
+          "detail": "return pid",
+          "source": "return pid;"
+        },
+        {
+          "key": "kernel/proc.c:273:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 273,
+          "detail": "release release",
+          "source": "release(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:294:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 294,
+          "detail": "release release",
+          "source": "release(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:296:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 296,
+          "detail": "acquire acquire",
+          "source": "acquire(&wait_lock);"
+        },
+        {
+          "key": "kernel/proc.c:298:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 298,
+          "detail": "release release",
+          "source": "release(&wait_lock);"
+        },
+        {
+          "key": "kernel/proc.c:300:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 300,
+          "detail": "acquire acquire",
+          "source": "acquire(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:302:resource",
+          "kind": "resource",
+          "file": "kernel/proc.c",
+          "line": 302,
+          "detail": "release release",
+          "source": "release(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:263:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 263,
+          "detail": "myproc",
+          "source": "struct proc *p = myproc();"
+        },
+        {
+          "key": "kernel/proc.c:266:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 266,
+          "detail": "allocproc",
+          "source": "if ((np = allocproc()) == 0) {"
+        },
+        {
+          "key": "kernel/proc.c:271:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 271,
+          "detail": "uvmcopy",
+          "source": "if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {"
+        },
+        {
+          "key": "kernel/proc.c:272:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 272,
+          "detail": "freeproc",
+          "source": "freeproc(np);"
+        },
+        {
+          "key": "kernel/proc.c:273:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 273,
+          "detail": "release",
+          "source": "release(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:287:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 287,
+          "detail": "filedup",
+          "source": "np->ofile[i] = filedup(p->ofile[i]);"
+        },
+        {
+          "key": "kernel/proc.c:288:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 288,
+          "detail": "idup",
+          "source": "np->cwd = idup(p->cwd);"
+        },
+        {
+          "key": "kernel/proc.c:290:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 290,
+          "detail": "safestrcpy",
+          "source": "safestrcpy(np->name, p->name, sizeof(p->name));"
+        },
+        {
+          "key": "kernel/proc.c:294:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 294,
+          "detail": "release",
+          "source": "release(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:296:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 296,
+          "detail": "acquire",
+          "source": "acquire(&wait_lock);"
+        },
+        {
+          "key": "kernel/proc.c:298:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 298,
+          "detail": "release",
+          "source": "release(&wait_lock);"
+        },
+        {
+          "key": "kernel/proc.c:300:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 300,
+          "detail": "acquire",
+          "source": "acquire(&np->lock);"
+        },
+        {
+          "key": "kernel/proc.c:302:call",
+          "kind": "call",
+          "file": "kernel/proc.c",
+          "line": 302,
+          "detail": "release",
+          "source": "release(&np->lock);"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "T2",
+      "cls": "testgen",
+      "kind": "internal",
+      "targets": [
+        "namex"
+      ],
+      "prompt": "为 namex 设计路径覆盖测试：\"/\"、\".\"、\"..\"、不存在、非目录、父目录参数等分支如何覆盖？列出分支条件与返回点。",
+      "gt": [
+        "internal",
+        "branches:namex",
+        "returns:namex",
+        "resources:namex"
+      ],
+      "rubric": "0.7*F1(facts) + 0.3*manual(用 mkdir/link/chdir 触发各分支)。",
+      "manual_note": "分支含 rooted、skipelem 循环、非目录、nlink==0、nameiparent 末尾判定。",
+      "facts": [
+        {
+          "key": "kernel/fs.c:696:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 696,
+          "detail": "if: *path == '/'",
+          "source": "if (*path == '/')"
+        },
+        {
+          "key": "kernel/fs.c:701:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 701,
+          "detail": "while: (path = skipelem(path, name)) != 0",
+          "source": "while ((path = skipelem(path, name)) != 0) {"
+        },
+        {
+          "key": "kernel/fs.c:703:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 703,
+          "detail": "if: ip->type != T_DIR",
+          "source": "if (ip->type != T_DIR) {"
+        },
+        {
+          "key": "kernel/fs.c:707:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 707,
+          "detail": "if: ip->nlink == 0",
+          "source": "if (ip->nlink == 0) {"
+        },
+        {
+          "key": "kernel/fs.c:711:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 711,
+          "detail": "logical_and: nameiparent",
+          "source": "if (nameiparent && *path == '\\0') {"
+        },
+        {
+          "key": "kernel/fs.c:716:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 716,
+          "detail": "if: (next = dirlookup(ip, name, 0)) == 0",
+          "source": "if ((next = dirlookup(ip, name, 0)) == 0) {"
+        },
+        {
+          "key": "kernel/fs.c:723:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 723,
+          "detail": "if: nameiparent",
+          "source": "if (nameiparent) {"
+        },
+        {
+          "key": "kernel/fs.c:705:return",
+          "kind": "return",
+          "file": "kernel/fs.c",
+          "line": 705,
+          "detail": "return 0",
+          "source": "return 0;"
+        },
+        {
+          "key": "kernel/fs.c:709:return",
+          "kind": "return",
+          "file": "kernel/fs.c",
+          "line": 709,
+          "detail": "return 0",
+          "source": "return 0;"
+        },
+        {
+          "key": "kernel/fs.c:714:return",
+          "kind": "return",
+          "file": "kernel/fs.c",
+          "line": 714,
+          "detail": "return ip",
+          "source": "return ip;"
+        },
+        {
+          "key": "kernel/fs.c:718:return",
+          "kind": "return",
+          "file": "kernel/fs.c",
+          "line": 718,
+          "detail": "return 0",
+          "source": "return 0;"
+        },
+        {
+          "key": "kernel/fs.c:725:return",
+          "kind": "return",
+          "file": "kernel/fs.c",
+          "line": 725,
+          "detail": "return 0",
+          "source": "return 0;"
+        },
+        {
+          "key": "kernel/fs.c:727:return",
+          "kind": "return",
+          "file": "kernel/fs.c",
+          "line": 727,
+          "detail": "return ip",
+          "source": "return ip;"
+        },
+        {
+          "key": "kernel/fs.c:702:resource",
+          "kind": "resource",
+          "file": "kernel/fs.c",
+          "line": 702,
+          "detail": "acquire ilock",
+          "source": "ilock(ip);"
+        },
+        {
+          "key": "kernel/fs.c:704:resource",
+          "kind": "resource",
+          "file": "kernel/fs.c",
+          "line": 704,
+          "detail": "release iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/fs.c:708:resource",
+          "kind": "resource",
+          "file": "kernel/fs.c",
+          "line": 708,
+          "detail": "release iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/fs.c:713:resource",
+          "kind": "resource",
+          "file": "kernel/fs.c",
+          "line": 713,
+          "detail": "release iunlock",
+          "source": "iunlock(ip);"
+        },
+        {
+          "key": "kernel/fs.c:717:resource",
+          "kind": "resource",
+          "file": "kernel/fs.c",
+          "line": 717,
+          "detail": "release iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/fs.c:720:resource",
+          "kind": "resource",
+          "file": "kernel/fs.c",
+          "line": 720,
+          "detail": "release iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/fs.c:697:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 697,
+          "detail": "iget",
+          "source": "ip = iget(ROOTDEV, ROOTINO);"
+        },
+        {
+          "key": "kernel/fs.c:699:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 699,
+          "detail": "idup",
+          "source": "ip = idup(myproc()->cwd);"
+        },
+        {
+          "key": "kernel/fs.c:701:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 701,
+          "detail": "skipelem",
+          "source": "while ((path = skipelem(path, name)) != 0) {"
+        },
+        {
+          "key": "kernel/fs.c:702:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 702,
+          "detail": "ilock",
+          "source": "ilock(ip);"
+        },
+        {
+          "key": "kernel/fs.c:704:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 704,
+          "detail": "iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/fs.c:708:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 708,
+          "detail": "iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/fs.c:713:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 713,
+          "detail": "iunlock",
+          "source": "iunlock(ip);"
+        },
+        {
+          "key": "kernel/fs.c:716:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 716,
+          "detail": "dirlookup",
+          "source": "if ((next = dirlookup(ip, name, 0)) == 0) {"
+        },
+        {
+          "key": "kernel/fs.c:717:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 717,
+          "detail": "iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/fs.c:720:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 720,
+          "detail": "iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/fs.c:724:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 724,
+          "detail": "iput",
+          "source": "iput(ip);"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "T3",
+      "cls": "testgen",
+      "kind": "internal",
+      "targets": [
+        "sys_open"
+      ],
+      "prompt": "为 open() 写测试：O_CREATE、O_TRUNC、目录/设备文件、fd 耗尽等错误路径如何覆盖？列出分支条件、错误返回点和清理动作。",
+      "gt": [
+        "internal",
+        "branches:sys_open",
+        "returns:sys_open",
+        "resources:sys_open"
+      ],
+      "rubric": "0.7*F1(facts) + 0.3*manual(NOFILE 耗尽、cwd 权限、设备 branch)。",
+      "manual_note": "7 个 -1 返回点；配合 fd 耗尽（NOFILE）与只读目录测试。",
+      "facts": [
+        {
+          "key": "kernel/sysfile.c:338:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 338,
+          "detail": "if: (n = argstr(0, path, MAXPATH)) < 0",
+          "source": "if ((n = argstr(0, path, MAXPATH)) < 0)"
+        },
+        {
+          "key": "kernel/sysfile.c:343:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 343,
+          "detail": "if: omode & O_CREATE",
+          "source": "if (omode & O_CREATE) {"
+        },
+        {
+          "key": "kernel/sysfile.c:345:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 345,
+          "detail": "if: ip == 0",
+          "source": "if (ip == 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:350:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 350,
+          "detail": "if: (ip = namei(path)) == 0",
+          "source": "if ((ip = namei(path)) == 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:355:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 355,
+          "detail": "logical_and: ip->type == T_DIR",
+          "source": "if (ip->type == T_DIR && omode != O_RDONLY) {"
+        },
+        {
+          "key": "kernel/sysfile.c:362:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 362,
+          "detail": "logical_and: ip->type == T_DEVICE",
+          "source": "if (ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)) {"
+        },
+        {
+          "key": "kernel/sysfile.c:368:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 368,
+          "detail": "logical_or: (f = filealloc()) == 0",
+          "source": "if ((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:369:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 369,
+          "detail": "if: f",
+          "source": "if (f)"
+        },
+        {
+          "key": "kernel/sysfile.c:376:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 376,
+          "detail": "if: ip->type == T_DEVICE",
+          "source": "if (ip->type == T_DEVICE) {"
+        },
+        {
+          "key": "kernel/sysfile.c:387:branch",
+          "kind": "branch",
+          "file": "kernel/sysfile.c",
+          "line": 387,
+          "detail": "logical_and: (omode & O_TRUNC)",
+          "source": "if ((omode & O_TRUNC) && ip->type == T_FILE) {"
+        },
+        {
+          "key": "kernel/sysfile.c:339:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 339,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:347:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 347,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:352:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 352,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:358:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 358,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:365:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 365,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:373:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 373,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/sysfile.c:394:return",
+          "kind": "return",
+          "file": "kernel/sysfile.c",
+          "line": 394,
+          "detail": "return fd",
+          "source": "return fd;"
+        },
+        {
+          "key": "kernel/sysfile.c:341:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 341,
+          "detail": "acquire begin_op",
+          "source": "begin_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:346:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 346,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:351:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 351,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:354:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 354,
+          "detail": "acquire ilock",
+          "source": "ilock(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:356:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 356,
+          "detail": "release iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:357:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 357,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:363:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 363,
+          "detail": "release iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:364:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 364,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:368:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 368,
+          "detail": "acquire filealloc",
+          "source": "if ((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:370:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 370,
+          "detail": "release fileclose",
+          "source": "fileclose(f);"
+        },
+        {
+          "key": "kernel/sysfile.c:371:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 371,
+          "detail": "release iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:372:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 372,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:391:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 391,
+          "detail": "release iunlock",
+          "source": "iunlock(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:392:resource",
+          "kind": "resource",
+          "file": "kernel/sysfile.c",
+          "line": 392,
+          "detail": "release end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:337:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 337,
+          "detail": "argint",
+          "source": "argint(1, &omode);"
+        },
+        {
+          "key": "kernel/sysfile.c:338:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 338,
+          "detail": "argstr",
+          "source": "if ((n = argstr(0, path, MAXPATH)) < 0)"
+        },
+        {
+          "key": "kernel/sysfile.c:341:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 341,
+          "detail": "begin_op",
+          "source": "begin_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:344:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 344,
+          "detail": "create",
+          "source": "ip = create(path, T_FILE, 0, 0);"
+        },
+        {
+          "key": "kernel/sysfile.c:346:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 346,
+          "detail": "end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:350:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 350,
+          "detail": "namei",
+          "source": "if ((ip = namei(path)) == 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:351:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 351,
+          "detail": "end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:354:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 354,
+          "detail": "ilock",
+          "source": "ilock(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:356:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 356,
+          "detail": "iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:357:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 357,
+          "detail": "end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:363:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 363,
+          "detail": "iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:364:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 364,
+          "detail": "end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:368:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 368,
+          "detail": "filealloc",
+          "source": "if ((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0) {"
+        },
+        {
+          "key": "kernel/sysfile.c:370:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 370,
+          "detail": "fileclose",
+          "source": "fileclose(f);"
+        },
+        {
+          "key": "kernel/sysfile.c:371:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 371,
+          "detail": "iunlockput",
+          "source": "iunlockput(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:372:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 372,
+          "detail": "end_op",
+          "source": "end_op();"
+        },
+        {
+          "key": "kernel/sysfile.c:388:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 388,
+          "detail": "itrunc",
+          "source": "itrunc(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:391:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 391,
+          "detail": "iunlock",
+          "source": "iunlock(ip);"
+        },
+        {
+          "key": "kernel/sysfile.c:392:call",
+          "kind": "call",
+          "file": "kernel/sysfile.c",
+          "line": 392,
+          "detail": "end_op",
+          "source": "end_op();"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "T4",
+      "cls": "testgen",
+      "kind": "internal",
+      "targets": [
+        "writei"
+      ],
+      "prompt": "为 writei 设计边界/错误覆盖测试：越界、MAXFILE、addr==0、copyin 失败、跨块写、日志提交。列出分支条件、返回点和资源操作。",
+      "gt": [
+        "internal",
+        "branches:writei",
+        "returns:writei",
+        "resources:writei"
+      ],
+      "rubric": "0.7*F1(facts) + 0.3*manual(log_write 与 brelse 配对、MAXFILE 边界)。",
+      "manual_note": "分支：off>size、off+n<off、off+n>MAXFILE*BSIZE、addr==0、copyin 失败、off>size 更新。",
+      "facts": [
+        {
+          "key": "kernel/fs.c:549:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 549,
+          "detail": "logical_or: off > ip->size",
+          "source": "if (off > ip->size || off + n < off)"
+        },
+        {
+          "key": "kernel/fs.c:551:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 551,
+          "detail": "if: off + n > MAXFILE * BSIZE",
+          "source": "if (off + n > MAXFILE * BSIZE)"
+        },
+        {
+          "key": "kernel/fs.c:554:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 554,
+          "detail": "for: tot < n",
+          "source": "for (tot = 0; tot < n; tot += m, off += m, src += m) {"
+        },
+        {
+          "key": "kernel/fs.c:556:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 556,
+          "detail": "if: addr == 0",
+          "source": "if (addr == 0)"
+        },
+        {
+          "key": "kernel/fs.c:560:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 560,
+          "detail": "if: either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1",
+          "source": "if (either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {"
+        },
+        {
+          "key": "kernel/fs.c:570:branch",
+          "kind": "branch",
+          "file": "kernel/fs.c",
+          "line": 570,
+          "detail": "if: off > ip->size",
+          "source": "if (off > ip->size)"
+        },
+        {
+          "key": "kernel/fs.c:550:return",
+          "kind": "return",
+          "file": "kernel/fs.c",
+          "line": 550,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/fs.c:552:return",
+          "kind": "return",
+          "file": "kernel/fs.c",
+          "line": 552,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/fs.c:578:return",
+          "kind": "return",
+          "file": "kernel/fs.c",
+          "line": 578,
+          "detail": "return tot",
+          "source": "return tot;"
+        },
+        {
+          "key": "kernel/fs.c:558:resource",
+          "kind": "resource",
+          "file": "kernel/fs.c",
+          "line": 558,
+          "detail": "acquire bread",
+          "source": "bp = bread(ip->dev, addr);"
+        },
+        {
+          "key": "kernel/fs.c:563:resource",
+          "kind": "resource",
+          "file": "kernel/fs.c",
+          "line": 563,
+          "detail": "release brelse",
+          "source": "brelse(bp);"
+        },
+        {
+          "key": "kernel/fs.c:567:resource",
+          "kind": "resource",
+          "file": "kernel/fs.c",
+          "line": 567,
+          "detail": "release brelse",
+          "source": "brelse(bp);"
+        },
+        {
+          "key": "kernel/fs.c:555:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 555,
+          "detail": "bmap",
+          "source": "uint addr = bmap(ip, off / BSIZE);"
+        },
+        {
+          "key": "kernel/fs.c:558:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 558,
+          "detail": "bread",
+          "source": "bp = bread(ip->dev, addr);"
+        },
+        {
+          "key": "kernel/fs.c:560:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 560,
+          "detail": "either_copyin",
+          "source": "if (either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {"
+        },
+        {
+          "key": "kernel/fs.c:562:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 562,
+          "detail": "log_write",
+          "source": "log_write(bp);"
+        },
+        {
+          "key": "kernel/fs.c:563:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 563,
+          "detail": "brelse",
+          "source": "brelse(bp);"
+        },
+        {
+          "key": "kernel/fs.c:566:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 566,
+          "detail": "log_write",
+          "source": "log_write(bp);"
+        },
+        {
+          "key": "kernel/fs.c:567:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 567,
+          "detail": "brelse",
+          "source": "brelse(bp);"
+        },
+        {
+          "key": "kernel/fs.c:576:call",
+          "kind": "call",
+          "file": "kernel/fs.c",
+          "line": 576,
+          "detail": "iupdate",
+          "source": "iupdate(ip);"
+        }
+      ],
+      "invalid": []
+    },
+    {
+      "id": "T5",
+      "cls": "testgen",
+      "kind": "internal",
+      "targets": [
+        "uvmcopy"
+      ],
+      "prompt": "为 uvmcopy 设计 fork 失败注入测试：哪些分支与返回点需要覆盖？如何制造 walk 失败、kalloc 失败、mappages 失败？",
+      "gt": [
+        "internal",
+        "branches:uvmcopy",
+        "returns:uvmcopy",
+        "resources:uvmcopy"
+      ],
+      "rubric": "0.7*F1(facts) + 0.3*manual(失败后 uvmunmap/kfree 清理断言)。",
+      "manual_note": "分支：walk==0、!PTE_V、kalloc==0、mappages!=0；返回 0/-1。",
+      "facts": [
+        {
+          "key": "kernel/vm.c:306:branch",
+          "kind": "branch",
+          "file": "kernel/vm.c",
+          "line": 306,
+          "detail": "for: i < sz",
+          "source": "for (i = 0; i < sz; i += PGSIZE) {"
+        },
+        {
+          "key": "kernel/vm.c:307:branch",
+          "kind": "branch",
+          "file": "kernel/vm.c",
+          "line": 307,
+          "detail": "if: (pte = walk(old, i, 0)) == 0",
+          "source": "if ((pte = walk(old, i, 0)) == 0)"
+        },
+        {
+          "key": "kernel/vm.c:309:branch",
+          "kind": "branch",
+          "file": "kernel/vm.c",
+          "line": 309,
+          "detail": "if: (*pte & PTE_V) == 0",
+          "source": "if ((*pte & PTE_V) == 0)"
+        },
+        {
+          "key": "kernel/vm.c:313:branch",
+          "kind": "branch",
+          "file": "kernel/vm.c",
+          "line": 313,
+          "detail": "if: (mem = kalloc()) == 0",
+          "source": "if ((mem = kalloc()) == 0)"
+        },
+        {
+          "key": "kernel/vm.c:316:branch",
+          "kind": "branch",
+          "file": "kernel/vm.c",
+          "line": 316,
+          "detail": "if: mappages(new, i, PGSIZE, (uint64)mem, flags) != 0",
+          "source": "if (mappages(new, i, PGSIZE, (uint64)mem, flags) != 0) {"
+        },
+        {
+          "key": "kernel/vm.c:321:return",
+          "kind": "return",
+          "file": "kernel/vm.c",
+          "line": 321,
+          "detail": "return 0",
+          "source": "return 0;"
+        },
+        {
+          "key": "kernel/vm.c:325:return",
+          "kind": "return",
+          "file": "kernel/vm.c",
+          "line": 325,
+          "detail": "return -1",
+          "source": "return -1;"
+        },
+        {
+          "key": "kernel/vm.c:313:resource",
+          "kind": "resource",
+          "file": "kernel/vm.c",
+          "line": 313,
+          "detail": "acquire kalloc",
+          "source": "if ((mem = kalloc()) == 0)"
+        },
+        {
+          "key": "kernel/vm.c:317:resource",
+          "kind": "resource",
+          "file": "kernel/vm.c",
+          "line": 317,
+          "detail": "release kfree",
+          "source": "kfree(mem);"
+        },
+        {
+          "key": "kernel/vm.c:307:call",
+          "kind": "call",
+          "file": "kernel/vm.c",
+          "line": 307,
+          "detail": "walk",
+          "source": "if ((pte = walk(old, i, 0)) == 0)"
+        },
+        {
+          "key": "kernel/vm.c:313:call",
+          "kind": "call",
+          "file": "kernel/vm.c",
+          "line": 313,
+          "detail": "kalloc",
+          "source": "if ((mem = kalloc()) == 0)"
+        },
+        {
+          "key": "kernel/vm.c:315:call",
+          "kind": "call",
+          "file": "kernel/vm.c",
+          "line": 315,
+          "detail": "memmove",
+          "source": "memmove(mem, (char *)pa, PGSIZE);"
+        },
+        {
+          "key": "kernel/vm.c:316:call",
+          "kind": "call",
+          "file": "kernel/vm.c",
+          "line": 316,
+          "detail": "mappages",
+          "source": "if (mappages(new, i, PGSIZE, (uint64)mem, flags) != 0) {"
+        },
+        {
+          "key": "kernel/vm.c:317:call",
+          "kind": "call",
+          "file": "kernel/vm.c",
+          "line": 317,
+          "detail": "kfree",
+          "source": "kfree(mem);"
+        },
+        {
+          "key": "kernel/vm.c:324:call",
+          "kind": "call",
+          "file": "kernel/vm.c",
+          "line": 324,
+          "detail": "uvmunmap",
+          "source": "uvmunmap(new, 0, i / PGSIZE, 1);"
+        }
+      ],
+      "invalid": []
+    }
+  ]
+}

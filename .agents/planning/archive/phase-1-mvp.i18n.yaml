@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-17
+en:
+  file: phase-1-mvp.md
+  sha256: 94c369391734b284de0acf67c596c2c57a9b4f0ddc02701f748afb5fcfedb037
+zh:
+  file: phase-1-mvp.zh.md
+  sha256: 7dc416d2b1bdedcfc0e76ee450b18ff013f2ab621cee654a8ea761d75f0dfae0

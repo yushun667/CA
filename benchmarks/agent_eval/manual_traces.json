@@ -1,0 +1,88 @@
+{
+  "meta": {
+    "purpose": "Manual controlled traces (no sub-agents available at delegation depth 0). Each trace executes one condition's real commands in the xv6 corpus and records the evidence, the manual rubric judgment, and the observed CA limitation.",
+    "db": ".tmp/lead/final_xv6.db",
+    "corpus": ".tmp/corpus/xv6-riscv",
+    "date": "2026-10-18",
+    "conditions": {
+      "A": "read source only (grep/read)",
+      "B": "CA basic index (functions/callers/callees/detail)",
+      "C": "CA basic + deep facts (branches/returns/resources/leaks) + graph"
+    }
+  },
+  "traces": [
+    {
+      "id": "MT-D3",
+      "task": "D3",
+      "question": "从 sys_open 出发，追踪打开文件到磁盘驱动（virtio_disk_rw）的调用链。",
+      "condition": "C",
+      "commands": [
+        "ca graph --from sys_open --depth 6 --format json --db .tmp/lead/final_xv6.db"
+      ],
+      "evidence": {
+        "nodes": 113,
+        "observed_chain_examples": [
+          "sys_open -> namei (kernel/fs.c) -> namex -> dirlookup -> readi -> bread -> virtio_disk_rw",
+          "sys_open -> begin_op/end_op -> commit -> write_log/bread -> virtio_disk_rw"
+        ],
+        "virtio_disk_rw_depth": 3
+      },
+      "manual_score": {
+        "rubric": "0.7*F1(facts) + 0.3*manual(chain explanation)",
+        "automated_f1": 1.0,
+        "manual_chain_correct": true,
+        "note": "一条 graph 命令即得到跨 4 文件的完整链路；depth=6 单次结果 113 节点，需要按 depth 截断控制上下文。"
+      },
+      "condition_A_cost_for_same_chain": {
+        "read_files": ["kernel/sysfile.c", "kernel/fs.c", "kernel/bio.c", "kernel/virtio_disk.c"],
+        "approx_bytes": 101000,
+        "tool_calls": "4 reads + 3 greps",
+        "note": "A 需要人工沿 readi/bread 继续展开，且要读 4 个文件才能确定链路；估算上下文约为 C 的 4-8 倍。"
+      }
+    },
+    {
+      "id": "MT-D5",
+      "task": "D5",
+      "question": "proc_mapstacks 的 kalloc 泄漏告警是真 bug 还是误报？",
+      "condition": "C",
+      "commands": [
+        "ca query leaks --db .tmp/lead/final_xv6.db --json",
+        "sed -n '33,44p' .tmp/corpus/xv6-riscv/kernel/proc.c"
+      ],
+      "evidence": {
+        "finding": "leak: kalloc acquiring 'pa' may leak: a path reaches the function exit without a release",
+        "source": "for (p = proc; ...) { char *pa = kalloc(); if (pa == 0) panic(); uint64 va = KSTACK(...); kvmmap(...); }"
+      },
+      "manual_score": {
+        "automated_f1": 1.0,
+        "manual_conclusion": "false_positive",
+        "reason": "内核栈页表在内核生命周期内常驻，proc_mapstacks 只在 procinit 时调用一次，没有释放是设计意图，不是资源泄漏。深析 finding 只能作为线索，不能直接当 bug 报告。",
+        "note": "该 finding 在 DB 中为 severity=warning；agent 若直接采信会产生假阳性。"
+      }
+    },
+    {
+      "id": "MT-C5",
+      "task": "C5",
+      "question": "filealloc 的错误语义改动影响面，以及为什么 sys_open 的调用者不可见？",
+      "condition": "B",
+      "commands": [
+        "ca query callers filealloc --db .tmp/lead/final_xv6.db --json",
+        "ca query callers sys_open --db .tmp/lead/final_xv6.db --json",
+        "grep -n 'sys_open' .tmp/corpus/xv6-riscv/kernel/syscall.c"
+      ],
+      "evidence": {
+        "filealloc_callers": [
+          {"caller": "pipealloc", "file": "kernel/pipe.c", "line": 29},
+          {"caller": "sys_open", "file": "kernel/sysfile.c", "line": 368}
+        ],
+        "sys_open_callers": [],
+        "syscall_dispatch": "kernel/syscall.c:125 `[SYS_open] = sys_open` (function-pointer table)"
+      },
+      "manual_score": {
+        "automated_f1": 1.0,
+        "manual_conclusion": "correct_plus_blind_spot",
+        "note": "直接调用者正确，但 sys_open 的调用者是 syscall 表的函数指针分发；本库 call_targets 为空、静态分析未建模该间接边，因此 sys_open 在调用图中是根节点。coding agent 做“谁调用 open”影响面分析时必须人工补 syscall 表。"
+      }
+    }
+  ]
+}

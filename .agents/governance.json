@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "template_version": "1.1.0",
+  "document_limits": {
+    "root_agents": {
+      "max_lines": 160,
+      "max_chars": 4000
+    },
+    "agents_root": {
+      "max_lines": 120,
+      "max_chars": 3000
+    },
+    "directory_agents": {
+      "max_lines": 80,
+      "max_chars": 1500
+    },
+    "managed_document": {
+      "max_lines": 180,
+      "max_chars": 5000
+    },
+    "task_management_docs_max_chars": 15000,
+    "automatic_agents_chain_max_bytes": 24576
+  }
+}

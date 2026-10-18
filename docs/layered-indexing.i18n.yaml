@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-18
+en:
+  file: layered-indexing.md
+  sha256: 9741c83df49a60d623b08e89904c39a1c0411d079e4ac9aec8d0022b6679a6ba
+zh:
+  file: layered-indexing.zh.md
+  sha256: 144c1711546c5fbbb91b582dfffecc841632b877e386df1ddd5351429300132d

@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-18
+en:
+  file: mcp.md
+  sha256: 77fbebbe7213397e7b48e83d69a768b6a069c2ba0e31c376b1a55f53242c748b
+zh:
+  file: mcp.zh.md
+  sha256: 695aa6fed1d004bbc4266bd5c881fccf4cb107cf6a32b01e9e3e936f8b2ea4af
