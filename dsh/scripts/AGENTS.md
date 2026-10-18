@@ -4,6 +4,7 @@
 
 ## 文件
 
+- `build-wheelhouse.mjs`：为指定平台构建离线 wheelhouse（CA wheel + 依赖 wheel），支持 linux-x64/linux-arm64/macos-*/windows-x64 与 `--tar`。
 - `build-client.mjs`：无依赖 ESM 打包器，读 `lib/client/index.js` 生成 `client.js`（`window.__ModuleLoader__` 格式）；不支持 JSX/CSS import/动态 import，遇到不支持语法时报错并给出文件与语句。
 - [verify/AGENTS.md](verify/AGENTS.md)：安装核验脚本（只读）。
 

@@ -13,6 +13,7 @@
 ## 子目录
 
 - [lib/AGENTS.md](lib/AGENTS.md)：Host/Client 源码，模块接口见 [CONTRACT.md](CONTRACT.md)。
+- [backend/AGENTS.md](backend/AGENTS.md)：内置 CA wheel（安装产物）。
 - [locale/AGENTS.md](locale/AGENTS.md)：bundle 展示元数据（en/zh）。
 - [scripts/AGENTS.md](scripts/AGENTS.md)：client 打包器与安装核验。
 - [test/AGENTS.md](test/AGENTS.md)：node:test 测试基线。

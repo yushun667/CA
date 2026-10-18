@@ -1,0 +1,2 @@
+include src/ca/store/schema.sql
+recursive-include src/ca/ui/static *.js *.css *.html *.svg

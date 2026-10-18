@@ -18,3 +18,12 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.setuptools.package-data]
+"ca.store" = ["schema.sql"]
+"ca.ui" = [
+  "static/*.js",
+  "static/*.css",
+  "static/*.html",
+  "static/*.svg",
+]
