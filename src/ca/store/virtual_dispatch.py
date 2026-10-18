@@ -105,9 +105,11 @@ _FORWARD_SQL = f"""
 WITH RECURSIVE vt(function_id, base_function_id, depth) AS (
     SELECT function_id, base_function_id, 1 FROM virtual_overrides
     UNION
-    SELECT vo.function_id, vo.base_function_id, vt.depth + 1
+    -- Walk *down* the override chain: find methods that override the previous
+    -- candidate while keeping the original static base target for the join.
+    SELECT vo.function_id, vt.base_function_id, vt.depth + 1
     FROM virtual_overrides AS vo
-    JOIN vt ON vo.function_id = vt.base_function_id
+    JOIN vt ON vo.base_function_id = vt.function_id
     WHERE vt.depth < {MAX_DEPTH}
 ),
 edges(function_id, base_function_id, depth) AS (
@@ -127,6 +129,8 @@ JOIN edges ON c.callee_id = edges.base_function_id
 LEFT JOIN functions AS cf ON cf.id = c.caller_id
 LEFT JOIN functions AS tf ON tf.id = edges.function_id
 WHERE c.kind = 'virtual' AND c.caller_id IN ({{marks}})
+ORDER BY call_file, call_line, caller_id, callee_id
+LIMIT ?
 """
 
 def _placeholders(count: int) -> str:
@@ -144,7 +148,7 @@ def forward_edges(
     sql = _FORWARD_SQL.format(marks=_placeholders(len(ids)))
     try:
         rows = connection.execute(sql, [*ids, limit]).fetchall()
-    except sqlite3.Error:
+    except sqlite3.OperationalError:  # missing virtual tables on old databases
         return []
     result = []
     for row in rows:
@@ -157,10 +161,11 @@ def forward_edges(
 
 
 def _reverse_sql(seed_count: int) -> str:
+    seed_rows = " UNION ALL ".join("SELECT ? AS id" for _ in range(seed_count))
     return f"""
 WITH RECURSIVE anc(function_id, ancestor_id, depth) AS (
     SELECT id, id, 0 FROM (
-        SELECT {_placeholders(seed_count)}
+        {seed_rows}
     )
     UNION
     SELECT anc.function_id, vo.base_function_id, anc.depth + 1
@@ -185,6 +190,8 @@ JOIN edges ON c.callee_id = edges.ancestor_id
 LEFT JOIN functions AS cf ON cf.id = c.caller_id
 LEFT JOIN functions AS tf ON tf.id = edges.function_id
 WHERE c.kind = 'virtual' AND edges.function_id IN ({_placeholders(seed_count)})
+ORDER BY call_file, call_line, caller_id, callee_id
+LIMIT ?
 """
 
 
@@ -199,7 +206,7 @@ def reverse_edges(
     sql = _reverse_sql(len(ids))
     try:
         rows = connection.execute(sql, [*ids, *ids, limit]).fetchall()
-    except sqlite3.Error:
+    except sqlite3.OperationalError:  # missing virtual tables on old databases
         return []
     result = []
     for row in rows:

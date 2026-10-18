@@ -148,3 +148,70 @@ def test_candidate_queries_degrade_without_virtual_tables(virtual_store) -> None
     # must not raise on an old/layout-limited database.
     assert rows
     assert all(row["kind"] in {"virtual", "virtual_candidate"} for row in rows)
+
+
+def test_cross_tu_candidates_work_without_materialized_call_targets() -> None:
+    """Regression: query-time override merge must actually run (binding/LIMIT).
+
+    The buggy version passed one extra bind value while the SQL had no LIMIT
+    placeholder; sqlite3 raised ProgrammingError which was swallowed by the
+    broad ``except sqlite3.Error``, so cross-TU virtual candidates were always
+    empty. This test builds a store from parse results only (no analyze pass, so
+    ``call_targets`` contains no materialized virtual candidates) and requires
+    ``forward_edges``/``reverse_edges`` plus query_callees/query_callers to
+    return query-time rows with the expected confidences.
+    """
+
+    db = os.path.join(tempfile.mkdtemp(), "virtual_query_time.db")
+    store = SqliteStore(db)
+    store.open()
+    store.begin()
+    for name in ("ast_virtual_base.cpp", "ast_virtual_derived.cpp"):
+        parsed = parse_compilation_unit(make_unit(name))
+        assert parsed.parse_ok is True, parsed.error
+        store.add_parse_result(parsed.parse_result())  # no add_analysis_result
+    store.commit()
+    store.finalize()
+    try:
+        connection = store.connection
+        assert connection.execute("SELECT COUNT(*) FROM call_targets").fetchone()[0] == 0
+        caller_id = connection.execute(
+            "SELECT id FROM functions WHERE name = 'call_through_base'"
+        ).fetchone()[0]
+        static_id = connection.execute(
+            "SELECT id FROM functions WHERE qualified_name = 'ast_virtual::Base::value'"
+        ).fetchone()[0]
+        derived_id = connection.execute(
+            "SELECT id FROM functions WHERE qualified_name = 'ast_virtual::Derived::value'"
+        ).fetchone()[0]
+
+        forward = virtual_dispatch.forward_edges(connection, [caller_id], 50)
+        assert forward, "forward virtual candidates must be non-empty (LIMIT binding bug)"
+        assert sorted(round(row["confidence"], 2) for row in forward) == [0.5, 0.6]
+        assert {row["callee_id"] for row in forward} == {
+            derived_id,
+            connection.execute(
+                "SELECT id FROM functions WHERE qualified_name = 'ast_virtual::Leaf::value'"
+            ).fetchone()[0],
+        }
+        assert all(row["source"] == "virtual_candidate" for row in forward)
+
+        reverse = virtual_dispatch.reverse_edges(connection, [derived_id], 50)
+        assert reverse, "reverse virtual candidates must be non-empty (LIMIT binding bug)"
+        assert reverse[0]["callee_id"] == derived_id
+        assert round(reverse[0]["confidence"], 2) == 0.6
+
+        callees = [row for row in store.query_callees("call_through_base", limit=50)
+                   if row["kind"] == "virtual_candidate"]
+        assert {round(row["confidence"], 2) for row in callees} == {0.5, 0.6}
+        assert all(row["source"] == "virtual_candidate" for row in callees)
+        callers = [row for row in store.query_callers("ast_virtual::Derived::value", limit=50)
+                   if row["kind"] == "virtual_candidate"]
+        assert callers and callers[0]["caller_name"] == "call_through_base"
+        assert callers[0]["source"] == "virtual_candidate"
+        # The static target is still a direct call edge, never replaced.
+        direct = [row for row in store.query_callees("call_through_base", limit=50)
+                  if row["kind"] == "virtual" and row["source"] == "call"]
+        assert direct
+    finally:
+        store.close()

@@ -66,6 +66,8 @@ TABLES: tuple[str, ...] = (
     "findings",
     "call_targets",
     "tu_includes",
+    "virtual_overrides",
+    "type_bases",
     "callback_registrations",
     "callback_target_links",
     "deep_status",

@@ -394,6 +394,8 @@ EXPECTED_TABLE_COUNTS = {
     "findings": 1,
     "call_targets": 0,
     "tu_includes": 0,
+    "virtual_overrides": 0,
+    "type_bases": 0,
     "deep_status": 1,
     "callback_registrations": 0,
     "callback_target_links": 0,
