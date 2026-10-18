@@ -4,13 +4,14 @@
  *
  * Responsibilities:
  *   - hash routing (`#/search`, `#/fn/<symbol>/<tab>`, `#/stats`,
- *     `#/callbacks`, `#/graph`, `#/tasks`, `#/backend`), with pushState
+ *     `#/callbacks`, `#/graph`, `#/tasks`, `#/projects`), with pushState
  *     navigation plus hashchange/popstate handling for browser back/forward;
  *   - the top bar (brand, navigation, variant selector, connection + backend
  *     status, language switch);
  *   - a page registry filled by the Lead-owned `lib/client/index.js`;
- *   - initial loading, RPC-unreachable, and "backend not configured/stopped"
- *     states, steering the user to `#/backend` when nothing is configured.
+ *   - initial loading, RPC-unreachable, and "no project yet" states that
+ *     steer the user to `#/projects`; the backend itself is installed and
+ *     started automatically, so it is not a user-facing configuration page.
  *
  * Page components are created by their own factories
  * (`createXPage(React, { ui, api, i18n })`) and receive `{ route, navigate }`.
@@ -23,7 +24,7 @@ export const PANEL_ID = 'ca'
 export const NS = 'ca'
 
 /** Pages that have a route even when no explicit entry is registered. */
-export const KNOWN_PAGES = Object.freeze(['search', 'function', 'stats', 'callbacks', 'graph', 'tasks', 'projects', 'backend'])
+export const KNOWN_PAGES = Object.freeze(['search', 'function', 'stats', 'callbacks', 'graph', 'tasks', 'projects'])
 
 const STATUS_POLL_MS = 8000
 
@@ -76,7 +77,9 @@ export function parseHash(rawHash) {
     })
   }
   if (page === 'search' && segments.length === 1) return Object.assign({}, base, { page: 'search' })
-  if (['stats', 'callbacks', 'graph', 'tasks', 'projects', 'backend'].includes(page)) {
+  // The backend page was removed from the product UI; old links land on projects.
+  if (page === 'backend') return Object.assign({}, base, { page: 'projects', path: 'projects' })
+  if (['stats', 'callbacks', 'graph', 'tasks', 'projects'].includes(page)) {
     return Object.assign({}, base, { page })
   }
   if (segments.length === 0) return Object.assign({}, base, { page: 'search' })
@@ -794,7 +797,6 @@ export function createShell(React, bag) {
     { page: 'graph', icon: 'graph', label: 'shell.nav.graph', fallback: 'Graph' },
     { page: 'tasks', icon: 'tasks', label: 'shell.nav.tasks', fallback: 'Tasks' },
     { page: 'projects', icon: 'folder', label: 'shell.nav.projects', fallback: 'Projects' },
-    { page: 'backend', icon: 'backend', label: 'shell.nav.backend', fallback: 'Backend' },
   ]
 
   function backendStateTone(backend) {
@@ -1150,7 +1152,7 @@ export function createShell(React, bag) {
             className: 'ca-status-pill',
             onClick: () => {
               hideTip()
-              navigate({ page: 'backend' })
+              navigate({ page: 'projects' })
             },
             'aria-label': `${translate('shell.backendStatus', null, 'Backend')}: ${backendStateLabel(backend)}`,
             onMouseEnter: (event) =>
@@ -1258,17 +1260,17 @@ export function createShell(React, bag) {
       'div',
       { className: 'ca-static-fill' },
       h(ui.EmptyState, {
-        icon: h(ui.Icon, { name: 'backend', size: 28 }),
-        title: translate('shell.banner.unconfiguredTitle', null, 'CA backend is not configured'),
+        icon: h(ui.Icon, { name: 'folder', size: 28 }),
+        title: translate('shell.banner.unconfiguredTitle', null, 'No project yet'),
         body: translate(
           'shell.banner.unconfiguredBody',
           null,
-          'Choose a local database or a remote SSH host, then start the backend.',
+          'Add one: choose a local directory, or log in to a server and pick a directory.',
         ),
         action: h(
           ui.Button,
-          { variant: 'primary', onClick: () => navigate({ page: 'backend' }) },
-          translate('shell.banner.action', null, 'Open backend settings'),
+          { variant: 'primary', onClick: () => navigate({ page: 'projects' }) },
+          translate('shell.banner.action', null, 'Open projects'),
         ),
       }),
     )
@@ -1278,6 +1280,10 @@ export function createShell(React, bag) {
     const backend = state.backend
     if (!backend || backend.mode === 'unconfigured') return null
     if (backend.state === 'running' || backend.state === 'starting') return null
+    const retry = () => {
+      const action = backend.state === 'error' ? api.backend.restart : api.backend.start
+      Promise.resolve(action.call(api.backend)).catch(() => {})
+    }
     return h(
       'div',
       { className: 'ca-banner ca-banner-warn', role: 'status' },
@@ -1287,13 +1293,13 @@ export function createShell(React, bag) {
         { className: 'ca-banner-text' },
         backend.state === 'error' && backend.error
           ? `${translate('shell.banner.title', null, 'CA backend is not running')}: ${backend.error}`
-          : translate('shell.banner.body', null, 'Start the backend to search and browse the index.'),
+          : translate('shell.banner.autoStarting', null, 'Starting the backend automatically…'),
       ),
       h('span', { className: 'ca-spacer' }),
       h(
         ui.Button,
-        { variant: 'ghost', size: 'sm', onClick: () => navigate({ page: 'backend' }) },
-        translate('shell.banner.action', null, 'Open backend settings'),
+        { variant: 'ghost', size: 'sm', onClick: retry },
+        translate('shell.banner.retry', null, 'Retry'),
       ),
     )
   }
@@ -1354,7 +1360,7 @@ export function createShell(React, bag) {
     }
     const Page = pages.get(route.page)
     if (!Page) {
-      if (unconfigured && route.page !== 'backend') return h(UnconfiguredState)
+      if (unconfigured && route.page !== 'projects') return h(UnconfiguredState)
       return h(
         'div',
         { className: 'ca-static-fill' },
@@ -1364,7 +1370,7 @@ export function createShell(React, bag) {
         }),
       )
     }
-    if (unconfigured && route.page !== 'backend') return h(UnconfiguredState)
+    if (unconfigured && route.page !== 'projects') return h(UnconfiguredState)
     const routeKey = `${route.page}:${route.symbol || ''}:${route.tab || ''}`
     return h(PageErrorBoundary, { key: routeKey }, h(Page, { route, navigate }))
   }
@@ -1413,6 +1419,32 @@ export function createShell(React, bag) {
         stopPolling()
       }
     }, [])
+
+    // The backend is a product detail, not a user setting: when a project is
+    // active and the backend is stopped, start it automatically.
+    const autoStartRef = React.useRef(0)
+    React.useEffect(() => {
+      const backend = state.backend
+      if (!backend || backend.mode === 'unconfigured' || !state.project) return
+      if (backend.state !== 'stopped') return
+      const now = Date.now()
+      if (now - autoStartRef.current < 15000) return
+      autoStartRef.current = now
+      Promise.resolve(api.backend.start()).catch(() => {})
+    }, [state.backend && state.backend.state, state.project && state.project.id])
+
+    // With no active project the useful landing page is #/projects.
+    const landedRef = React.useRef(false)
+    React.useEffect(() => {
+      if (landedRef.current) return
+      if (state.statusLoading || state.connected === null) return
+      if (state.project) {
+        landedRef.current = true
+        return
+      }
+      if (state.route.page !== 'projects') navigate({ page: 'projects' })
+      landedRef.current = true
+    }, [state.route.page, state.project && state.project.id, state.statusLoading, state.connected])
 
     void tick
 

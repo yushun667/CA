@@ -23,7 +23,6 @@ import {
 } from './shell/index.js'
 
 import { createSearchPage } from './pages/search.js'
-import { createBackendPage } from './pages/backend.js'
 import { createProjectsPage } from './pages/projects.js'
 import { createTasksPage } from './pages/tasks.js'
 import { createGraphPage } from './pages/graph.js'
@@ -48,7 +47,6 @@ export function apply(ctx) {
   const shell = createShell(React, bag)
 
   shell.registerPage('search', createSearchPage(React, bag))
-  shell.registerPage('backend', createBackendPage(React, bag))
   shell.registerPage('projects', createProjectsPage(React, bag))
   shell.registerPage('tasks', createTasksPage(React, bag))
   shell.registerPage('graph', createGraphPage(React, bag))

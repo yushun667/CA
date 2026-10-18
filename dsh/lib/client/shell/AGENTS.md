@@ -4,7 +4,7 @@
 
 ## 关键文件
 
-- `index.js`：顶部栏（品牌/导航/variant/连接与后端状态/语言切换）、hash 路由（`#/search`、`#/fn/<symbol>/<tab>`、`#/graph`、`#/stats`、`#/callbacks`、`#/tasks`、`#/backend`）、页面注册表、初次加载与未配置/不可达状态引导（指向 `#/backend`）、状态轮询。
+- `index.js`：顶部栏（品牌/导航/variant/连接与后端状态/语言切换）、hash 路由（`#/search`、`#/fn/<symbol>/<tab>`、`#/graph`、`#/stats`、`#/callbacks`、`#/tasks`、`#/projects`；旧 `#/backend` 重定向到 project��）、页面注册表、无项目时落地 `#/projects`、后端自动启动、状态轮询。
 
 ## 局部规则
 

@@ -71,7 +71,7 @@ DSH 重启后需重新输入；Windows 宿主请用密钥或 SSH agent（不支�
 | `local.env` / `remote.env` | `{}` | 子进程附加环境变量 |
 | `log.*` | 有界 | 插件自身日志轮转与内存环形缓冲设置 |
 
-后端安装器在各次 `#/backend` 请求中配置（`mode: wheel|source`、`offline`、
+后端安装器在准备项目时自动运行；底层选项（`mode: wheel|source`、`offline`、
 `wheelhousePath`、`installDir`、`python`）；最近一次成功安装记录在
 `$DSH_HOME/plugin-data/dsh-ca/install-state.json`（0600），并通过
 `backend.get.install` 暴露。
@@ -114,11 +114,11 @@ CA 是纯 Python，**不需要编译**；运行依赖（`clang`/`libclang`、`du
 `python3.13`/`3.12`/`3.11`）；远程后端需要可用的 SSH（推荐 `scp`，legacy
 source 模式还需要 `rsync`）。在线安装需要网络；离线安装需要目标平台的 wheelhouse。
 
-### 安装 / 修复（后端页）
+### 安装 / 修复
 
-打开 `#/backend`；两个安装器都是幂等的——已有可用 venv 会复用，
-**Install / repair** 会修复或重建损坏的 venv，步骤/日志经
-`backend.installStatus` 轮询。
+在准备项目时自动安装（重新准备即可修复），产品 UI 没有后端配置页；两个安装器都是
+幂等的——已有可用 venv 会复用，重新准备会修复或重建损坏的 venv，步骤/日志经
+`backend.installStatus` 获取。默认在线安装，存在对应 wheelhouse 时自动用离线包。
 
 - **本地后端安装**（Windows/macOS/Linux）：可选安装目录（默认插件的私有
   `backends/local`）与 Python 解释器，然后选择 **Online (PyPI)** 或
@@ -180,16 +180,15 @@ CA wheel 副本 + `manifest.json`）；`--tar` 还会写出 `<platform>.tar.gz`�
 
 ## 本地后端
 
-1. 如果本机还没有 CA，先在 `#/backend` 运行 **Install / repair local backend**
-   （见上）；它创建私有 venv，不触碰系统 Python。
-2. 在 `#/projects` 新建 project：`backend: local`、源码根与本地数据库（单库或
-   shard 目录）。后端页安装卡可用 **Create a local project with this Python**
-   为新 project 预填解释器。
+1. 在 `#/projects` 点 **选择目录…** 选源码树；插件在
+   `$DSH_HOME/plugin-data/dsh-ca/backends/local` 创建私有 CA venv（不触碰系统
+   Python）、自动建库并启动 `ca serve`。
+2. 其他都不用填：数据库路径、解释器、端口全部自动推导。
 3. 激活 project。Host 把它映射为后端配置并运行
    `ca serve --host 127.0.0.1 --port 0 --db <db>`，从 stderr 解析就绪 URL 并校验
    `GET /api/health`；`--port 0` 无法解析时用本地临时空闲端口重试一次。
-4. 启动前可用 **Probe local** 查看发现的解释器、CA 版本、CA checkout 与 libclang
-   状态。
+4. 需要诊断时通过 `backend.probe` / `backend.get` 查看解释器、CA 版本、checkout 与
+   libclang 状态；产品 UI 没有后端设置页。
 
 进程由 Host 持有：插件释放时停止，崩溃重启有次数上限，数据库缺失会返回可操作的错误。
 
@@ -197,15 +196,11 @@ CA wheel 副本 + `manifest.json`）；`--tar` 还会写出 `<platform>.tar.gz`�
 
 适用于 DSH 在 macOS/Windows、源码与索引在 Linux 服务器的场景。
 
-1. 确认基于密钥的 SSH 可非交互执行（`ssh -i <key> user@host true`）。
-2. 在 `#/backend` 填写 SSH 字段（host/user/port/key path），用
-   **Install on remote host**、方式 **wheel（推荐）**，并选择 **Online (PyPI)** 或
-   **Offline (wheelhouse)**。安装器探测主机、校验 Python >= 3.11、上传内置 CA
-   wheel（离线时再上传 wheelhouse）、创建 `~/dsh-ca/backend/venv` 并安装 CA，
-   最后用 `ca version --json` 校验。安装目录可在表单覆盖；不需要 rsync 或源码
-   checkout。
-3. 在 `#/projects` 新建 project：`backend: remote`、服务器上的源码根与数据库
-   （或 shard 目录）路径、同一 SSH 目标。激活它：Host 配置后端并在远端 loopback
+1. 在 `#/projects` 选 **远程服务器**，填用户名、主机/IP、端口，并选择密码或
+   密钥/免密，点 **连接**。
+2. 浏览服务器目录并点 **选择此目录**：插件在服务器安装 `~/dsh-ca/backend`
+   （wheel，在线或离线 wheelhouse）、创建 `~/.dsh-ca/data/<name>/index.db`、启动
+   `ca serve` 并打开 SSH 隧道；不需要 rsync 或源码 checkout。激活它：Host 配置后端并在远端 loopback
    上运行 `ca serve`，同时打开本地
    `ssh -N -L <localPort>:127.0.0.1:<remotePort>` 隧道；健康检查与所有查询都走该
    隧道。停止时通过远端 PID 文件终止进程，因为只关本地 SSH 客户端并不能可靠停掉它。
@@ -220,7 +215,7 @@ CA wheel 副本 + `manifest.json`）；`--tar` 还会写出 `<platform>.tar.gz`�
 插件在 Harness `main` slot 注册整页（key/locale `ca`），并在侧栏
 `sidebar.panellist` 注册入口。路由：
 
-- `#/search` — 符号搜索 + 结果下拉（`Enter` 打开、`Esc` 关闭、`/` 聚焦）。默认落地页。
+- `#/search` — 符号搜索 + 结果下拉（`Enter` 打开、`Esc` 关闭、`/` 聚焦）。有活动项目时的落地页。
 - `#/fn/<symbol>/<tab>` — 函数详情：带行号与语法高亮的完整源码；左侧 accordion
   含 overview、branches（内嵌 CFG）、returns、resources、findings；可拖拽三栏布局；
   调用图与选中节点源码。`Alt+Left` 在函数历史中返回。
@@ -229,11 +224,9 @@ CA wheel 副本 + `manifest.json`）；`--tar` 还会写出 `<platform>.tar.gz`�
 - `#/stats` — 表行数、数据库大小、schema/SQLite 版本、回调统计与联邦 shard 信息。
 - `#/callbacks` — 跨 TU 回调注册，支持 path/field/module/kind 过滤与分页。
 - `#/tasks` — 长任务列表、启动、增量日志与取消。
-- `#/projects` — 创建/编辑/删除/激活项目（名称、后端、源码根、`db`/`dbDir`、
-  compile database、SSH 目标）。管理索引的主要入口。
-- `#/backend` — 后端状态、启动/停止/重启、本地/远程探测、本地 **Install /
-  repair** 与远程 **Install on remote host**（wheel 在线/离线）、底层可编辑配置与
-  `/api/health` 检查。
+- `#/projects` — 唯一的新建/管理项目入口：**本机=选一个目录**；**远程=用户名/IP/密码或
+  密钥 → 登录 → 浏览服务器目录并选择**。后端、数据库路径与激活全自动；没有项目时作为
+  落地页。
 - 函数页 → **Explain with AI** 面板，见下文。
 
 ## 原生工具
@@ -279,7 +272,7 @@ resources、findings），并要求模型只依据这些证据、按请求语言
 
 - **后端未配置** — 先按上文安装后端，再在 `#/projects` 创建并激活 project；
   `ca_status` 会给出可操作的提示。
-- **数据库/仓库未找到** — 在 `#/backend` 运行 **Probe local**，把报告中的路径填进
+- **数据库/仓库未找到** — 用 `backend.probe` 诊断（或重新添加项目），把报告中的路径填进
   project 表单或显式设置解释器；先为仓库建立索引。
 - **安装失败** — 在 `backend.installStatus` 查看失败步骤。wheel 步骤为
   `probe/python/upload-wheel/upload-wheelhouse/venv/pip/verify`（本地为

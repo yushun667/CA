@@ -36,7 +36,6 @@ export const ROUTE_CHECKS = Object.freeze([
   { hash: '#/callbacks', selector: '.ca-callbacks-page' },
   { hash: '#/graph', selector: '.ca-graph-page' },
   { hash: '#/tasks', selector: '.ca-tasks-page' },
-  { hash: '#/backend', selector: '.ca-backend-page' },
   { hash: '#/projects', selector: '.ca-projects-page' },
 ])
 

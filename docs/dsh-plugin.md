@@ -79,10 +79,12 @@ the backend page are persisted as a sparse user patch in
 | `local.env` / `remote.env` | `{}` | extra child-process environment |
 | `log.*` | bounded | plugin log rotation and in-memory ring settings |
 
-The backend installer is configured per request on `#/backend` (`mode: wheel|source`,
-`offline`, `wheelhousePath`, `installDir`, `python`); the last successful install is
-recorded in `$DSH_HOME/plugin-data/dsh-ca/install-state.json` (0600) and surfaced
-through `backend.get.install`.
+The backend installer runs automatically when a project is prepared; the low-level
+options (`mode: wheel|source`, `offline`, `wheelhousePath`, `installDir`, `python`) are
+internal RPC parameters (`backend.install`) rather than a user-facing form. The last
+successful install is recorded in
+`$DSH_HOME/plugin-data/dsh-ca/install-state.json` (0600) and surfaced through
+`backend.get.install`.
 
 ### Projects (source root + database + backend location)
 
@@ -128,11 +130,13 @@ Requirements on every backend host: **Python >= 3.11** with `venv`/`pip`
 recommended; the legacy source mode also needs `rsync`). Online installs need
 network access; offline installs need a wheelhouse for the target platform.
 
-### Install / repair (backend page)
+### Install / repair
 
-Open `#/backend`; both installers are idempotent — a working venv is reused,
-**Install / repair** repairs or recreates a broken one, and steps/logs are
-polled through `backend.installStatus`.
+Installation is automatic while a project is prepared (or re-prepared) — there is no
+backend configuration page. Both installers are idempotent: a working venv is reused
+and re-preparing the project repairs or recreates a broken one; steps and logs are
+available through `backend.installStatus`. The installer goes online by default and
+uses a wheelhouse automatically when one is present.
 
 - **Local backend installation** (Windows/macOS/Linux): optional install
   directory (default: the plugin's private `backends/local`) and Python
@@ -200,19 +204,18 @@ deployments; source mode is retained for compatibility and debugging.
 
 ## Local backend
 
-1. If CA is not installed on this machine yet, run **Install / repair local backend**
-   on `#/backend` (see above); this creates a private venv and does not touch any
-   system Python.
-2. Create a project on `#/projects` with `backend: local`, the source root and a
-   local database (single DB or shard directory). The backend page's install card can
-   prefill the installed Python for a new project (**Create a local project with this
-   Python**).
+1. On `#/projects`, click **Choose directory…** and pick the source tree. The plugin
+   installs a private CA venv under `$DSH_HOME/plugin-data/dsh-ca/backends/local`
+   (no system Python is touched), creates the database and starts `ca serve`.
+2. Nothing else is required: the database path, Python interpreter and ports are
+   derived automatically.
 3. Activate the project. The Host maps it onto the backend configuration and runs
    `ca serve --host 127.0.0.1 --port 0 --db <db>`, parses the readiness URL from stderr
    and verifies `GET /api/health`; when `--port 0` cannot be parsed it retries once with
    a locally chosen free port.
-4. **Probe local** on `#/backend` reports the discovered interpreter, CA version, CA
-   checkout and libclang status before you start.
+4. Diagnostics (discovered interpreter, CA version, checkout and libclang state) are
+   available through `backend.probe` / `backend.get` if something fails; there is no
+   backend settings page in the product UI.
 
 The Host owns the process: it stops when the plugin is disposed, crash restarts are
 bounded, and a missing database fails with an actionable error.
@@ -222,16 +225,12 @@ bounded, and a missing database fails with an actionable error.
 Use this when DSH runs on macOS/Windows but sources and indexes live on a Linux
 server.
 
-1. Make sure key-based SSH works non-interactively (`ssh -i <key> user@host true`).
-2. On `#/backend`, fill the SSH fields (host/user/port/key path) and run **Install on
-   remote host** with method **wheel (recommended)** and **Online (PyPI)** or
-   **Offline (wheelhouse)**. The installer probes the host, checks Python >= 3.11,
-   uploads the bundled CA wheel (and the wheelhouse when offline), creates
-   `~/dsh-ca/backend/venv` and installs CA, then verifies `ca version --json`. The
-   install directory can be overridden in the form; no rsync or source checkout is
-   required.
-3. Create a project on `#/projects` with `backend: remote`, the source root and
-   database (or shard directory) paths on the server, and the same SSH target.
+1. On `#/projects`, choose **Remote server**, enter username, host/IP, port and either
+   a password or a key / agent (免密), then press **Connect**.
+2. Browse the server directories and press **Choose this directory**. The plugin
+   installs `~/dsh-ca/backend` on the server (wheel, online or from a wheelhouse),
+   creates `~/.dsh-ca/data/<name>/index.db`, starts `ca serve` and opens the SSH tunnel;
+   no rsync or source checkout is required.
    Activate it: the Host configures the backend and runs `ca serve` on the remote
    loopback interface, opening a local
    `ssh -N -L <localPort>:127.0.0.1:<remotePort>` tunnel; health checks and all queries
@@ -250,7 +249,7 @@ The plugin registers the full page in the Harness `main` slot (key/locale `ca`) 
 entry in the `sidebar.panellist` sidebar. Routes:
 
 - `#/search` — symbol search with a result dropdown (`Enter` opens, `Esc` closes, `/`
-  focuses). Default landing page.
+  focuses). Landing page when a project is active.
 - `#/fn/<symbol>/<tab>` — function detail: full source with line numbers and syntax
   highlighting; left accordion with overview, branches (embedded CFG), returns,
   resources and findings; resizable three-pane layout; call graph plus selected-node
@@ -263,11 +262,10 @@ entry in the `sidebar.panellist` sidebar. Routes:
 - `#/callbacks` — cross-TU callback registrations with path/field/module/kind filters
   and pagination.
 - `#/tasks` — long-task list, start, incremental logs and cancel.
-- `#/projects` — create/edit/remove/activate projects (name, backend, source root,
-  `db`/`dbDir`, compile database, SSH target). The primary place to manage indexes.
-- `#/backend` — backend status, start/stop/restart, local/remote probe, **Install /
-  repair** for the local backend and **Install on remote host** for Linux (wheel
-  online/offline), editable low-level configuration and a `/api/health` check.
+- `#/projects` — the only place to add or manage projects: **local = choose a directory**;
+  **remote = username/IP/password or key → log in → browse the server and choose a
+  directory**. The backend, database path and activation are automatic; the page is the
+  landing page when no project exists.
 - Function page → **Explain with AI** panel, see below.
 
 ## Native tools
@@ -318,7 +316,8 @@ rest of the plugin keeps working.
 
 - **Backend not configured** — install the backend (above), then create and activate a
   project on `#/projects`; `ca_status` returns the actionable hint.
-- **Database/repository not found** — run **Probe local** on `#/backend`, then use the
+- **Database/repository not found** — run the `backend.probe` diagnostic (or re-add the
+  project), then use the
   reported paths in the project form or set the interpreter explicitly; index the
   repository first.
 - **Install fails** — read the failing step in `backend.installStatus`. Wheel steps are
