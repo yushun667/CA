@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="CA Analyzer">
+  <rect width="64" height="64" rx="14" fill="#1f6feb"/>
+  <rect x="12" y="15" width="40" height="30" rx="5" fill="#0b2a5b" opacity="0.55"/>
+  <path d="M20 23h10M20 29h16M20 35h12" stroke="#eaf2ff" stroke-width="3.4" stroke-linecap="round"/>
+  <circle cx="43" cy="40" r="8.5" fill="#7cc4ff" opacity="0.95"/>
+  <path d="M49 46l6 6" stroke="#eaf2ff" stroke-width="4" stroke-linecap="round"/>
+</svg>

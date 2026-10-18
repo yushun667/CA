@@ -2,7 +2,7 @@
 
 Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上完成功能验证
 （OpenHarmony 优先）；下一步确认阶段 4 范围。阶段 1/2 已交付并归档；本地测试
-455 passed / 3 skipped。按用户要求，全量验收推迟到全部功能完成之后；功能验证只用 OH dsoftbus 与 camera
+497 passed / 4 skipped。按用户要求，全量验收推迟到全部功能完成之后；功能验证只用 OH dsoftbus 与 camera
 仓库，不是阶段 3 的验收门槛。
 
 ## 已完成
@@ -40,6 +40,10 @@ Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上�
 - OH dsoftbus（1,287 TU）、camera（475 TU）与 combined（1,762 TU）功能验证：
   stats/search/detail/graph、MCP 18 工具、virtual/indirect 候选与 header 增量
   update/watch 全部通过；见 docs/functional-verification.zh.md。
+- DSH 插件 bundle `dsh/`（`@local/dsh-ca`）：在 DeepSeek Harness 内提供 CA 页面 +
+  11 个原生 `ca_*` 工具、本地/远程 Linux `ca serve` 生命周期、长任务管理器与 DSH
+  模型驱动的 AI 解释；CA 核心不变、测试基线不受影响（插件有独立 `dsh/test/`
+  node 套件）。
 
 ## 延后 / 可选
 
@@ -60,3 +64,5 @@ Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上�
 - OH 巨型 C++/IDL TU 慢且吃内存（S2 已有 partial 归档）。
 - 深析覆盖按设计是部分的；findings 是函数内启发式。
 - 回调候选仍是注册式；MCP/UI 无认证；SQLite 单写者。
+- DSH 插件依赖 Harness 内部服务（`webServer`/`slots`/`llm`）；Harness 升级后需重新
+  验证，远程 Linux 路径需要服务器上的 SSH/rsync/venv。

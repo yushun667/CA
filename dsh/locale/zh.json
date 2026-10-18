@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "CA 源码分析器",
+    "description": "在 Harness 内浏览 CA 操作系统源码索引、调用原生查询与长索引任务、获取 AI 解释；支持本地或远程 Linux 后端。"
+  }
+}

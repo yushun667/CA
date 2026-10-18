@@ -1,0 +1,5 @@
+# Host half of the CA plugin bundle. The Client half is discovered from the
+# package's `dsh.client` field and exported `./client` artifact.
+- insert:
+    - id: dsh-ca
+      name: '@local/dsh-ca'

@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-18
 en:
   file: 2026-10-18-remove-ai-explain.md
-  sha256: 10a2dfa505a87ecf4bf1d3ce14b1ddee4dba25ea97c4bdc403ffa33cc6b28d42
+  sha256: 27ae685b535508c8763a3c42af670391ff6513aedbb68375edf25948f2b7f116
 zh:
   file: 2026-10-18-remove-ai-explain.zh.md
-  sha256: a21693e0641993423fe2eafdeae0888b4796e540fcaedd7d8762cd51d3b20cea
+  sha256: 0d8208e93d23246d6d28c54c787b6a256b45c5f239ee9720ffae44bba994fb20

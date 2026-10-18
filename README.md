@@ -118,6 +118,18 @@ plain HTML/CSS/JS without a CDN or build step:
 See [docs/ui.md](docs/ui.md) for pages, API endpoints, the read-only guarantee
 and SSH-tunnel guidance.
 
+## DSH plugin (DeepSeek Harness)
+
+`dsh/` packages CA as a DeepSeek Harness bundle (`@local/dsh-ca`): the full CA
+page inside the Harness Web UI, eleven native `ca_*` tools for the agent, a
+local or remote Linux `ca serve` backend, long indexing tasks and AI
+explanations powered by the session's model (CA itself stays LLM-free). The
+plugin is additive: the CLI, `ca ui`, `ca mcp` and the MCP protocol are
+unchanged, and plugin code does not change CA's test baseline. Install it from
+the local `dsh/` directory through the Harness plugin manager; see
+[docs/dsh-plugin.md](docs/dsh-plugin.md) for installation, configuration, the
+remote backend, UI pages, tools, troubleshooting and security boundaries.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on Python 3.11: installs the pinned requirements
@@ -158,7 +170,7 @@ Host: macOS arm64, 18 cores, 64 GB RAM, Python 3.11, libclang 18.1.1.
   p95 ≤ 3.6 ms, callers p95 2.9 ms; the kernel 100-TU DB (107 MiB, 26.6k
   functions, 49.3k calls) answers symbol/caller/branch/resource queries in
   single-digit milliseconds.
-- **Tests**: `189 passed` (contract, parse, analyze, store, FTS, e2e,
+- **Tests**: `497 passed / 4 skipped` (contract, parse, analyze, store, FTS, e2e,
   incremental); xv6 e2e asserts non-vacuous counts and real compile-argument
   provenance.
 
@@ -198,6 +210,7 @@ tests/             contract, unit, e2e, fixtures (labeled golden data)
 benchmarks/        accuracy, parse/index (incremental), database benchmarks
 docs/              bilingual user guide
 scripts/           environment bootstrap (venv + editable install)
+dsh/               DeepSeek Harness plugin bundle (CA page + native tools)
 .github/           CI workflow and accuracy gate
 .agents/           governance: architecture, decisions, planning, standards
 ```

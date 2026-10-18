@@ -9,3 +9,4 @@
 架构变复杂时按主题拆分文件，并在本文件登记“链接｜覆盖范围｜何时读取”。理由写入 `../decisions/`。
 - [agent-platform.md](agent-platform.md)：Agent 平台与服务器部署现状；涉及 MCP/图查询/离线增量/OpenHarmony 接入时读取。中文 agent-platform.zh.md，一致性记录 agent-platform.i18n.yaml。
 - [unified-serve-backend.md](unified-serve-backend.md)：统一后端 `ca serve`、jobs/SSE、MCP/UI 双客户端与跨客户端闭环；改 serve/jobs 时读取。中文 unified-serve-backend.zh.md，一致性记录 unified-serve-backend.i18n.yaml。
+- [dsh-plugin.md](dsh-plugin.md)：DSH 插件包 `dsh/`（bundle/热重载、Host backend/RPC/tools、Client 整页、AI 解释）；改插件或 DSH 集成边界时读取。中文 dsh-plugin.zh.md，一致性记录 dsh-plugin.i18n.yaml。

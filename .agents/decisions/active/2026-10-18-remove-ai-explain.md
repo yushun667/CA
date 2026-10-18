@@ -65,5 +65,5 @@ Delete the whole AI explanation feature end to end:
 `tests/test_server_serve.py` covers health/query endpoints, stateless MCP with 18
 tools, generic job loop + SSE replay, restart requeue, stdio proxy and federated
 stats, and asserts explain endpoints/tools/CLI are gone. Risk: future requests for
-AI explanations need a new design discussion (e.g. a separate agent-side tool
-rather than a CA-owned feature).
+AI explanations must stay outside CA; the DSH plugin now provides them through the
+host model (see [dsh-plugin](2026-10-18-dsh-plugin.md), partial supersession).

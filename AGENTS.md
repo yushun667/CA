@@ -36,6 +36,7 @@
 | [scripts/AGENTS.md](scripts/AGENTS.md) | 搭建本地环境时 | 环境引导脚本 |
 | [.github/AGENTS.md](.github/AGENTS.md) | 修改 CI 门禁时 | CI 工作流与精度/测试门禁 |
 | [docs/AGENTS.md](docs/AGENTS.md) | 编写项目文档时 | 文档职责、写法与维护规范 |
+| [dsh/AGENTS.md](dsh/AGENTS.md) | 开发或维护 DSH 插件（`dsh/`）时 | DeepSeek Harness 插件包：原生 tools、整页 UI、后端生命周期 |
 | [.agents/AGENTS.md](.agents/AGENTS.md) | 需要决策、架构、规划、问题、项目 skill、规范或治理校验时 | AI 项目管理系统入口 |
 
 新增顶层维护目录时，必须在此表添加其 `AGENTS.md`、用途和读取条件。

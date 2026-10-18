@@ -95,6 +95,15 @@ SVG 调用图、回调注册事实与统计）。默认绑定 `127.0.0.1:8766`�
 
 页面、API 端点、只读保证与 SSH 隧道说明见 [docs/ui.zh.md](docs/ui.zh.md)。
 
+## DSH 插件（DeepSeek Harness）
+
+`dsh/` 把 CA 打包为 DeepSeek Harness bundle（`@local/dsh-ca`）：在 Harness Web UI
+内提供完整 CA 页面、给 agent 的 11 个原生 `ca_*` 工具、本地或远程 Linux `ca serve`
+后端、长索引任务，以及由会话模型驱动的 AI 解释（CA 本身保持无 LLM）。插件是纯增量：
+CLI、`ca ui`、`ca mcp` 与 MCP 协议均不变，插件代码也不改变 CA 的测试基线。通过
+Harness plugin manager 从本地 `dsh/` 目录安装；安装、配置、远程后端、UI 页面、工具、
+故障排查与安全边界见 [docs/dsh-plugin.zh.md](docs/dsh-plugin.zh.md)。
+
 ## 持续集成
 
 `.github/workflows/ci.yml` 在 Python 3.11 上安装固定依赖与 editable 包，运行
@@ -117,7 +126,7 @@ golden 夹具测试在各环境都运行。
 - **增量重建**：xv6 46 TU 冷启动 1.0–1.25s → 热缓存 0.29–0.30s（3.4–4.2×，命中率 100%，计数一致）；缓存只跳过 parse+analyze，数据库仍会重写。
 - **内核规模**：真实 Linux 6.12.113 内核子集（kernel/ mm/ fs/ drivers/net/，arm64 defconfig，1,682 个真实 TU）前 100 个 TU 在 18 核高负载主机上：墙钟 183s（parse CPU 447s、analyze CPU 432s、写库 124s），DB 107 MiB。内核每个 TU 展开大量头文件：100 TU 产生 14 万次函数分析（1.4k/TU）、67.4 万行含头文件源码；瓶颈是头文件内联函数分析，写入与内存成本也显著（父进程峰值内存约 6 GB）。全量 1,682 TU 属于数十分钟级批处理，留给 CI/夜间任务而非交互使用。
 - **数据库**：合成 1 万函数/15.7 万行写入 41–46.5 万 rows/s（40.7 MiB DB，finalize 含 FTS5 trigram 索引）；点查 p95 ≤ 3.6ms、callers p95 2.9ms；内核 100 TU 库（107 MiB、2.66 万函数、4.93 万调用）符号/调用者/分支/资源查询均为个位数毫秒。
-- **测试**：`189 passed`（契约、parse、analyze、store、FTS、端到端、增量）；xv6 端到端断言非空洞计数与真实编译参数来源。
+- **测试**：`497 passed / 4 skipped`（契约、parse、analyze、store、FTS、端到端、增量）；xv6 端到端断言非空洞计数与真实编译参数来源。
 
 ## 复现
 
@@ -154,6 +163,7 @@ tests/             契约、单元、端到端测试与夹具（含标注 golden
 benchmarks/        精度、解析/索引（含增量）、数据库基准
 docs/              双语用户指南
 scripts/           环境引导（venv + editable 安装）
+dsh/               DeepSeek Harness 插件 bundle（CA 页面 + 原生工具）
 .github/           CI 工作流与精度门禁
 .agents/           治理：架构、决策、规划、规范
 ```

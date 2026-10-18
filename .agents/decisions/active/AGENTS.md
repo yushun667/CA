@@ -4,6 +4,7 @@
 - 2026-10-17-incremental-indexing.md、2026-10-17-incremental-indexing.zh.md、2026-10-17-incremental-indexing.i18n.yaml
 - 2026-10-17-linux-kernel-corpus.md、2026-10-17-linux-kernel-corpus.zh.md、2026-10-17-linux-kernel-corpus.i18n.yaml
 - 2026-10-17-storage-engine.md、2026-10-17-storage-engine.zh.md、2026-10-17-storage-engine.i18n.yaml
+- 2026-10-18-dsh-plugin.md、2026-10-18-dsh-plugin.zh.md、2026-10-18-dsh-plugin.i18n.yaml
 - 2026-10-18-header-incr.md、2026-10-18-header-incr.zh.md、2026-10-18-header-incr.i18n.yaml
 - 2026-10-18-layered-indexing-and-agent-api.md、2026-10-18-layered-indexing-and-agent-api.zh.md、2026-10-18-layered-indexing-and-agent-api.i18n.yaml
 - 2026-10-18-matched-libclang-backend.md、2026-10-18-matched-libclang-backend.zh.md、2026-10-18-matched-libclang-backend.i18n.yaml

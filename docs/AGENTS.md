@@ -25,6 +25,7 @@
 - [cross-tu-virtual-dispatch.md](cross-tu-virtual-dispatch.md)：C++ 虚派发元数据、候选边与限制。
 - [ui.md](ui.md)：只读 Web UI（启动、页面）；改 `ca ui` 时同步。
 - [server.md](server.md)：统一后端 `ca serve`（/api、jobs/SSE、/mcp）；改 serve 时同步。
+- [dsh-plugin.md](dsh-plugin.md)：DSH 插件（安装/配置、本地与远程 Linux 后端、UI 页面、11 个工具、长任务、AI 解释、安全边界）；维护 `dsh/` 或排查插件问题时同步。
 - [functional-verification.md](functional-verification.md)：阶段 3 dsoftbus/camera 功能验证（virtual/回调/header 增量/MCP）命令、数字与限制；改验收范围时同步。
 - functional-verification.zh.md / functional-verification.i18n.yaml：中文对照与一致性记录。
 - 每篇 `.md` 均有同名 `.zh.md` 中文对照与 `.i18n.yaml` 一致性记录；改语言后同步三者。

@@ -1,0 +1,29 @@
+{
+  "name": "@local/dsh-ca",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CA operating-system source analyzer for DeepSeek Harness: native CA tools, the full CA web UI, local or remote Linux backend lifecycle, long-running indexing tasks and AI explanations.",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./lib/host/bootstrap.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib/host/**/*.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}

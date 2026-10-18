@@ -49,5 +49,5 @@ job 队列/claim 不适合解释交互；而要求 sampling-capable MCP client �
 
 `tests/test_server_serve.py` 覆盖健康/查询端点、无状态 MCP（18 工具）、通用 job
 闭环 + SSE 重放、重启重排、stdio 代理、联邦 stats，并断言 explain 端点/工具/CLI
-已不存在。风险：未来若再要 AI 解释，需要新的设计讨论（可能放 agent 侧工具而非
-CA 自有功能）。
+已不存在。风险：未来若再要 AI 解释，必须留在 CA 之外；DSH 插件已通过宿主模型
+提供该能力（见 [dsh-plugin](2026-10-18-dsh-plugin.zh.md)，部分取代本说明）。

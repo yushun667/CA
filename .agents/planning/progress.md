@@ -2,7 +2,7 @@
 
 Overall: phase 3 functional scope is complete and functionally verified on
 OpenHarmony dsoftbus + camera; phase 4 scope confirmation is next. Phase 1/2 are
-archived and delivered; the local suite is 464 passed / 3 skipped.
+archived and delivered; the local suite is 497 passed / 4 skipped.
 Full-corpus acceptance is deferred until all features are complete, per user
 direction; functional verification uses only the OH dsoftbus and camera
 repositories, not a phase-3 acceptance gate.
@@ -48,6 +48,10 @@ repositories, not a phase-3 acceptance gate.
   (1,762 TU): baseline stats/search/detail/graph, MCP 18 tools, virtual/indirect
   candidates and header-incremental update/watch all pass; write-up in
   docs/functional-verification.md.
+- DSH plugin bundle `dsh/` (`@local/dsh-ca`): CA page + 11 native `ca_*` tools
+  inside DeepSeek Harness, local or remote Linux `ca serve` lifecycle, long task
+  manager and DSH-model AI explanations; CA core is unchanged and the CA test
+  baseline is unaffected (the plugin has its own `dsh/test/` node suite).
 
 ## Deferred / optional
 
@@ -72,3 +76,6 @@ until all features are complete.
 - Deep coverage is partial by design; findings are intra-function heuristics.
 - Callback candidates are registration-based; MCP/UI have no auth; SQLite has a
   single writer.
+- DSH plugin relies on Harness internal services (`webServer`/`slots`/`llm`);
+  Harness upgrades need re-verification, and the remote Linux path needs
+  SSH/rsync/venv on the server.
