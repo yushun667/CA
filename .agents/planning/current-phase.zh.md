@@ -4,7 +4,8 @@ Current phase: 3. OpenHarmony 优先的 Agent 平台
 
 Goal: 让 CA 能面向真实 OpenHarmony C/C++ 源码服务 AI agent 与人：离线 + 增量索引、
 回调/函数指针解析与调用图查询、多仓 workspace/variant 数据模型、以及运行在源码机上
-的 MCP 查询服务。阶段 3 在核心功能实现并**在 OpenHarmony dsoftbus 与 camera 仓库上完成功能验证**后收口。
+的 MCP 查询服务。阶段 3 在核心功能实现并**在 OpenHarmony dsoftbus 与 camera 仓库上完成功能验证**后收口；
+该功能验证现已完成。
 按用户要求，全量验收推迟到全部功能完成之后；这些仓库是功能验证语料，不是阶段 3 的验收门槛。
 
 ## 完成条件

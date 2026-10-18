@@ -1,7 +1,8 @@
 # Phase progress
 
-Overall: phase 3 functional completion is in progress (OpenHarmony first).
-Phase 1/2 are archived and delivered; the local suite is 421 passed / 3 skipped.
+Overall: phase 3 functional goals are complete and functionally verified on
+OpenHarmony dsoftbus + camera (OpenHarmony first); phase 4 scope confirmation is
+next. Phase 1/2 are archived and delivered; the local suite is 455 passed / 3 skipped.
 Full-corpus acceptance is deferred until all features are complete, per user
 direction; functional verification uses only the OH dsoftbus and camera
 repositories, not a phase-3 acceptance gate.
@@ -25,24 +26,30 @@ repositories, not a phase-3 acceptance gate.
   real-agent matrix on xv6 with zero hallucinated locations.
 - AI explanation feature was added and then removed end to end; no explain or
   sampling endpoints/tools remain.
+- C++ virtual/dynamic dispatch: metadata persisted (store schema v7), same-TU
+  candidates + cross-TU query-time merge; camera `Command::Do` returns 29
+  candidates (no-override control returns none); combined corpus 3,784 candidate
+  edges across 1,531 calls (20%).
+- Header-dependency-aware incremental: `tu_includes` transitive closure,
+  `ca update`/`ca watch` invalidate only dependent TUs; measured 6 dependent TUs
+  per header, unrelated headers no-op, MCP/CLI/graph verified.
+- Functional verification on dsoftbus (1,287 TU), camera (475 TU) and combined
+  (1,762 TU): baseline stats/search/detail/graph, MCP 18 tools, virtual/indirect
+  candidates and header-incremental update/watch all pass; write-up in
+  docs/functional-verification.md.
 
-## Remaining phase-3 core functions
+## Remaining phase-3 work
 
-- C++ virtual/dynamic dispatch and general function-pointer candidates beyond
-  registration-style callbacks.
-- Header-dependency-aware incremental indexing: current cache tracks only the
-  main TU source, so header edits miss dependent TUs.
 - Optional workspace/project/variant CLI/MCP selector; the store model exists
   but has no user-facing surface.
-- Deploy the latest code to the source server and run functional checks on the
-  OH dsoftbus and camera repositories (not full acceptance).
+- Full 8-shard acceptance remains deferred by user direction; S2/S6/S8
+  completion and the final acceptance report are not phase-3 functional gates.
 
 ## Next
 
-Implement the two required gaps, functionally verify them on the OH dsoftbus and
-camera repositories, update README/docs numbers, then confirm phase 4 scope
-(other OS trees and languages). Full 8-shard acceptance stays deferred until all features are
-complete.
+Confirm phase 4 scope (other OS trees and languages) with the user, keep the
+functional-verification numbers/docs in sync, and defer full-corpus acceptance
+until all features are complete.
 
 ## Risks and blockers
 

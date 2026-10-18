@@ -7,7 +7,7 @@ sources: offline + incremental indexing, callback/function-pointer resolution an
 call-graph queries, a multi-repo workspace/variant data model, and an MCP query
 server on the source machine. Phase 3 closes when its core functions are
 implemented and **functionally verified** on the OpenHarmony dsoftbus and camera
-repositories. Per user direction, full-corpus acceptance is deferred until all
+repositories; that functional verification is now complete. Per user direction, full-corpus acceptance is deferred until all
 features are complete; those repositories are the functional-verification corpus,
 not a phase-3 acceptance gate.
 
@@ -43,28 +43,34 @@ not a phase-3 acceptance gate.
 | 5 | `call_targets`, graph queries, workspace/variant model | done | - |
 | 6 | OpenHarmony C/C++ parse compatibility (matched libclang backend) | done | - |
 | 7 | Integration, unified backend, read-only UI, P0 query UX, agent evaluation | done | - |
-| 8 | C++ virtual/dynamic dispatch + general indirect-call candidates | pending | - |
-| 9 | Header-dependency-aware incremental indexing/watch | pending | - |
+| 8 | C++ virtual/dynamic dispatch + general indirect-call candidates | done | - |
+| 9 | Header-dependency-aware incremental indexing/watch | done | - |
 | 10 | Workspace/project/variant CLI/MCP exposure (optional) | pending | - |
-| 11 | Functional verification on OH dsoftbus + camera repositories + docs numbers | pending | steps 8-9 |
+| 11 | Functional verification on OH dsoftbus + camera repositories + docs numbers | done | - |
 
-## Implementation plan for the remaining gaps
+Functional verification (2026-10-18) used only dsoftbus (1,287 TU), camera (475
+TU) and their union (1,762 TU): 91,858 / 27,261 / 115,085 functions; camera
+virtual `Command::Do`→`Executing` returns 29 candidates with direct edges kept
+(no-override control returns none); dsoftbus `NetBuilderMessageHandler` exposes
+16 registration-table candidate edges; header dependency-aware update/watch
+re-parses only the 6 dependent TUs, unrelated headers are no-ops, MCP (18 tools)
+was verified on all three DBs. See [../docs/functional-verification.md](../../docs/functional-verification.md).
+The optional workspace/variant selector is not implemented; full-corpus
+acceptance is still deferred.
 
-- **C++ virtual/dynamic dispatch**: extend type extraction with base classes and
-  virtual method/override relationships; persist overrides; when a call target
-  is a virtual method, emit candidate edges to statically resolvable overrides
-  (same-TU and cross-TU), with lower confidence than direct calls; merge into
-  `call_targets` and graph queries. Multi-inheritance and unresolved dynamic
-  types remain bounded heuristics.
-- **Header-dependency incremental**: record direct includes per TU during
-  parsing and persist a TU→header dependency map; on `update`/`watch`, resolve
-  changed files to dependent TUs and invalidate only those cache entries before
-  reparsing. Functional test: editing a header reparses dependents, while an
-  unrelated header skips them.
-- **Workspace/variant surface (optional)**: CLI/MCP filters for project and
-  variant; no storage change needed.
-- **Functional verification**: use only the OH dsoftbus and camera repositories,
-  not the full 8-shard acceptance run; record command, counts and limits in README/docs.
+## Implementation status
+
+- **C++ virtual/dynamic dispatch**: implemented (metadata on core records, store
+  schema v7 `virtual_overrides`/`type_bases`, same-TU analyze candidates and
+  cross-TU query-time merge with confidence tiers 0.6/0.5/0.45); multi-inheritance
+  and unresolved dynamic types remain bounded heuristics (docs/cross-tu-virtual-dispatch.md).
+- **Header-dependency incremental**: implemented; parser records direct includes
+  plus header→header edges, store persists the transitive closure in
+  `tu_includes` (schema v6→7), `ca update`/`ca watch` invalidate only dependent
+  TUs and fall back safely for old indexes/build files (docs/incremental.md).
+- **Workspace/variant surface (optional)**: not implemented; store model exists.
+- **Functional verification**: completed on dsoftbus/camera only
+  (docs/functional-verification.md); full-corpus acceptance remains deferred.
 
 Full-corpus sharded acceptance, S2/S6/S8 completion and the final acceptance
 report are **deferred**; they are not phase-3 functional gates. Phase 4+ (other

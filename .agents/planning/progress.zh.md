@@ -1,7 +1,8 @@
 # 当前阶段进度
 
-Overall: 阶段 3 功能收口进行中（OpenHarmony 优先）。阶段 1/2 已交付并归档；本地测试
-421 passed / 3 skipped。按用户要求，全量验收推迟到全部功能完成之后；功能验证只用 OH dsoftbus 与 camera
+Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上完成功能验证
+（OpenHarmony 优先）；下一步确认阶段 4 范围。阶段 1/2 已交付并归档；本地测试
+455 passed / 3 skipped。按用户要求，全量验收推迟到全部功能完成之后；功能验证只用 OH dsoftbus 与 camera
 仓库，不是阶段 3 的验收门槛。
 
 ## 已完成
@@ -22,6 +23,14 @@ Overall: 阶段 3 功能收口进行中（OpenHarmony 优先）。阶段 1/2 已
 - P0 查询体验（`brief`、compact/fields、batch、头文件声明）；xv6 45-run 真实 Agent
   矩阵，0 个编造位置。
 - AI 解释功能曾加入后已端到端移除；不再有 explain/sampling 端点或工具。
+- C++ 虚函数/动态派发：元数据持久化（store schema v7）、同 TU 候选 + 跨 TU
+  查询时合并；camera `Command::Do` 返回 29 条候选（无 override 对照为 0）；
+  combined 语料 3,784 条候选边覆盖 1,531 个 call（20%）。
+- header 依赖感知增量：`tu_includes` 传递闭包，`ca update`/`ca watch` 只失效
+  依赖 TU；实测每个 header 6 个依赖 TU、无关 header no-op，MCP/CLI/graph 验证。
+- OH dsoftbus（1,287 TU）、camera（475 TU）与 combined（1,762 TU）功能验证：
+  stats/search/detail/graph、MCP 18 工具、virtual/indirect 候选与 header 增量
+  update/watch 全部通过；见 docs/functional-verification.zh.md。
 
 ## 阶段 3 剩余核心功能
 
