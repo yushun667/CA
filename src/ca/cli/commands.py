@@ -1242,8 +1242,26 @@ def cmd_serve(args: Any) -> int:
         state_db=getattr(args, "state_db", None),
         repo=str(getattr(args, "repo", "") or ""),
         compdb=str(getattr(args, "compdb", "") or ""),
+        explain_grace_ms=getattr(args, "explain_grace_ms", None),
     )
     return serve(config)
+
+
+def cmd_agent_worker(args: Any) -> int:
+    """Run the MCP explain-job worker against a running ``ca serve``."""
+
+    from ca.cli.agent_worker import AgentWorkerConfig, run_worker
+
+    return run_worker(
+        AgentWorkerConfig(
+            serve_url=args.serve_url,
+            worker=args.worker,
+            interval=float(args.interval),
+            limit=int(args.limit),
+            language=args.language,
+            once=bool(args.once),
+        )
+    )
 
 
 def cmd_version(args: Any) -> int:

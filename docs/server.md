@@ -75,6 +75,32 @@ data: {"type":"job.updated","event":"done","event_id":3,"job":{...}}
   `?since_id=N`，服务从 `job_events` 表重放缺失事件。
 - 事件 id 全局单调；默认保留最近 10000 条。
 
+## Explain 自动完成与 agent worker
+
+没有常驻 agent 时页面点“AI 解释”不应一直 queued：
+
+- explain job 创建后启动宽限期，默认 **2000 ms**；可用 `--explain-grace-ms N`
+  或环境变量 `CA_EXPLAIN_GRACE_MS=N` 覆盖，`0` 关闭（完全交给 agent）。
+- 宽限期内没有 agent claim，服务自动用现有 heuristic/LLM 解释逻辑完成 job：
+  `provider:"heuristic"`（配置 `CA_LLM_*` 时 `"llm"`）、`fallback:true`、
+  `auto_completed:true`、`claimed_by:"server:auto"`；事件照常走 SSE `done`。
+- agent 先 claim/submit 则自动完成不会覆盖（原子 claim；先到先得）；宽限期内
+  agent claim 会取消该 job 的定时器。
+- `ca agent-worker --serve-url http://127.0.0.1:8765 [--once --worker ID
+  --interval 1.0 --limit N --language en|zh]`：真实 MCP agent worker，轮询
+  `explain_jobs` claim → 调后端 `/api/explain` 生成解释（heuristic 或
+  `CA_LLM_*`）→ `submit_explanation` 写回，结果
+  `provider:"agent", model:"mcp-agent", evidence:[...]`；SIGINT/SIGTERM 优雅退出。
+- HTTP `/api/jobs/<id>/result` 同样补 `provider`（默认 `"agent"`，可显式覆盖）。
+- UI 无需改动：无 agent 时很快收到 heuristic `done`；有 agent 时显示
+  MCP agent + evidence。
+
+```sh
+ca serve --db ca.db --port 8765                      # 默认 2s 宽限
+ca agent-worker --serve-url http://127.0.0.1:8765    # 常驻 agent 消费
+CA_EXPLAIN_GRACE_MS=0 ca serve --db ca.db            # 关闭自动完成
+```
+
 ## MCP 客户端
 
 `/mcp` 是标准 JSON-RPC 端点，工具与本地 `ca mcp --db` 相同（18 个），另加服务端
@@ -110,9 +136,12 @@ ca mcp --serve-url http://127.0.0.1:8765
 
 ## 验证与性能
 
-- `tests/test_server_serve.py`（5 条）：健康/查询/MCP 端点、explain 跨客户端
-  job 闭环与 SSE 重放、重启恢复、`ca mcp --serve-url` 代理、联邦 shard 统计。
-- 全仓测试：`424 passed / 3 skipped`（本地 macOS arm64，libclang18）。
+- `tests/test_server_serve.py`（10 条）：健康/查询/MCP 端点、explain 跨客户端
+  job 闭环与 SSE 重放、自动完成（无 agent）、agent 抢先不被覆盖、grace 关闭、
+  `agent-worker`、重启重排/恢复、`ca mcp --serve-url` 代理、联邦 shard 统计。
+- explain 自动完成（grace 120 ms，xv6）：创建→done 实测 135–146 ms；
+  agent 抢先/关闭 grace/重启重排/worker 均有测试覆盖。
+- 全仓测试：`431 passed / 3 skipped`（本地 macOS arm64，libclang18）。
 - 本地基准（xv6 DB，`benchmarks/results/server_bench.json`）：
   `GET /api/health` p50 2.0 ms / p95 6.2 ms、`/api/search` 1.7/2.3 ms、
   `/api/stats` 1.8/4.8 ms、`/api/jobs` 1.7/2.3 ms；MCP `/mcp` detail

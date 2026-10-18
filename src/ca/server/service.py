@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -70,6 +72,7 @@ class ServeConfig:
     state_db: str | None = None
     repo: str = ""
     compdb: str = ""
+    explain_grace_ms: int | None = None
 
 
 class ServeService:
@@ -107,10 +110,106 @@ class ServeService:
         self.mcp = McpSession(
             self.paths, repo=config.repo, compdb=config.compdb, federated=self.federated
         )
+        self._auto_lock = threading.Lock()
+        self._auto_timers: dict[str, threading.Timer] = {}
+        self._reschedule_auto_explain()
 
     # -- lifecycle ------------------------------------------------------- #
     def close(self) -> None:
+        with self._auto_lock:
+            timers = list(self._auto_timers.values())
+            self._auto_timers.clear()
+        for timer in timers:
+            timer.cancel()
         self.jobs.close()
+
+    # -- explain auto-complete ------------------------------------------- #
+    def explain_grace_ms(self) -> int:
+        """Grace before the server completes an unclaimed explain job itself.
+
+        Priority: ``ServeConfig.explain_grace_ms`` -> ``CA_EXPLAIN_GRACE_MS``
+        environment -> 2000 ms. ``0``/negative disables auto-completion (agents
+        own the queue).
+        """
+
+        if self.config.explain_grace_ms is not None:
+            return int(self.config.explain_grace_ms)
+        raw = os.environ.get("CA_EXPLAIN_GRACE_MS", "").strip()
+        if not raw:
+            return 2000
+        try:
+            return int(raw)
+        except ValueError:
+            return 2000
+
+    def _schedule_auto_explain(self, job_id: str, delay_ms: int | None = None) -> None:
+        grace = self.explain_grace_ms() if delay_ms is None else int(delay_ms)
+        if grace <= 0:
+            return
+        timer = threading.Timer(grace / 1000.0, self._auto_complete_explain, args=(job_id,))
+        timer.daemon = True
+        with self._auto_lock:
+            previous = self._auto_timers.pop(job_id, None)
+            if previous is not None:
+                previous.cancel()
+            self._auto_timers[job_id] = timer
+        timer.start()
+
+    def _cancel_auto_explain(self, job_id: str) -> None:
+        with self._auto_lock:
+            timer = self._auto_timers.pop(job_id, None)
+        if timer is not None:
+            timer.cancel()
+
+    def _reschedule_auto_explain(self) -> None:
+        if self.explain_grace_ms() <= 0:
+            return
+        for job in self.jobs.list_jobs(kind="explain", status="queued", limit=100):
+            self._schedule_auto_explain(str(job.get("id") or ""))
+
+    def _auto_complete_explain(self, job_id: str) -> None:
+        with self._auto_lock:
+            self._auto_timers.pop(job_id, None)
+        job = self.jobs.get_job(job_id)
+        if job is None or job.get("status") != "queued":
+            return
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        symbol = str(payload.get("symbol") or "").strip()
+        claimed = self.jobs.claim_job(
+            "explain", claimed_by="server:auto", lease_seconds=120
+        )
+        if claimed is None:
+            return  # an agent won the claim first; never overwrite it
+        if claimed.get("id") != job_id:
+            # Multiple queued explain jobs: claim_job() returns the oldest, which
+            # may be a different job than this timer. Requeue it (no data loss) and
+            # retry this job shortly instead of leaving the other one running.
+            other_id = str(claimed.get("id") or "")
+            self.jobs.requeue_job(other_id, error="", claimed_by="server:auto")
+            self._schedule_auto_explain(other_id)
+            self._schedule_auto_explain(job_id, delay_ms=max(20, self.explain_grace_ms() // 4))
+            return
+        try:
+            if not symbol:
+                raise ServeError("INVALID_ARGUMENT", "explain job has no symbol")
+            from ca.ui.server import api_explain
+
+            language = str(payload.get("lang") or payload.get("language") or "en")
+            result = dict(api_explain(self.query, {"symbol": symbol, "language": language}))
+            result["fallback"] = True
+            result["auto_completed"] = True
+            self.jobs.complete_job(job_id, result, claimed_by="server:auto")
+            print(
+                f"[serve] auto-completed explain job {job_id} ({result.get('provider')})",
+                file=__import__("sys").stderr,
+                flush=True,
+            )
+        except Exception as exc:  # keep the queue clean, surface the reason
+            self.jobs.fail_job(
+                job_id,
+                f"auto explain failed: {type(exc).__name__}: {exc}",
+                claimed_by="server:auto",
+            )
 
     # -- health ---------------------------------------------------------- #
     def health(self) -> dict[str, Any]:
@@ -126,6 +225,7 @@ class ServeService:
                 "state_db": self.state_db,
             },
             "jobs": self.jobs.job_stats(),
+            "explain_grace_ms": self.explain_grace_ms(),
             "mcp_endpoint": "/mcp",
             "events_endpoint": "/events",
         }
@@ -145,6 +245,8 @@ class ServeService:
             if key in body and key not in merged:
                 merged[key] = body[key]
         job = self.jobs.create_job(kind, merged)
+        if kind == "explain":
+            self._schedule_auto_explain(str(job.get("id") or ""))
         return job
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
@@ -169,6 +271,7 @@ class ServeService:
         )
         if job is None:
             return None
+        self._cancel_auto_explain(str(job.get("id") or ""))
         job["claimed_by"] = job.get("claimed_by") or worker
         return job
 
@@ -192,6 +295,7 @@ class ServeService:
                 str(job.get("kind") or "") or None, claimed_by=worker
             )
             job = claimed or job
+        self._cancel_auto_explain(job_id)
         if job.get("status") != "running":
             raise ServeError(
                 "CONFLICT", f"job {job_id} is {job.get('status')}, expected running"
@@ -274,6 +378,8 @@ class ServeService:
                 claimed_by=worker,
                 lease_seconds=int(arguments.get("lease_seconds") or 120),
             )
+            if job is not None:
+                self._cancel_auto_explain(str(job.get("id") or ""))
             return {"action": "claim", "job": job, "worker": worker}
         status = arguments.get("status")
         limit = int(arguments.get("limit") or 50)
@@ -316,6 +422,7 @@ class ServeService:
             )
             if claimed is not None and claimed.get("id") == job_id:
                 job = claimed
+        self._cancel_auto_explain(job_id)
         if job.get("status") != "running":
             raise ServeError(
                 "CONFLICT", f"job {job_id} is {job.get('status')}, expected running"

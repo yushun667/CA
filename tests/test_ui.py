@@ -1010,6 +1010,10 @@ def test_static_single_page_has_no_external_assets(client: UiClient) -> None:
     # Top source highlights the selected node's lines (or shows a location hint).
     assert "selected-node" in script
     assert "source.nodeOutside" in script
+    assert "source.callSite" in script and "source.callSiteOutside" in script
+    assert "source.callerCallsCurrent" in script
+    assert "callSiteForNode" in script
+    assert "callRange" in script
     assert "renderTopSource" in script
     # Function jump history + back navigation.
     assert "sessionStorage" in script

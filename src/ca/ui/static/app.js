@@ -1708,6 +1708,40 @@
     return (fn && (fn.id || fn.name)) || state.selectedSymbol;
   }
 
+  function callSiteForNode(symbol) {
+    const fn = state.detail && state.detail.function;
+    const rootId = fn && (fn.id || fn.name);
+    const graph = state.graph;
+    if (!symbol || !rootId || !graph) return null;
+    if (symbol === rootId) {
+      return { file: fn.file || "", line: fn.line || 0, self: true, role: "self" };
+    }
+    const edges = graph.edges || [];
+    const direct = edges.find(
+      (edge) => edge.caller_id === rootId && edge.callee_id === symbol
+    );
+    if (direct) {
+      return {
+        file: direct.call_file || "",
+        line: direct.call_line || 0,
+        self: false,
+        role: "callee",
+      };
+    }
+    const reverse = edges.find(
+      (edge) => edge.caller_id === symbol && edge.callee_id === rootId
+    );
+    if (reverse) {
+      return {
+        file: reverse.call_file || "",
+        line: reverse.call_line || 0,
+        self: false,
+        role: "caller",
+      };
+    }
+    return null;
+  }
+
   function codeLinesHtml(data, selectedRange = null) {
     const rows = data.lines || [];
     const texts = rows.map((row) => row.text);
@@ -1787,18 +1821,40 @@
     let selectedRange = null;
     let nodeHint = "";
     if (node) {
-      const nodeStart = node.function_start;
-      const nodeEnd = node.function_end;
-      if (nodeStart <= data.end && nodeEnd >= data.start) {
-        selectedRange = {
-          start: Math.max(nodeStart, data.start),
-          end: Math.min(nodeEnd, data.end),
-        };
-      } else {
-        nodeHint = t("source.nodeOutside", {
-          file: node.file,
-          line: (node.function && node.function.line) || 0,
+      // Highlight the *call-site line in the currently opened function* when the
+      // clicked node is a direct caller/callee in the visible graph. Fall back
+      // to the node's own function range only when no call-site edge exists.
+      const callSite = callSiteForNode(state.nodeSource.symbol);
+      if (
+        callSite &&
+        callSite.file === data.file &&
+        callSite.line >= data.start &&
+        callSite.line <= data.end
+      ) {
+        selectedRange = { start: callSite.line, end: callSite.line };
+        nodeHint = t("source.callSite", {
+          file: callSite.file,
+          line: callSite.line,
         });
+      } else if (callSite) {
+        nodeHint = t("source.callSiteOutside", {
+          file: callSite.file,
+          line: callSite.line,
+        });
+      } else {
+        const nodeStart = node.function_start;
+        const nodeEnd = node.function_end;
+        if (nodeStart <= data.end && nodeEnd >= data.start) {
+          selectedRange = {
+            start: Math.max(nodeStart, data.start),
+            end: Math.min(nodeEnd, data.end),
+          };
+        } else {
+          nodeHint = t("source.nodeOutside", {
+            file: node.file,
+            line: (node.function && node.function.line) || 0,
+          });
+        }
       }
     }
     const meta = `<div class="source-meta"><span class="mono">${escapeHtml(
@@ -1947,11 +2003,34 @@
     }
     const data = value.data || {};
     const functionInfo = data.function || {};
+    // A caller node calls the currently opened function: highlight the call
+    // inside the caller's own source (right pane). A callee node's call site
+    // lives in the current function, which the top pane already highlights.
+    const callSite = callSiteForNode(value.symbol);
+    let callRange = null;
+    let callHint = "";
+    if (
+      callSite &&
+      callSite.role === "caller" &&
+      callSite.file === data.file &&
+      callSite.line >= data.start &&
+      callSite.line <= data.end
+    ) {
+      callRange = { start: callSite.line, end: callSite.line };
+      callHint = t("source.callerCallsCurrent", {
+        file: callSite.file,
+        line: callSite.line,
+      });
+    }
     const meta = `<div class="source-meta"><span class="mono">${escapeHtml(
       `${data.file}:${functionInfo.line || 0}`
     )}</span>${
       data.shard ? badge(t("badge.shard", { name: data.shard }), "shard") : ""
-    }<span>${escapeHtml(sourceRangeNote(data))}</span></div>`;
+    }<span>${escapeHtml(sourceRangeNote(data))}</span>${
+      callHint
+        ? `<span class="source-node-hint">${escapeHtml(callHint)}</span>`
+        : ""
+    }</div>`;
     panel.innerHTML = `<section class="section">${heading}${meta}
       <div class="source-actions">
         <button type="button" class="ghost" data-jump="${escapeHtml(
@@ -1962,10 +2041,15 @@
         )}</button>
       </div>
       <div class="source-code node-source-code" tabindex="0">${codeLinesHtml(
-        data
+        data,
+        callRange
       )}</div></section>`;
     const code = panel.querySelector(".source-code");
-    if (code) code.scrollTop = 0;
+    if (code) {
+      code.scrollTop = callRange
+        ? Math.max(0, (callRange.start - data.start - 2) * 18)
+        : 0;
+    }
   }
 
   // -------------------------------------------------- CFG (branches tab)

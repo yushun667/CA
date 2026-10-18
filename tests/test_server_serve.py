@@ -53,7 +53,7 @@ def db_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @contextlib.contextmanager
-def _server(db: Path, state_db: Path, db_dir: Path | None = None):
+def _server(db: Path, state_db: Path, db_dir: Path | None = None, grace_ms: int = 0):
     from ca.server import ServeConfig, make_server
 
     config = ServeConfig(
@@ -62,6 +62,7 @@ def _server(db: Path, state_db: Path, db_dir: Path | None = None):
         host="127.0.0.1",
         port=0,
         state_db=str(state_db),
+        explain_grace_ms=grace_ms,
     )
     server = make_server(config)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
@@ -207,6 +208,144 @@ def test_explain_job_cross_client_loop(db_path: Path, tmp_path: Path) -> None:
             assert events[-1]["job"]["status"] == "done"
         finally:
             stream.close()
+
+
+def _create_explain(base: str, symbol: str = "proc_alloc") -> str:
+    status, created = _post_json(
+        base + "/api/jobs", {"type": "explain", "symbol": symbol}
+    )
+    assert status == 201, created
+    return created["data"]["job"]["id"]
+
+
+def _wait_job(base: str, job_id: str, status: str, timeout: float = 8.0) -> dict:
+    deadline = time.time() + timeout
+    payload: dict = {}
+    while time.time() < deadline:
+        code, payload = _get_json(base + f"/api/jobs/{job_id}")
+        assert code == 200, payload
+        job = payload["data"]["job"]
+        if job["status"] == status:
+            return job
+        time.sleep(0.05)
+    raise AssertionError(f"job {job_id} did not reach {status}: {payload}")
+
+
+def test_explain_auto_complete_without_agent(db_path: Path, tmp_path: Path) -> None:
+    with _server(db_path, tmp_path / "jobs.db", grace_ms=80) as server:
+        job_id = _create_explain(server.url)
+        job = _wait_job(server.url, job_id, "done")
+        result = job["result"]
+        assert result["provider"] in ("heuristic", "llm")
+        assert result["fallback"] is True
+        assert result["auto_completed"] is True
+        assert result["explanation"].strip()
+        assert job["claimed_by"] == "server:auto"
+        stream = urllib.request.urlopen(server.url + "/events?since_id=0", timeout=10)
+        try:
+            done: list[dict] = []
+            deadline = time.time() + 8
+            buffer = b""
+            while time.time() < deadline and not done:
+                line = stream.readline()
+                if not line:
+                    break
+                buffer += line
+                while b"\n\n" in buffer:
+                    block, buffer = buffer.split(b"\n\n", 1)
+                    for raw in block.splitlines():
+                        if raw.startswith(b"data: "):
+                            event = json.loads(raw[len(b"data: "):].decode("utf-8"))
+                            if event.get("event") == "done" and event["job"]["id"] == job_id:
+                                done.append(event)
+            assert done and done[0]["job"]["result"]["fallback"] is True
+        finally:
+            stream.close()
+
+
+def test_agent_claim_beats_auto_complete(db_path: Path, tmp_path: Path) -> None:
+    with _server(db_path, tmp_path / "jobs.db", grace_ms=600) as server:
+        job_id = _create_explain(server.url)
+        claim = _tool_envelope(
+            _mcp(
+                server.url,
+                [{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "explain_jobs", "arguments": {"action": "claim", "worker": "fast-agent"}}}],
+            )[0]
+        )
+        assert claim["data"]["job"]["id"] == job_id
+        time.sleep(0.9)  # past the grace window: auto-completion must skip
+        status, fetched = _get_json(server.url + f"/api/jobs/{job_id}")
+        assert status == 200
+        assert fetched["data"]["job"]["status"] == "running"
+        submitted = _tool_envelope(
+            _mcp(
+                server.url,
+                [{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "submit_explanation", "arguments": {"job_id": job_id, "explanation": "agent wins", "worker": "fast-agent"}}}],
+            )[0]
+        )
+        assert submitted["data"]["job"]["status"] == "done"
+        result = submitted["data"]["job"]["result"]
+        assert result["provider"] == "agent"
+        assert "fallback" not in result
+        time.sleep(0.3)
+        _code, again = _get_json(server.url + f"/api/jobs/{job_id}")
+        assert again["data"]["job"]["result"]["explanation"] == "agent wins"
+
+
+def test_explain_auto_complete_disabled(db_path: Path, tmp_path: Path) -> None:
+    with _server(db_path, tmp_path / "jobs.db", grace_ms=0) as server:
+        job_id = _create_explain(server.url)
+        time.sleep(0.35)
+        code, fetched = _get_json(server.url + f"/api/jobs/{job_id}")
+        assert code == 200
+        assert fetched["data"]["job"]["status"] == "queued"
+
+
+def test_agent_worker_cli_consumes_job(db_path: Path, tmp_path: Path) -> None:
+    with _server(db_path, tmp_path / "jobs.db", grace_ms=0) as server:
+        job_id = _create_explain(server.url, symbol="proc_free")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ca",
+                "agent-worker",
+                "--serve-url",
+                server.url,
+                "--once",
+                "--worker",
+                "test-worker",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={
+                "PYTHONPATH": str(REPO_ROOT / "src"),
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "HOME": str(Path.home()),
+            },
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0, result.stderr[-2000:]
+        assert "done" in result.stderr
+        job = _wait_job(server.url, job_id, "done")
+        assert job["claimed_by"] == "test-worker"
+        assert job["result"]["provider"] == "agent"
+        assert job["result"]["model"] == "mcp-agent"
+        assert job["result"]["explanation"].strip()
+        assert job["result"]["evidence"]
+
+
+def test_restart_reschedules_queued_explain_jobs(
+    db_path: Path, tmp_path: Path
+) -> None:
+    state_db = tmp_path / "jobs.db"
+    with _server(db_path, state_db, grace_ms=0) as server:
+        job_id = _create_explain(server.url)
+        _wait_job(server.url, job_id, "queued", timeout=1.0) if False else None
+    with _server(db_path, state_db, grace_ms=80) as server:
+        job = _wait_job(server.url, job_id, "done", timeout=8.0)
+        assert job["result"]["fallback"] is True
 
 
 def test_restart_requeues_running_jobs(db_path: Path, tmp_path: Path) -> None:

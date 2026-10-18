@@ -5,7 +5,7 @@
 ## 关键文件
 
 - `app.py`：`ThreadingHTTPServer`；查询端点复用 `ca.ui.server` 的 `api_*` 与 `QueryService`，新增 `/api/jobs*`、`/events`、`/mcp`；统一 `{ok,data|error}` 信封；优雅停止。
-- `service.py`：`ServeConfig`/`ServeService`（查询服务、`JobService`、`McpSession`）；MCP 额外工具 `explain_jobs`/`submit_explanation`；job 创建/领取/提交/失败。
+- `service.py`：`ServeConfig`/`ServeService`（查询服务、`JobService`、`McpSession`）；MCP 额外工具 `explain_jobs`/`submit_explanation`；job 创建/领取/提交/失败；explain 宽限自动完成（`--explain-grace-ms`/`CA_EXPLAIN_GRACE_MS`，默认 2s，agent 抢先不覆盖）。
 - `jobs.py`：`JobService` 薄封装 `ca.store.jobs.JobQueue`（每线程独立连接、单写者）+ `EventBus` 发布已追加事件。
 - `__init__.py`：导出 `ServeConfig`/`make_server`/`serve`。
 

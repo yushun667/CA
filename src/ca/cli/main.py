@@ -491,11 +491,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--state-db", default=None,
         help="writable job state DB (default: <db-dir>/.ca/jobs.db)",
     )
+    serve_parser.add_argument(
+        "--explain-grace-ms", type=int, default=None,
+        help="grace before server auto-completes an unclaimed explain job"
+             " (default: CA_EXPLAIN_GRACE_MS or 2000; 0 disables)",
+    )
     serve_parser.add_argument("--repo", default=None,
                               help="repository root for deep tools (optional)")
     serve_parser.add_argument("--compdb", default=None,
                               help="compile_commands.json for deep tools (optional)")
     serve_parser.set_defaults(func=commands.cmd_serve)
+
+    agent_worker = sub.add_parser(
+        "agent-worker",
+        help="MCP agent worker: claim explain jobs from ca serve and submit",
+        description=(
+            "Poll a running `ca serve` backend over MCP, claim explain jobs,"
+            " generate explanations (heuristic or CA_LLM_*) and submit them back"
+            " so the Web UI receives the SSE done event."
+        ),
+    )
+    agent_worker.add_argument("--serve-url", required=True,
+                              help="ca serve base URL (or host:port)")
+    agent_worker.add_argument("--worker", default="ca-agent-worker",
+                              help="worker id recorded in claimed_by")
+    agent_worker.add_argument("--interval", type=float, default=1.0,
+                              help="poll interval seconds (default: 1.0)")
+    agent_worker.add_argument("--limit", type=int, default=0,
+                              help="stop after N jobs (0 = unlimited)")
+    agent_worker.add_argument("--language", default="en", choices=("en", "zh"),
+                              help="explanation language (default: en)")
+    agent_worker.add_argument("--once", action="store_true",
+                              help="single poll cycle (used by tests/demos)")
+    agent_worker.set_defaults(func=commands.cmd_agent_worker)
 
     version = sub.add_parser("version", help="print tool and schema versions")
     version.add_argument(
