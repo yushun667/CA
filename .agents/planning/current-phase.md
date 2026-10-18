@@ -7,9 +7,12 @@ sources: offline + incremental indexing, callback/function-pointer resolution an
 call-graph queries, a multi-repo workspace/variant data model, and an MCP query
 server on the source machine. Phase 3 closes when its core functions are
 implemented and **functionally verified** on the OpenHarmony dsoftbus and camera
-repositories; that functional verification is now complete. Per user direction, full-corpus acceptance is deferred until all
-features are complete; those repositories are the functional-verification corpus,
-not a phase-3 acceptance gate.
+repositories.
+
+Status: **phase 3 functional scope complete (2026-10-18)**. Next: confirm phase 4
+scope (other OS trees/languages). Full-corpus acceptance remains deferred until
+all features are complete; dsoftbus/camera are the functional-verification
+repositories, not a phase-3 acceptance gate.
 
 ## Completion conditions
 
@@ -45,7 +48,7 @@ not a phase-3 acceptance gate.
 | 7 | Integration, unified backend, read-only UI, P0 query UX, agent evaluation | done | - |
 | 8 | C++ virtual/dynamic dispatch + general indirect-call candidates | done | - |
 | 9 | Header-dependency-aware incremental indexing/watch | done | - |
-| 10 | Workspace/project/variant CLI/MCP exposure (optional) | pending | - |
+| 10 | Workspace/project/variant CLI/MCP exposure (optional) | pending (not a phase-3 gate) | - |
 | 11 | Functional verification on OH dsoftbus + camera repositories + docs numbers | done | - |
 
 Functional verification (2026-10-18) used only dsoftbus (1,287 TU), camera (475

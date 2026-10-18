@@ -1,7 +1,8 @@
 # 项目大阶段规划
 
-Status: 阶段 3 功能收口进行中（OpenHarmony 优先）；阶段 5 的人类 UI 已提前交付。
-按用户要求，全量验收推迟到全部功能完成之后。
+Status: 阶段 3 功能范围已完成：核心功能实现并在 OpenHarmony dsoftbus/camera 仓库
+验证。下一步确认阶段 4 范围。阶段 5 的只读人类 UI 已提前交付；按用户要求，全量
+验收推迟到全部功能完成之后。
 
 路线图只保存阶段目标、依赖和可观察的完成条件；当前阶段的细分步骤放在
 [current-phase.zh.md](current-phase.zh.md)。
@@ -11,7 +12,7 @@ Status: 阶段 3 功能收口进行中（OpenHarmony 优先）；阶段 5 的人
 | 0. 治理初始化 | 建立根驱动的 `AGENTS.md` 项目管理系统 | 无 | 结构校验通过 | 已完成 |
 | 1. MVP 流水线 | 真实编译参数 + AST + CFG/数据流 + SQLite + CLI，真实 OS 语料 | 阶段 0 | xv6/FreeRTOS 端到端；精度/速度基线 | 已完成 |
 | 2. 精度与规模 | 内核子集、FTS5、增量重建、C++ 覆盖、打包/CI | 阶段 1 | 内核 compdb + 子集索引；FTS5/增量/C++ 验证；CI 精度门禁 | 已完成 |
-| 3. OpenHarmony 优先的 Agent 平台 | OpenHarmony v6.1 C/C++ 离线 + 增量索引、回调/函数指针调用图、workspace 模型、源码机 MCP 查询服务 | 阶段 2 | 真实 OH compdb；核心功能实现并在 OpenHarmony dsoftbus 与 camera 仓库上做功能验证；调用图/候选边；MCP；workspace 模型；测试/治理绿。全量运行/验收推迟到全部功能完成之后。 | 进行中 |
+| 3. OpenHarmony 优先的 Agent 平台 | OpenHarmony v6.1 C/C++ 离线 + 增量索引、回调/函数指针调用图、workspace 模型、源码机 MCP 查询服务 | 阶段 2 | 真实 OH compdb；核心功能实现并在 OpenHarmony dsoftbus 与 camera 仓库上做功能验证；调用图/候选边；MCP；workspace 模型；测试/治理绿。全量运行/验收推迟到全部功能完成之后。 | 已完成（功能；全量验收延后） |
 | 4. 多树与多语言 | AOSP/Yocto/Ubuntu 构建驱动、分片规模索引、Java/Kotlin 与 ArkTS/TS 前端、DWARF 符号化、覆盖/测试映射 | 阶段 3 | 每棵树有可复现语料驱动与功能证据；多语言 schema 投入使用 | 未开始 |
 | 5. 人类 UI | 查询浏览器、调用图可视化、源码联动、仪表盘 | 阶段 3-4 | UI 覆盖索引/查询/图/上下文；人类无需 CLI 即可操作 | 进行中（查询浏览器/调用图/源码已交付；仪表盘/索引管理未做） |
 

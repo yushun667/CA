@@ -23,6 +23,7 @@ Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上�
 - P0 查询体验（`brief`、compact/fields、batch、头文件声明）；xv6 45-run 真实 Agent
   矩阵，0 个编造位置。
 - AI 解释功能曾加入后已端到端移除；不再有 explain/sampling 端点或工具。
+- confidence 已端到端删除：候选只保留 kind/reason/evidence；schema v8 删除数据库字段。
 - C++ 虚函数/动态派发：元数据持久化（store schema v7）、同 TU 候选 + 跨 TU
   查询时合并；camera `Command::Do` 返回 29 条候选（无 override 对照为 0）；
   combined 语料 3,784 条候选边覆盖 1,531 个 call（20%）。
@@ -32,7 +33,7 @@ Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上�
   stats/search/detail/graph、MCP 18 工具、virtual/indirect 候选与 header 增量
   update/watch 全部通过；见 docs/functional-verification.zh.md。
 
-## 阶段 3 剩余核心功能
+## 延后 / 可选
 
 - C++ 虚函数/动态派发与注册式回调之外的通用函数指针候选。
 - header 依赖感知的增量索引：当前缓存只跟踪主 TU 源文件，头文件变更会漏掉依赖 TU。

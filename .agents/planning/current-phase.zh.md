@@ -6,7 +6,10 @@ Goal: 让 CA 能面向真实 OpenHarmony C/C++ 源码服务 AI agent 与人：�
 回调/函数指针解析与调用图查询、多仓 workspace/variant 数据模型、以及运行在源码机上
 的 MCP 查询服务。阶段 3 在核心功能实现并**在 OpenHarmony dsoftbus 与 camera 仓库上完成功能验证**后收口；
 该功能验证现已完成。
-按用户要求，全量验收推迟到全部功能完成之后；这些仓库是功能验证语料，不是阶段 3 的验收门槛。
+这些仓库是功能验证语料，不是阶段 3 的验收门槛。
+
+Status: **阶段 3 功能范围已完成（2026-10-18）**。下一步确认阶段 4 范围（其他 OS 树/
+语言）。按用户要求，全量验收推迟到全部功能完成之后。
 
 ## 完成条件
 
@@ -37,7 +40,7 @@ Goal: 让 CA 能面向真实 OpenHarmony C/C++ 源码服务 AI agent 与人：�
 | 7 | 集成、统一后端、只读 UI、P0 查询体验、Agent 评估 | 已完成 | 无 |
 | 8 | C++ 虚函数/动态派发 + 通用间接调用候选 | 待做 | 无 |
 | 9 | header 依赖感知的增量索引/watch | 待做 | 无 |
-| 10 | workspace/project/variant CLI/MCP 入口（可选） | 待做 | 无 |
+| 10 | workspace/project/variant CLI/MCP 入口（可选） | 待做（非阶段 3 门槛） | 无 |
 | 11 | OH dsoftbus + camera 仓库功能验证 + 文档数字 | 待做 | 步骤 8-9 |
 
 ## 剩余缺口的实施方案
