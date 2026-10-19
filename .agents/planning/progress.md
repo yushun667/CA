@@ -2,19 +2,17 @@
 
 Overall: phase 3 functional scope is complete and functionally verified on
 OpenHarmony dsoftbus + camera; phase 4 scope confirmation is next. Phase 1/2 are
-archived and delivered; the local suite is 497 passed / 4 skipped.
+archived and delivered.
 Full-corpus acceptance is deferred until all features are complete, per user
 direction; functional verification uses only the OH dsoftbus and camera
 repositories, not a phase-3 acceptance gate.
 
-## In progress
-
-- Native Windows/Linux/macOS packages: CLI/MCP/browser, installers and portable
-  archives. Native workflow results and downloadable artifacts remain required;
-  see [binary guide](../../docs/binaries.md).
-
 ## Done
 
+- Native packages (2026-10-19): Windows/Linux x64 and macOS x64/arm64 build,
+  installer and installed CLI/MCP/web smoke checks passed; artifacts/checksums
+  are downloadable. Full-suite baseline failures remain. Evidence and limits:
+  [binary guide](../../docs/binaries.md).
 - Server setup and read-only OH working copy at `/home/yu/CA_OH/openharmony`;
   real compdb (214,543 commands / 3.4 GB) and matched libclang 15 backend.
 - Offline index pipeline ran on 5/8 shards as **functional evidence only**

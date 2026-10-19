@@ -65,10 +65,12 @@ Unix-specific; Windows peak-RSS metrics remain unavailable.
 
 Each build must validate version/help, index a C fixture with multiple workers,
 query results, run MCP initialize/tools over stdio, and request desktop UI/API
-and HTTP MCP. Successful job artifacts and checksums are the build evidence;
-declaring a target alone is not verification. Earlier OS versions and additional
-architectures need their own runtime checks. Native packages do not replace a
-source project's compile database, headers or compiler sysroot.
+and HTTP MCP. All four native targets passed build and installed-binary smoke
+checks in [run 39253506257](https://github.com/yushun667/CA/actions/runs/39253506257)
+from source `d7d0f8`; artifacts/checksums are available. Full-repository baseline
+failures remain. Earlier OS versions and additional architectures need their
+own checks. Native packages do not replace a project's compile database,
+headers or compiler sysroot.
 
 ## Relations and supersession
 

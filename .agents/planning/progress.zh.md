@@ -1,18 +1,15 @@
 # 当前阶段进度
 
 Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上完成功能验证
-（OpenHarmony 优先）；下一步确认阶段 4 范围。阶段 1/2 已交付并归档；本地测试
-497 passed / 4 skipped。按用户要求，全量验收推迟到全部功能完成之后；功能验证只用 OH dsoftbus 与 camera
+（OpenHarmony 优先）；下一步确认阶段 4 范围。阶段 1/2 已交付并归档。
+按用户要求，全量验收推迟到全部功能完成之后；功能验证只用 OH dsoftbus 与 camera
 仓库，不是阶段 3 的验收门槛。
-
-## 进行中
-
-- 原生 Windows/Linux/macOS 包：CLI/MCP/浏览器、安装器与便携包。
-  仍需原生工作流结果与可下载产物，见
-  [二进制指南](../../docs/binaries.zh.md)。
 
 ## 已完成
 
+- 原生包（2026-10-19）：Windows/Linux x64、macOS x64/arm64 的构建、安装器及
+  安装后 CLI/MCP/网页冒烟检查均通过，产物/校验和可下载。全仓测试基线仍有失败。
+  证据与限制见[二进制指南](../../docs/binaries.zh.md)。
 - 服务器与只读 OH 工作副本 `/home/yu/CA_OH/openharmony`；真实 compdb
   （214,543 条命令 / 3.4 GB）与匹配 libclang 15 后端。
 - 离线索引管线在 5/8 shard 上跑通，仅作为**功能证据**（41,897 TU、82 失败、

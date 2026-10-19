@@ -22,9 +22,9 @@ or LLVM separately. A source installation requires **Python >= 3.11**.
 
 ### Native application (CLI, MCP and web UI)
 
-Get the installer or portable archive for your OS and architecture from a
-successful [Binaries workflow](https://github.com/yushun667/CA/actions/workflows/binaries.yml)
-run's **Artifacts** section. These are workflow artifacts; this workflow does
+Get the installer or portable archive for your OS and architecture from the
+**Artifacts** section of the [verified Binaries run](https://github.com/yushun667/CA/actions/runs/39253506257).
+These are workflow artifacts; this workflow does
 not publish a GitHub Release. Available targets, installation paths and
 verification instructions are in [the binary package guide](docs/binaries.md).
 

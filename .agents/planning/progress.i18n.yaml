@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-19
 en:
   file: progress.md
-  sha256: e3aff3f77dea93bbe85ba10c41034858481eafd0e8f4cc4faeb881c3d6d47853
+  sha256: 1edffb17d299cb67a104cc6d42a89de65d0fc2a22caaa2cd3b9d36ffb0e4b6d3
 zh:
   file: progress.zh.md
-  sha256: daea1550ed50655dd5a9732740276b3a98f8142f9b1c6269d8e1f040783795de
+  sha256: 566cb409c294ba132c645aab2a7702bf722197bdc673f2ffc8c36651c6cd08e7

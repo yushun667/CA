@@ -16,9 +16,9 @@ repositories, not a phase-3 acceptance gate.
 
 ## Native package delivery (2026-10-19)
 
-In progress: Windows/Linux/macOS installers and portable packages with CLI,
-MCP and double-click browser access. Completion requires native smoke results
-and downloadable artifacts, not just configured targets. See
+Completed: Windows x64, Linux x64 and macOS x64/arm64 packages passed native
+builds and installed-binary CLI/MCP/web smoke checks. Installers, portable
+archives and checksums are downloadable; evidence and limits are in the
 [binary guide](../../docs/binaries.md). Phase-3 acceptance remains closed.
 
 ## Completion conditions

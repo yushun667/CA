@@ -6,23 +6,30 @@ schema。安装和启动不需要 Python、LLVM、pip 或网络。分析自己�
 
 ## 构建目标与下载
 
-| 目标 | 构建基线 | 安装器 | 便携包 |
-|---|---|---|---|
-| Windows x64 | Windows 10/11 x64 | `-setup.exe` | `-portable.zip` |
-| Linux x64 | Ubuntu 22.04，glibc 2.35+ | `.deb` | `-portable.tar.gz` |
-| macOS x64 | macOS 15 | `.pkg` | `-portable.tar.gz` |
-| macOS arm64 | macOS 15 | `.pkg` | `-portable.tar.gz` |
+| 目标 | 系统基线 | 安装器 | 便携包 | 原生构建/安装后冒烟 |
+|---|---|---|---|---|
+| Windows x64 | Windows 10/11 x64 | `-setup.exe` | `-portable.zip` | [通过](https://github.com/yushun667/CA/actions/runs/39253506257/job/118062887696) |
+| Linux x64 | Ubuntu 22.04，glibc 2.35+ | `.deb` | `-portable.tar.gz` | [通过](https://github.com/yushun667/CA/actions/runs/39253506257/job/118062888040) |
+| macOS x64 | macOS 15 | `.pkg` | `-portable.tar.gz` | [通过](https://github.com/yushun667/CA/actions/runs/39253506257/job/118062887804) |
+| macOS arm64 | macOS 15 | `.pkg` | `-portable.tar.gz` | [通过](https://github.com/yushun667/CA/actions/runs/39253506257/job/118062887785) |
+
+四个目标均在 [运行 39253506257](https://github.com/yushun667/CA/actions/runs/39253506257)
+通过原生构建、安装器安装，以及命令行/索引、MCP 与网页冒烟检查，源码为
+[d7d0f8](https://github.com/yushun667/CA/commit/d7d0f8244816bc1b6ee11cc23e5884c47bb5eec3)。
+CI runner 为 Windows Server 2022、Ubuntu 22.04 与 macOS 15。全仓测试基线仍有失败，
+包括下文的 Windows 头文件增量问题。
 
 较旧 macOS、使用 musl 的 Linux 发行版、Windows/Linux ARM64 不属于已验证目标。
-各系统与架构在原生 runner 上构建，不从 Windows 交叉编译。配置了构建目标不代表
-验证通过；只有该工作流任务的二进制冒烟检查通过后，才算完成验证。
+各系统与架构在原生 runner 上构建，不从 Windows 交叉编译。
 
-打开一次成功的 [Binaries 工作流](https://github.com/yushun667/CA/actions/workflows/binaries.yml)
-运行，下载 **Artifacts → `ca-<os>-<arch>`**。解压外层工作流压缩包后可见安装器、
+打开已验证的 [Binaries 构建](https://github.com/yushun667/CA/actions/runs/39253506257)，
+下载 **Artifacts → `ca-<os>-<arch>`**。解压外层工作流压缩包后可见安装器、
 便携包与 `SHA256SUMS`。文件名以 `ca-<version>-<os>-<arch>` 开头，例如
 `ca-0.1.0-windows-x64-setup.exe`。将文件 SHA-256 与 `SHA256SUMS` 比较：Windows
 用 `Get-FileHash`，Linux 用 `sha256sum`，macOS 用 `shasum -a 256`。
 该工作流不创建 GitHub Release。
+本地汇总产物时，各目标分别放在 `dist/installers/ca-<os>-<arch>/`，避免四份
+`SHA256SUMS` 相互覆盖。
 
 安装包没有发布者证书或 Apple 公证，因此系统提示会显示未签名或未验证发布者。
 确认来源与校验和后，通过系统正常界面批准安装。

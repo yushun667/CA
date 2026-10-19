@@ -8,25 +8,32 @@ project's build environment.
 
 ## Targets and downloads
 
-| Target | Build baseline | Installer | Portable archive |
-|---|---|---|---|
-| Windows x64 | Windows 10/11 x64 | `-setup.exe` | `-portable.zip` |
-| Linux x64 | Ubuntu 22.04, glibc 2.35+ | `.deb` | `-portable.tar.gz` |
-| macOS x64 | macOS 15 | `.pkg` | `-portable.tar.gz` |
-| macOS arm64 | macOS 15 | `.pkg` | `-portable.tar.gz` |
+| Target | System baseline | Installer | Portable archive | Native build/install smoke |
+|---|---|---|---|---|
+| Windows x64 | Windows 10/11 x64 | `-setup.exe` | `-portable.zip` | [passed](https://github.com/yushun667/CA/actions/runs/39253506257/job/118062887696) |
+| Linux x64 | Ubuntu 22.04, glibc 2.35+ | `.deb` | `-portable.tar.gz` | [passed](https://github.com/yushun667/CA/actions/runs/39253506257/job/118062888040) |
+| macOS x64 | macOS 15 | `.pkg` | `-portable.tar.gz` | [passed](https://github.com/yushun667/CA/actions/runs/39253506257/job/118062887804) |
+| macOS arm64 | macOS 15 | `.pkg` | `-portable.tar.gz` | [passed](https://github.com/yushun667/CA/actions/runs/39253506257/job/118062887785) |
+
+All four targets passed native builds, installer installation and CLI/indexing,
+MCP and web smoke checks in [run 39253506257](https://github.com/yushun667/CA/actions/runs/39253506257),
+from source [d7d0f8](https://github.com/yushun667/CA/commit/d7d0f8244816bc1b6ee11cc23e5884c47bb5eec3).
+CI runners were Windows Server 2022, Ubuntu 22.04 and macOS 15. Full-repository
+baseline failures remain, including the Windows header-update issue below.
 
 Older macOS versions, Linux musl distributions and Windows/Linux ARM64 are not
 validated targets. Each OS/architecture is built on a native runner, not by
-cross-compiling a Windows build. A configured target is considered verified
-only after its workflow job passes the binary smoke checks.
+cross-compiling a Windows build.
 
-Open a successful [Binaries workflow](https://github.com/yushun667/CA/actions/workflows/binaries.yml)
-run and download **Artifacts → `ca-<os>-<arch>`**. Extract this outer workflow
+Open the [verified Binaries run](https://github.com/yushun667/CA/actions/runs/39253506257)
+and download **Artifacts → `ca-<os>-<arch>`**. Extract this outer workflow
 archive to find the installer, portable archive and `SHA256SUMS`. Filenames begin
 with `ca-<version>-<os>-<arch>`, for example
 `ca-0.1.0-windows-x64-setup.exe`. Compare the file's SHA-256 against
 `SHA256SUMS` (`Get-FileHash` on Windows, `sha256sum` on Linux,
 `shasum -a 256` on macOS). The workflow does not create a GitHub Release.
+For a local artifact collection, keep each target under
+`dist/installers/ca-<os>-<arch>/` so the four `SHA256SUMS` files stay separate.
 
 Packages have no publisher certificate or Apple notarization; operating-system
 prompts therefore show an unsigned/unverified publisher. Verify the source and

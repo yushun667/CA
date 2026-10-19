@@ -12,8 +12,8 @@ Harness 插件。原生包自带 Python、libclang、DuckDB、数据库 schema �
 
 ### 原生应用（命令行、MCP 与网页）
 
-进入一次成功的 [Binaries 工作流](https://github.com/yushun667/CA/actions/workflows/binaries.yml)
-运行，在 **Artifacts** 下载对应系统与架构的安装器或便携包。这些是工作流构建产物，
+进入已验证的 [Binaries 构建](https://github.com/yushun667/CA/actions/runs/39253506257)，
+在 **Artifacts** 下载对应系统与架构的安装器或便携包。这些是工作流构建产物，
 该工作流不会发布 GitHub Release。支持目标、安装路径与校验方法见
 [二进制安装指南](docs/binaries.zh.md)。
 
