@@ -12,10 +12,31 @@ Harness 插件。原生包自带 Python、libclang、DuckDB、数据库 schema �
 
 ### 原生应用（命令行、MCP 与网页）
 
-进入已验证的 [Binaries 构建](https://github.com/yushun667/CA/actions/runs/39253506257)，
-在 **Artifacts** 下载对应系统与架构的安装器或便携包。这些是工作流构建产物，
-该工作流不会发布 GitHub Release。支持目标、安装路径与校验方法见
-[二进制安装指南](docs/binaries.zh.md)。
+**安装包由 GitHub Actions 构建生成。** Windows、Linux 与两种 macOS 架构分别使用
+原生构建环境；四个目标均已在
+[这次 Binaries 构建](https://github.com/yushun667/CA/actions/runs/39253506257)
+通过独立运行及安装后的命令行、MCP 和网页检查。
+
+1. 登录 GitHub，打开上述已验证构建，或从
+   [Actions → Binaries](https://github.com/yushun667/CA/actions/workflows/binaries.yml)
+   选择一次成功运行。
+2. 在页面的 **Artifacts** 区域下载对应系统的压缩包：
+
+   | 系统 | 制品名称 | 包内安装器 |
+   |---|---|---|
+   | Windows x64 | `ca-windows-x64` | `ca-<version>-windows-x64-setup.exe` |
+   | Linux x64 | `ca-linux-x64` | `ca-<version>-linux-x64.deb` |
+   | macOS Intel | `ca-macos-x64` | `ca-<version>-macos-x64.pkg` |
+   | macOS Apple 芯片 | `ca-macos-arm64` | `ca-<version>-macos-arm64.pkg` |
+
+3. 解压下载的压缩包，按 `SHA256SUMS` 校验安装器后运行。每组制品还包含便携包。
+
+制品保留 **30 天**。下载需要登录 GitHub，并拥有仓库读取权限，参见
+[GitHub 制品下载说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)。
+当前流程将安装包上传到 **Actions → Artifacts**，不会发布 GitHub Release。
+需要重新构建时，打开 **Actions → Binaries → Run workflow**。推送到
+`build/binaries` 分支或推送匹配 `v*` 的标签也会触发打包；普通 `main` 推送不会触发。
+系统要求、安装路径、未签名提示及校验命令见[二进制安装指南](docs/binaries.zh.md)。
 
 安装后双击 **CA** 即打开本机浏览器界面。同一个可执行文件同时提供全部命令行功能与 MCP：
 

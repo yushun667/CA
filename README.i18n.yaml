@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-19
 en:
   file: README.md
-  sha256: 9c3f32667ad7f26ffeacf178a7a39f60afa66a0ec8df71f92a6a98b8417f6dab
+  sha256: 94763f64bb0f5aa9ae3f154c290c5c97a69ad79e7be452bf4c305d72dd57ee4f
 zh:
   file: README.zh.md
-  sha256: 6f233854eaa0af4da6c891a117033c226f4ec195d18d4dd2d40252c881af39c7
+  sha256: 80a577acc62573e6c38007311b115201bbfd7eec2d8a55a356f2068bc1f8af11

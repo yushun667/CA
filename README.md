@@ -22,11 +22,33 @@ or LLVM separately. A source installation requires **Python >= 3.11**.
 
 ### Native application (CLI, MCP and web UI)
 
-Get the installer or portable archive for your OS and architecture from the
-**Artifacts** section of the [verified Binaries run](https://github.com/yushun667/CA/actions/runs/39253506257).
-These are workflow artifacts; this workflow does
-not publish a GitHub Release. Available targets, installation paths and
-verification instructions are in [the binary package guide](docs/binaries.md).
+**Installers are built on GitHub Actions.** Windows, Linux and both macOS
+architectures use native runners; all four targets passed standalone and
+installed CLI, MCP and web UI checks in the
+[verified Binaries run](https://github.com/yushun667/CA/actions/runs/39253506257).
+
+1. Sign in to GitHub and open the verified run above, or choose a successful run
+   from [Actions → Binaries](https://github.com/yushun667/CA/actions/workflows/binaries.yml).
+2. In **Artifacts**, download the archive matching your system:
+
+   | System | Artifact | Installer inside |
+   |---|---|---|
+   | Windows x64 | `ca-windows-x64` | `ca-<version>-windows-x64-setup.exe` |
+   | Linux x64 | `ca-linux-x64` | `ca-<version>-linux-x64.deb` |
+   | macOS Intel | `ca-macos-x64` | `ca-<version>-macos-x64.pkg` |
+   | macOS Apple Silicon | `ca-macos-arm64` | `ca-<version>-macos-arm64.pkg` |
+
+3. Extract the downloaded archive, verify the installer against `SHA256SUMS`,
+   then run it. Each artifact also includes a portable archive.
+
+Artifacts are retained for **30 days**. Downloads require a signed-in GitHub
+account with repository read access; see
+[GitHub's artifact download instructions](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts).
+The current workflow uploads to **Actions → Artifacts** and does not publish
+GitHub Releases. For another build, use **Actions → Binaries → Run workflow**.
+Pushes to `build/binaries` or tags matching `v*` also trigger packaging; ordinary
+`main` pushes do not. System requirements, installation paths, unsigned-package
+notices and verification commands are in [the binary package guide](docs/binaries.md).
 
 After installing, double-click **CA** to open the local browser UI. The same
 executable also provides every CLI command and MCP:
