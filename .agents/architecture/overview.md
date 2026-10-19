@@ -2,8 +2,7 @@
 
 Status: Phase 2 delivered on 2026-10-17; modules are verified on xv6, FreeRTOS and a Linux 6.12 kernel subset (see ../../planning/progress.md).
 
-This document describes the current system structure only. Rationale lives in
-`../decisions/active/`; execution status lives in `../planning/`.
+Rationale: `../decisions/active/`; execution status: `../planning/`.
 
 ## System boundary
 
@@ -24,6 +23,7 @@ This document describes the current system structure only. Rationale lives in
 | `ca.store` | Bulk ingest with dedupe, indexes, and the query API | `SqliteStore` implementing `RecordStore` |
 | `ca.pipeline` | Process-parallel orchestration, metrics, per-TU error isolation | `run_index -> IndexSummary` |
 | `ca.cli` | `index`, `query`, `stats`, `export` commands | `main(argv) -> int` |
+| `ca.desktop` | Launch a loopback unified backend and open the browser; initialize default user data | explicit `ca desktop`, or frozen executable without arguments |
 
 `ca.core` is Lead-owned and holds the record contract, stable IDs, and the
 inter-module protocols. No other module imports `clang` types into `core`.
@@ -71,9 +71,15 @@ row so caller/callee joins stay complete.
 
 ## Runtime and deployment
 
-- Python 3.11 CLI, no daemon and no network service; runs on macOS and Linux.
-- Dependencies pinned in `requirements.txt`; libclang 18.1.1 is bundled in the
-  repository `.venv`, so parsing does not depend on the host LLVM.
+- Python 3.11 CLI with optional MCP/UI/unified backend; native
+  Windows/Linux/macOS packages expose the same commands.
+- Dependencies: `requirements.txt`; bundles include Python, matched libclang,
+  DuckDB, schema and UI. Frozen worker dispatch precedes CLI; only frozen
+  no-argument startup defaults to desktop.
+- Desktop binds loopback; user data contains backend task state and an empty
+  default index. Installers do not own user indexes or source trees. Installers
+  and portable archives share `dist/ca`; native CI verifies builds. Contracts:
+  [binary guide](../../docs/binaries.md).
 - Parallelism uses one process per worker (`ProcessPoolExecutor`); SQLite WAL
   allows one writer (the main process) with concurrent readers.
 - Corpora, captured builds, and benchmark artifacts live under `.tmp/` (ignored).

@@ -9,6 +9,10 @@
 - `check_artifacts.py`：CI/交付前的产物一致性检查（双语文档 i18n SHA-256、agent_eval JSON、benchmark results JSON）。
 - `verify_shard_mcp.py`：分片 DB 的 MCP 验收（stdio/HTTP、15 工具、ensure_deep 首次/命中延迟、deep_status）；输出 JSON。
 - `sample_candidates.py`：OH `call_targets` 候选边按 kind/reason 抽样（totals/samples/对照/graph 集成/TU 健康度），供 analyze 精度复核。
+- `build_binary.py` / `frozen_entry.py`：原生 PyInstaller onedir 构建与多进程冻结入口；构建依赖在根 `requirements-build.txt`。
+- `build_installer.py`：将原生 bundle 打包为便携归档及 Windows EXE、Linux DEB、macOS PKG，并生成 SHA-256。
+- `ca-installer.iss` / `ca.desktop` / `ca-macos-launcher.sh`：各平台安装器与应用入口资源。
+- `smoke_binary.py`：在仓库外验证冻结产物的多进程索引、CLI、MCP、网页和首次启动；`--binary PATH` 指定可执行文件。
 
 ## 局部规则
 

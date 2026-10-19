@@ -1,0 +1,8 @@
+version: 1
+updated: 2026-10-19
+en:
+  file: binaries.md
+  sha256: 2df4844eaeeb47e5113bb10f7cbc8e4b74cb4e7adb53448c653bb615867fdcd5
+zh:
+  file: binaries.zh.md
+  sha256: 3e2365202ef391ac56992e6944278a6cb165139a0065922c84361a02ac11c1bc

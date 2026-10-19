@@ -1,6 +1,10 @@
 """``python -m ca`` entry point."""
 
-from ca.cli.main import main
-
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+
+    from ca.cli.main import main
+
     raise SystemExit(main())

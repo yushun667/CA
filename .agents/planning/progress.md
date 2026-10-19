@@ -7,6 +7,12 @@ Full-corpus acceptance is deferred until all features are complete, per user
 direction; functional verification uses only the OH dsoftbus and camera
 repositories, not a phase-3 acceptance gate.
 
+## In progress
+
+- Native Windows/Linux/macOS packages: CLI/MCP/browser, installers and portable
+  archives. Native workflow results and downloadable artifacts remain required;
+  see [binary guide](../../docs/binaries.md).
+
 ## Done
 
 - Server setup and read-only OH working copy at `/home/yu/CA_OH/openharmony`;
@@ -48,13 +54,9 @@ repositories, not a phase-3 acceptance gate.
   (1,762 TU): baseline stats/search/detail/graph, MCP 18 tools, virtual/indirect
   candidates and header-incremental update/watch all pass; write-up in
   docs/functional-verification.md.
-- DSH plugin bundle `dsh/` (`@local/dsh-ca`): CA page + project model + 12 `ca_*`
-  tools in Harness, local/remote Linux `ca serve` lifecycle, long
-  tasks, DSH-model AI explanations, and a cross-platform/offline backend installer
-  (wheel-complete package, bundled CA wheel, per-platform wheelhouse; local Windows/
-  macOS/Linux code paths, verified Linux offline install), and one-step project creation
-  (local directory or SSH-browsed directory; install/DB/start automatic); CA core is
-  unchanged (own `dsh/test/` node suite; CA baseline unaffected).
+- DSH plugin (`@local/dsh-ca`): CA page/projects, 12 tools, local/remote backend,
+  tasks and explanations; wheel/offline install and automatic preparation.
+  Linux offline install verified; tests separate. See [guide](../../docs/dsh-plugin.md).
 
 ## Deferred / optional
 

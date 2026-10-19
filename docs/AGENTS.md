@@ -18,6 +18,7 @@
 ## 本目录文件
 
 - [usage.md](usage.md)：安装、索引、查询、输出与限制。
+- [binaries.md](binaries.md)：原生安装包、便携包、CLI/MCP/网页入口、构建与验证；中文 binaries.zh.md。
 - [mcp.md](mcp.md)：MCP 查询接口（stdio/HTTP、工具）；改行为时同步。
 - [incremental.md](incremental.md)：离线全量+增量、缓存失效、watcher。
 - [layered-indexing.md](layered-indexing.md)：L0/L1/L2 分层与 deep_ready 语义。

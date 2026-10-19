@@ -5,6 +5,7 @@ GitHub Actions 工作流定义目录；只放流水线 YAML，不包含分析逻
 ## 关键文件
 
 - `ci.yml`：Python 3.11 上安装固定依赖与可编辑包，运行全量 pytest 和精度门禁（macro F1 ≥ 0.9），并上传精度 JSON artifact。
+- `binaries.yml`：四种原生 OS/架构构建、安装与独立运行核验，上传安装器、便携包和校验和；支持手动触发。
 
 ## 局部规则
 

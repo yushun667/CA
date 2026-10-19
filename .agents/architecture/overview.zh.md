@@ -2,7 +2,7 @@
 
 Status: 阶段 2 于 2026-10-17 交付；模块已在 xv6、FreeRTOS 与 Linux 6.12 内核子集上验证（见 ../planning/progress.zh.md）。
 
-本文件只描述当前系统结构；选择理由见 `../decisions/active/`，执行状态见 `../planning/`。
+选择理由见 `../decisions/active/`；执行状态见 `../planning/`。
 
 ## 系统边界
 
@@ -22,6 +22,7 @@ Status: 阶段 2 于 2026-10-17 交付；模块已在 xv6、FreeRTOS 与 Linux 6
 | `ca.store` | 批量写入、去重、索引与查询 API | `SqliteStore` 实现 `RecordStore` |
 | `ca.pipeline` | 多进程编排、指标统计、单 TU 错误隔离 | `run_index -> IndexSummary` |
 | `ca.cli` | `index`、`query`、`stats`、`export` 子命令 | `main(argv) -> int` |
+| `ca.desktop` | 启动回环地址统一后端并打开浏览器；初始化默认用户数据 | 显式 `ca desktop`，或冻结可执行文件无参数启动 |
 
 `ca.core` 由 Lead 维护，保存记录契约、稳定 ID 与模块协议；其他模块不把 Clang 类型带入 `core`。
 
@@ -59,7 +60,11 @@ Status: 阶段 2 于 2026-10-17 交付；模块已在 xv6、FreeRTOS 与 Linux 6
 
 ## 运行与部署
 
-- Python 3.11 CLI，无守护进程、无网络服务；macOS 与 Linux 可运行。
-- 依赖固定在 `requirements.txt`；libclang 18.1.1 随仓库 `.venv` 提供，不依赖宿主机 LLVM 开发包。
+- Python 3.11 CLI，带可选 MCP/UI/统一后端；原生 Windows/Linux/macOS 包提供相同命令。
+- 依赖见 `requirements.txt`；目录包包含 Python、匹配的 libclang、DuckDB、schema
+  与 UI。冻结 worker 分派先于 CLI；仅冻结的无参数入口默认进入桌面模式。
+- 桌面绑定回环地址；用户数据保存后端任务状态和默认空索引。安装器不拥有用户索引或
+  源码树。安装器与便携包共用 `dist/ca`，原生 CI 验证构建。契约见
+  [二进制指南](../../docs/binaries.zh.md)。
 - 并行：每个 worker 一个进程（`ProcessPoolExecutor`）；SQLite WAL 允许单写者（主进程）与并发读。
 - 语料、俘获构建与基准产物放在 `.tmp/`（已忽略）。

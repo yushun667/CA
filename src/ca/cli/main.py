@@ -1,6 +1,6 @@
 """``ca`` command line entry point: ``main(argv=None) -> int``.
 
-Subcommands: ``index``, ``update``, ``query``, ``graph``, ``mcp``, ``ui``,
+Subcommands: ``index``, ``update``, ``query``, ``graph``, ``mcp``, ``ui``, ``desktop``,
 ``stats``, ``export``, ``version``.
 Exit codes: 0 success, 1 argument/runtime error, 2 no results.
 """
@@ -531,6 +531,17 @@ def build_parser() -> argparse.ArgumentParser:
                               help="compile_commands.json for deep tools (optional)")
     serve_parser.set_defaults(func=commands.cmd_serve)
 
+    desktop = sub.add_parser(
+        "desktop", help="open the local browser UI and HTTP MCP backend",
+    )
+    desktop.add_argument("--db", default=None, help="existing index (default: per-user empty index)")
+    desktop.add_argument("--port", type=int, default=None,
+                         help="local port (default: 8766, or a free port if busy; 0 picks a free port)")
+    desktop.add_argument("--no-browser", action="store_true", help="start without opening a browser")
+    desktop.add_argument("--repo", default=None, help="repository root for deep tools")
+    desktop.add_argument("--compdb", default=None, help="compile_commands.json for deep tools")
+    desktop.set_defaults(func=_cmd_desktop)
+
     # -- workspace / project / variant registry --------------------------- #
     for group_name, help_text in (
         ("workspace", "register and inspect workspace metadata"),
@@ -601,6 +612,12 @@ def _cmd_ui(args: argparse.Namespace) -> int:
     from ca.ui.server import cmd_ui
 
     return cmd_ui(args)
+
+
+def _cmd_desktop(args: argparse.Namespace) -> int:
+    from ca.desktop import launch
+
+    return launch(args)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -15,13 +15,35 @@ performance baselines are recorded under `benchmarks/results/`.
 
 ## Installation
 
-CA needs **Python >= 3.11**; nothing is compiled — CA is pure Python and the
-runtime dependencies (`clang`/`libclang`, `duckdb`, `pytest`) are prebuilt
-wheels. The CLI works on macOS/Linux; the DSH plugin also supports a Linux
-remote backend selected over SSH. A DSH desktop user does not need a manual
-Python setup: the plugin installs a private backend for you (see below).
+CA offers native binary packages for Windows, Linux and macOS, a Python source
+installation, and a DeepSeek Harness plugin. Native packages include Python,
+libclang, DuckDB, the database schema and the web UI; users do not install Python
+or LLVM separately. A source installation requires **Python >= 3.11**.
 
-### As a DeepSeek Harness plugin (recommended)
+### Native application (CLI, MCP and web UI)
+
+Get the installer or portable archive for your OS and architecture from a
+successful [Binaries workflow](https://github.com/yushun667/CA/actions/workflows/binaries.yml)
+run's **Artifacts** section. These are workflow artifacts; this workflow does
+not publish a GitHub Release. Available targets, installation paths and
+verification instructions are in [the binary package guide](docs/binaries.md).
+
+After installing, double-click **CA** to open the local browser UI. The same
+executable also provides every CLI command and MCP:
+
+```sh
+ca version
+ca index --repo /path/to/source --compdb /path/to/compile_commands.json --db /path/to/index.db
+ca desktop --db /path/to/index.db
+ca mcp --db /path/to/index.db
+```
+
+First launch creates an empty index in the user's data directory; index your
+sources before querying. Portable archives must keep the executable and its
+supporting files together. See [the binary package guide](docs/binaries.md) for
+Windows commands, MCP client configuration, user data and build instructions.
+
+### As a DeepSeek Harness plugin
 
 1. Install DeepSeek Harness (desktop app or `dsh web`) and open its plugin
    manager.

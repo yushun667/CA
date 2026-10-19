@@ -1,0 +1,105 @@
+name: Binaries
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["build/binaries"]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-2022
+            architecture: x64
+            executable: dist/ca/ca.exe
+          - target: linux-x64
+            runner: ubuntu-22.04
+            architecture: x64
+            executable: dist/ca/ca
+          - target: macos-x64
+            runner: macos-15-intel
+            architecture: x64
+            executable: dist/ca/ca
+          - target: macos-arm64
+            runner: macos-15
+            architecture: arm64
+            executable: dist/ca/ca
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          architecture: ${{ matrix.architecture }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+            pyproject.toml
+
+      - name: Install fixed dependencies
+        run: |
+          python -m pip install -r requirements-build.txt
+          python -m pip install -e . --no-deps
+
+      - name: Test binary packaging contracts
+        run: python -m pytest tests/test_binary_installers.py tests/test_binary_runtime.py -q
+
+      - name: Build native runtime bundle
+        run: python scripts/build_binary.py
+
+      - name: Exercise standalone CLI, indexing, MCP and web UI
+        run: python scripts/smoke_binary.py --binary ${{ matrix.executable }}
+
+      - name: Create portable archive and native installer
+        run: python scripts/build_installer.py --bundle dist/ca
+
+      - name: Install and exercise packaged runtime (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo dpkg -i dist/installers/*.deb
+          python scripts/smoke_binary.py --binary /usr/bin/ca
+          sudo dpkg -r ca-analyzer
+
+      - name: Install and exercise packaged runtime (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo installer -pkg dist/installers/*.pkg -target /
+          python scripts/smoke_binary.py --binary /usr/local/bin/ca
+          test -x /Applications/CA.app/Contents/MacOS/CA
+
+      - name: Install and exercise packaged runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist/installers/*-setup.exe).FullName
+          $installed = Join-Path $env:RUNNER_TEMP 'CA-installed'
+          $process = Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$installed`"") -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          python scripts/smoke_binary.py --binary "$installed/ca.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $process = Start-Process -FilePath "$installed/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Uninstaller failed: $($process.ExitCode)" }
+
+      - name: Upload installers, portable archives and checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: ca-${{ matrix.target }}
+          path: dist/installers/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

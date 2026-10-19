@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import signal
+import socket
 import sqlite3
 import sys
 import threading
@@ -469,12 +470,20 @@ def make_handler(service: ServeService) -> type[BaseHTTPRequestHandler]:
 
 class ServeHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    allow_reuse_address = sys.platform != "win32"
 
     def __init__(self, address: tuple[str, int], service: ServeService) -> None:
         self.service = service
         self.started_at = time.time()
         super().__init__(address, make_handler(service))
+
+    def server_bind(self) -> None:
+        if sys.platform == "win32":
+            # Winsock SO_REUSEADDR can bind an active listener and route the
+            # browser to either process. Exclusive binding makes conflicts fail
+            # before desktop chooses another port, including legacy UI servers.
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
     @property
     def url(self) -> str:

@@ -11,6 +11,12 @@ Goal: 让 CA 能面向真实 OpenHarmony C/C++ 源码服务 AI agent 与人：�
 Status: **阶段 3 功能范围已完成（2026-10-18）**。下一步确认阶段 4 范围（其他 OS 树/
 语言）。按用户要求，全量验收推迟到全部功能完成之后。
 
+## 原生安装包交付（2026-10-19）
+
+正在交付 Windows/Linux/macOS 安装器与便携包，提供 CLI、MCP 与双击浏览器入口。
+完成条件是原生冒烟结果和可下载产物，仅配置目标不算完成。见
+[二进制指南](../../docs/binaries.zh.md)。阶段 3 验收保持收口。
+
 ## 完成条件
 
 - **OpenHarmony 语料**：从工作副本 `/home/yu/CA_OH/openharmony` 生成真实 C/C++

@@ -10,6 +10,7 @@
 - `test_store_*.py`：数据库写入与查询。
 - `test_build_*.py` / `fixtures/build_*`：编译参数获取。
 - `test_e2e_*.py` / `fixtures/golden_*`：端到端与精度基线。
+- `test_binary_*.py`：冻结入口、桌面启动及平台安装包契约；真实独立运行另用 `scripts/smoke_binary.py`。
 
 ## 局部规则
 

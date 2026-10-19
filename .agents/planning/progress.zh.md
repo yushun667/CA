@@ -5,6 +5,12 @@ Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上�
 497 passed / 4 skipped。按用户要求，全量验收推迟到全部功能完成之后；功能验证只用 OH dsoftbus 与 camera
 仓库，不是阶段 3 的验收门槛。
 
+## 进行中
+
+- 原生 Windows/Linux/macOS 包：CLI/MCP/浏览器、安装器与便携包。
+  仍需原生工作流结果与可下载产物，见
+  [二进制指南](../../docs/binaries.zh.md)。
+
 ## 已完成
 
 - 服务器与只读 OH 工作副本 `/home/yu/CA_OH/openharmony`；真实 compdb
@@ -40,12 +46,9 @@ Overall: 阶段 3 功能目标已完成并在 OpenHarmony dsoftbus + camera 上�
 - OH dsoftbus（1,287 TU）、camera（475 TU）与 combined（1,762 TU）功能验证：
   stats/search/detail/graph、MCP 18 工具、virtual/indirect 候选与 header 增量
   update/watch 全部通过；见 docs/functional-verification.zh.md。
-- DSH 插件 bundle `dsh/`（`@local/dsh-ca`）：在 DeepSeek Harness 内提供 CA 页面 +
-  项目模型 + 12 个原生 `ca_*` 工具、本地/远程 Linux `ca serve` 生命周期、长任务、
-  DSH 模型驱动的 AI 解释，以及跨平台/离线后端安装器（wheel-complete 包、内置 CA
-  wheel、按平台 wheelhouse；本地 Win/mac/Linux 代码路径，Linux 离线安装已真机验证）；
-  一键建项目（本机选目录 / 远程登录浏览目录，自动装后端、建库并启动）；
-  CA 核心不变、测试基线不受影响（插件有独立 `dsh/test/` node 套件）。
+- DSH 插件（`@local/dsh-ca`）：CA 页面/项目、12 个工具、本地/远程后端、任务与解释；
+  wheel/离线安装与自动准备。Linux 离线安装已验证；测试独立。见
+  [指南](../../docs/dsh-plugin.zh.md)。
 
 ## 延后 / 可选
 

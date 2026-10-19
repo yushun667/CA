@@ -14,6 +14,13 @@ scope (other OS trees/languages). Full-corpus acceptance remains deferred until
 all features are complete; dsoftbus/camera are the functional-verification
 repositories, not a phase-3 acceptance gate.
 
+## Native package delivery (2026-10-19)
+
+In progress: Windows/Linux/macOS installers and portable packages with CLI,
+MCP and double-click browser access. Completion requires native smoke results
+and downloadable artifacts, not just configured targets. See
+[binary guide](../../docs/binaries.md). Phase-3 acceptance remains closed.
+
 ## Completion conditions
 
 - **OpenHarmony corpus**: real C/C++ `compile_commands.json` from the working
@@ -51,13 +58,9 @@ repositories, not a phase-3 acceptance gate.
 | 10 | Workspace/project/variant CLI/MCP exposure (optional) | done (CLI/MCP/serve; UI task-47) | - |
 | 11 | Functional verification on OH dsoftbus + camera repositories + docs numbers | done | - |
 
-Functional verification (2026-10-18) used only dsoftbus (1,287 TU), camera (475
-TU) and their union (1,762 TU): 91,858 / 27,261 / 115,085 functions; camera
-virtual `Command::Do`→`Executing` returns 29 candidates with direct edges kept
-(no-override control returns none); dsoftbus `NetBuilderMessageHandler` exposes
-16 registration-table candidate edges; header dependency-aware update/watch
-re-parses only the 6 dependent TUs, unrelated headers are no-ops, MCP (18 tools)
-was verified on all three DBs. See [../docs/functional-verification.md](../../docs/functional-verification.md).
+Functional-verification commands, counts and controls for dsoftbus, camera and
+their union (2026-10-18) are in
+[functional-verification.md](../../docs/functional-verification.md).
 
 ## Implementation status
 
@@ -76,6 +79,5 @@ was verified on all three DBs. See [../docs/functional-verification.md](../../do
 - **Functional verification**: completed on dsoftbus/camera only
   (docs/functional-verification.md); full-corpus acceptance remains deferred.
 
-Full-corpus sharded acceptance, S2/S6/S8 completion and the final acceptance
-report are **deferred**; they are not phase-3 functional gates. Phase 4+ (other
-OS trees/languages, DWARF, additional UI) needs separate scope confirmation.
+Full-corpus acceptance, S2/S6/S8 and the final report are **deferred**, outside
+phase-3 gates. Phase 4+ needs separate scope confirmation.

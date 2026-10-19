@@ -6,12 +6,31 @@ Status: **阶段 2 工程化已交付（2026-10-17）**。阶段 1 流水线已�
 
 ## 安装
 
-CA 需要 **Python >= 3.11**；不需要编译——CA 是纯 Python，运行依赖
-（`clang`/`libclang`、`duckdb`、`pytest`）都是预编译 wheel。CLI 支持 macOS/Linux；
-DSH 插件还支持通过 SSH 使用远程 Linux 后端。DSH 桌面用户不需要手动准备 Python：
-插件会安装私有后端（见下）。
+CA 提供 Windows、Linux 与 macOS 原生二进制包、Python 源码安装，以及 DeepSeek
+Harness 插件。原生包自带 Python、libclang、DuckDB、数据库 schema 与网页资源，
+用户无需另装 Python 或 LLVM。源码安装需要 **Python >= 3.11**。
 
-### 作为 DeepSeek Harness 插件安装（推荐）
+### 原生应用（命令行、MCP 与网页）
+
+进入一次成功的 [Binaries 工作流](https://github.com/yushun667/CA/actions/workflows/binaries.yml)
+运行，在 **Artifacts** 下载对应系统与架构的安装器或便携包。这些是工作流构建产物，
+该工作流不会发布 GitHub Release。支持目标、安装路径与校验方法见
+[二进制安装指南](docs/binaries.zh.md)。
+
+安装后双击 **CA** 即打开本机浏览器界面。同一个可执行文件同时提供全部命令行功能与 MCP：
+
+```sh
+ca version
+ca index --repo /path/to/source --compdb /path/to/compile_commands.json --db /path/to/index.db
+ca desktop --db /path/to/index.db
+ca mcp --db /path/to/index.db
+```
+
+首次启动会在用户数据目录创建空索引；查询自己的代码前需要先索引源码。便携包需保留
+可执行文件及随附文件的完整目录。Windows 命令、MCP 客户端配置、用户数据与构建方法
+见[二进制安装指南](docs/binaries.zh.md)。
+
+### 作为 DeepSeek Harness 插件安装
 
 1. 安装 DeepSeek Harness（桌面版或 `dsh web`），打开插件管理器。
 2. 从本仓库的 `dsh/` 目录安装 bundle（Plugins → 从本地目录安装 →

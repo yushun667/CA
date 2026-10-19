@@ -18,3 +18,4 @@
 ## 关键文件
 
 - `pipeline.py`：多进程索引编排，产出 `IndexSummary`；修改前读 `core/interfaces.py` 与 `.agents/architecture/`。
+- `desktop.py`：`ca desktop` 启动本机浏览器、统一查询/MCP 服务与用户目录空库；冻结版无参数入口复用此命令。

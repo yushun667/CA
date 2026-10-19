@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=CA
+Comment=Analyze OS source code in a local browser
+Exec=/opt/ca/ca desktop
+Icon=ca
+Terminal=false
+Categories=Development;
