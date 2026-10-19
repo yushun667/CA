@@ -24,11 +24,11 @@ function makeWheelDir(root) {
   return dir;
 }
 
-function makeWheelhouse(root, platform = 'macos-arm64') {
+function makeWheelhouse(root, platform = 'macos-arm64', manifest = {}) {
   const dir = path.join(root, 'wheelhouse', platform);
   touch(path.join(dir, 'ca_analyzer-0.1.0-py3-none-any.whl'), 'WHEEL');
   touch(path.join(dir, 'duckdb-1.5.6.whl'), 'WHEEL');
-  touch(path.join(dir, 'manifest.json'), JSON.stringify({ platform }));
+  touch(path.join(dir, 'manifest.json'), JSON.stringify({ platform, ...manifest }));
   return dir;
 }
 
@@ -356,6 +356,43 @@ test('local install fails when the bundled wheel is missing', async () => {
     assert.equal(report.ok, false);
     assert.equal(report.error.code, 'WHEEL_NOT_FOUND');
     assert.equal(report.steps.find((step) => step.id === 'wheel').status, 'failed');
+  } finally {
+    cleanupDir(root);
+  }
+});
+
+test('offline wheelhouse built for another Python major/minor selects a matching interpreter', async () => {
+  const root = makeTempDir('dshca-installer-abi-');
+  try {
+    const wheelhouse = makeWheelhouse(root, 'macos-arm64', { python: '3.11' });
+    const context = setupInstall({
+      root,
+      installOptions: { offline: true, wheelhousePath: wheelhouse },
+    });
+    const report = await performLocalInstall(context.options);
+    assert.equal(report.ok, true, JSON.stringify(report.error));
+    const venvCall = context.runner.calls.find((call) => call.args.includes('venv'));
+    assert.equal(venvCall.command, 'python3.11', 'venv is created with the wheelhouse Python ABI');
+    assert.match(report.steps.find((step) => step.id === 'environment').detail, /3\.11/);
+  } finally {
+    cleanupDir(root);
+  }
+});
+
+test('offline wheelhouse ABI mismatch without a matching interpreter fails clearly', async () => {
+  const root = makeTempDir('dshca-installer-abi-mismatch-');
+  try {
+    const wheelhouse = makeWheelhouse(root, 'macos-arm64', { python: '3.11' });
+    const context = setupInstall({
+      root,
+      installOptions: { offline: true, wheelhousePath: wheelhouse },
+      runnerOptions: { pythonVersion: '3.12.4' },
+    });
+    const report = await performLocalInstall(context.options);
+    assert.equal(report.ok, false);
+    assert.equal(report.error.code, 'WHEELHOUSE_PYTHON_MISMATCH');
+    assert.equal(report.steps.find((step) => step.id === 'wheel').status, 'failed');
+    assert.ok(report.error.details.hints.some((hint) => /build-wheelhouse\.mjs/.test(hint)));
   } finally {
     cleanupDir(root);
   }

@@ -153,6 +153,12 @@ node dsh/scripts/build-wheelhouse.mjs --list-platforms
 CA wheel 副本 + `manifest.json`）；`--tar` 还会写出 `<platform>.tar.gz`。体积：
 `macos-arm64` 约 41 MB，`linux-x64` 约 46 MB。
 
+wheelhouse 是按一个 CPython 小版本构建的（生成器默认 3.11，可用
+`--python-version 3.12` 等覆盖）。本地安装器会读取 `manifest.json` 并自动选择版本
+匹配的解释器；如果宿主机只有不同的小版本，会提前以 `WHEELHOUSE_PYTHON_MISMATCH`
+失败并给出重新生成命令。要部署多个 Python 小版本就分别构建 wheelhouse，或在主机上
+安装匹配的小版本。
+
 本地离线安装：把目录复制到插件状态目录默认位置
 `$DSH_HOME/plugin-data/dsh-ca/wheelhouse/<platform>/`，或在表单里指向该目录；
 `.tar.gz` 必须先解压，因为 `pip --find-links` 需要目录。远程离线安装：在表单里

@@ -174,6 +174,13 @@ Platform ids: `linux-x64`, `linux-arm64`, `macos-arm64`, `macos-x64`,
 writes `<platform>.tar.gz`. Sizes: about 41 MB for `macos-arm64` and 46 MB for
 `linux-x64`.
 
+The wheelhouse is built for one CPython minor version (the builder defaults to
+3.11 and accepts `--python-version 3.12` etc.). The local installer reads
+`manifest.json` and automatically chooses a matching interpreter candidate; if
+the host only has a different minor version it fails early with
+`WHEELHOUSE_PYTHON_MISMATCH` and the exact rebuild command. Build one
+wheelhouse per Python minor you deploy, or install that minor on the host.
+
 For a local offline install, copy the directory to the plugin state default
 `$DSH_HOME/plugin-data/dsh-ca/wheelhouse/<platform>/` or point the form field
 at it; a `.tar.gz` must be extracted first because `pip --find-links` needs a

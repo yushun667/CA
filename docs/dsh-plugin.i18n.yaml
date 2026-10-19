@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-19
 en:
   file: dsh-plugin.md
-  sha256: 1e7a18dfad6b02ff7f723b79475e9fbda3be6f67887b3bfb5999e508fe45b05c
+  sha256: 38727edf394515ac384b689cd784e8daac3ae8ca1f0a93b1c293c0578aec216c
 zh:
   file: dsh-plugin.zh.md
-  sha256: cb0c4dc600d3cbc39a4464b27f80d10bd3da90114af65c6e5dd5b2cbb2d64bed
+  sha256: 672ebc8c9f96bf6bcb9c9d619170df9402293d1dfe0540119070bb248e067bc4

@@ -308,6 +308,7 @@ export async function performLocalInstall(options) {
     base.caScript = layout.caScript;
 
     let python;
+    let probed = null;
     const configuredPython = nonEmptyString(installOptions.python);
     if (configuredPython) {
       try {
@@ -324,7 +325,7 @@ export async function performLocalInstall(options) {
       }
       base.python = { ...python, source: 'configured' };
     } else {
-      const probed = await probePythonInterpreters({
+      probed = await probePythonInterpreters({
         runProcess: runProcessFn,
         platform: platform.os,
         timeoutMs: STEP_TIMEOUTS.python,
@@ -386,7 +387,50 @@ export async function performLocalInstall(options) {
         wheelCount: wheelhouse.wheelCount,
         caWheel: wheelhouse.caWheel,
         platform: wheelhouse.platform,
+        python: wheelhouse.manifest?.python || null,
       };
+      // Wheelhouses contain interpreter-ABI-specific dependency wheels (e.g.
+      // duckdb cp311 vs cp312). Select a matching interpreter instead of
+      // letting pip fail with "no matching distribution".
+      const wheelhousePython = nonEmptyString(wheelhouse.manifest?.python);
+      if (wheelhousePython && !configuredPython) {
+        const versionMatch = /(\d+)\.(\d+)/.exec(String(python.versionText || ''));
+        const selectedMinor = versionMatch ? `${versionMatch[1]}.${versionMatch[2]}` : null;
+        if (selectedMinor && selectedMinor !== wheelhousePython) {
+          const alternative = (probed?.checked || []).find(
+            (entry) => entry.ok && String(entry.version || '').startsWith(`${wheelhousePython}.`),
+          );
+          if (!alternative) {
+            throw stepError(
+              'wheel',
+              'WHEELHOUSE_PYTHON_MISMATCH',
+              `离线 wheelhouse 是按 Python ${wheelhousePython} 构建的，但当前只找到 Python ${selectedMinor}；请用相同 Python 版本重新生成 wheelhouse，或安装/指定 Python ${wheelhousePython}`,
+              {
+                wheelhousePython,
+                selectedPython: selectedMinor,
+                wheelhousePath: wheelhouse.dir,
+                hints: [
+                  `node dsh/scripts/build-wheelhouse.mjs --python-version ${selectedMinor}`,
+                  `或把项目/安装选项的 python 指向 Python ${wheelhousePython}`,
+                ],
+              },
+            );
+          }
+          python = {
+            command: alternative.command,
+            args: alternative.args.slice(),
+            label: alternative.label,
+            versionText: alternative.version,
+            version: python.version,
+            source: 'wheelhouse',
+          };
+          base.python = { ...python };
+          succeedStep('environment', `${platform.label} · ${python.label} (${alternative.version})`);
+          logger?.info?.(
+            `[installer:local] 离线 wheelhouse 需要 Python ${wheelhousePython}，改用 ${python.label}`,
+          );
+        }
+      }
     }
     succeedStep(
       'wheel',
