@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import plistlib
 import tarfile
@@ -29,6 +30,8 @@ def bundle_at(directory: Path, windows: bool = False) -> Path:
 
 
 def require_symlinks(directory: Path) -> None:
+    if os.name == "nt":
+        pytest.skip("Package layouts require POSIX symlink resolution and executable bits; native POSIX CI covers them")
     target = directory / "link-target"
     target.write_text("test", encoding="utf-8")
     link = directory / "link-test"
