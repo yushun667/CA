@@ -13,5 +13,6 @@
 
 - shard 数据库只读，jobs 只写独立状态库；服务不内置 job 执行器。
 - Windows HTTP 监听使用独占地址，拒绝与旧服务复用同一端口；POSIX 保留地址重用行为。
+- 数值地址绑定不做反向 DNS 查询，离线启动不等待主机名解析。
 - 修改 `/events` 事件形状/端点/工具数需同步 `docs/server.md/.zh` 与 `tests/test_server_serve.py`。
 - 测试：`.venv/bin/python -m pytest tests/test_server_serve.py -q`。

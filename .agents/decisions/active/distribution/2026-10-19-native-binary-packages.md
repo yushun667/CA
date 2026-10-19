@@ -24,6 +24,8 @@ valid installation paths.
   creates an empty index; an explicit database must already exist.
   Windows listeners use exclusive binding so port selection cannot attach the
   browser to an older service sharing that port.
+  Numeric local bindings skip reverse DNS so offline or stalled name resolution
+  cannot block startup.
 - Distribute Windows Inno Setup, Linux Debian and macOS pkg installers plus a
   complete portable directory archive and SHA-256 checksums. Native GitHub
   Actions jobs smoke-test artifacts; this workflow does not publish Releases.

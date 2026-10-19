@@ -2,7 +2,7 @@ version: 1
 updated: 2026-10-19
 en:
   file: 2026-10-19-native-binary-packages.md
-  sha256: c2118c2137b2b515c81cd152add4141a01f4ea228495d754037025827290430e
+  sha256: e325cd23ec7a7a57fd020080c15024a1cff80462b0a8abbf6dd40d3d3bdbfc96
 zh:
   file: 2026-10-19-native-binary-packages.zh.md
-  sha256: e3738f7f182cc7991fd3be01ec6895510dd1bca56fb6eba7d91eeaa1735cfe39
+  sha256: 872ca1e501feedd4fb7b2b2b5bfbbdd990e6778aa6c78bec9cf19e1ea97bb306

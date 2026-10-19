@@ -18,6 +18,7 @@ Date: 2026-10-19
 - 桌面启动统一后端并绑定回环地址，打开浏览器，数据存入系统用户数据目录或
   `CA_DATA_DIR`。默认首启创建空索引，显式指定的数据库必须已存在。
   Windows 监听使用独占绑定，防止端口选择使浏览器混入共享该端口的旧服务。
+  数值本机地址绑定不做反向 DNS，避免离线或名称解析阻塞卡住启动。
 - 分发 Windows Inno Setup、Linux Debian 与 macOS pkg 安装器，以及完整便携目录
   压缩包和 SHA-256 校验和。原生 GitHub Actions 任务对产物做冒烟测试，不发布 Release。
 - 首批目标是 Windows x64、Linux x64 与 macOS x64/arm64。构建基线和用户契约统一放在

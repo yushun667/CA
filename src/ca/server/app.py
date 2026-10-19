@@ -20,6 +20,7 @@ import traceback
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -483,7 +484,11 @@ class ServeHTTPServer(ThreadingHTTPServer):
             # browser to either process. Exclusive binding makes conflicts fail
             # before desktop chooses another port, including legacy UI servers.
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        # HTTPServer.server_bind performs an unnecessary reverse DNS lookup,
+        # which can stall local startup on hosts without working DNS. The
+        # actual bound address is sufficient for this non-CGI HTTP server.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     @property
     def url(self) -> str:

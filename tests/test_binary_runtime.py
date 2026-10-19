@@ -80,6 +80,24 @@ def test_default_busy_port_falls_back_but_explicit_choice_fails(monkeypatch, tmp
         occupied.close()
 
 
+def test_desktop_loopback_bind_does_not_require_reverse_dns(monkeypatch, tmp_path):
+    monkeypatch.setenv("CA_DATA_DIR", str(tmp_path))
+    path = desktop.database_path(None)
+
+    def fail_lookup(_host):
+        raise OSError("reverse DNS must not be needed to bind a loopback server")
+
+    monkeypatch.setattr(socket, "getfqdn", fail_lookup)
+    args = argparse.Namespace(port=0, repo=None, compdb=None)
+    server = desktop._make_server(args, path)
+    try:
+        assert server.server_name == "127.0.0.1"
+        assert server.server_port == server.server_address[1] > 0
+    finally:
+        server.server_close()
+        server.service.close()
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Winsock address-sharing behavior")
 def test_windows_desktop_does_not_share_legacy_ui_listener(monkeypatch, tmp_path):
     from ca.ui.server import make_server as make_ui_server
