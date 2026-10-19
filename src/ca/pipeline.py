@@ -26,7 +26,6 @@ from __future__ import annotations
 import hashlib
 import os
 import pickle
-import resource
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -499,16 +498,19 @@ def _new_pool(workers: int) -> ProcessPoolExecutor:
 
 
 def _peak_rss_mb() -> float:
-    """Peak RSS of the current process from the OS (MB)."""
+    """Peak RSS of the current process (MB), or zero when unavailable."""
 
     try:
+        # The optional Unix-only metric must not prevent indexing on Windows.
+        import resource
+
         usage = resource.getrusage(resource.RUSAGE_SELF)
         peak = float(getattr(usage, "ru_maxrss", 0.0))
         # Linux reports KiB, macOS reports bytes.
         if sys.platform == "darwin":
             return peak / (1024.0 * 1024.0)
         return peak / 1024.0
-    except Exception:  # pragma: no cover - resource is available everywhere
+    except Exception:
         return 0.0
 
 

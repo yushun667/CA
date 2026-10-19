@@ -1045,10 +1045,30 @@ def test_new_pool_is_plain_process_pool(monkeypatch) -> None:
 def test_worker_rss_warning_logged(monkeypatch, capsys) -> None:
     import ca.pipeline as pipeline
 
+    monkeypatch.setattr(pipeline, "_peak_rss_mb", lambda: 2.0)
     monkeypatch.setenv("CA_WORKER_RSS_WARN_MB", "1")
     monkeypatch.setenv("CA_WORKER_RSS_LOG", "0")
     pipeline._log_worker_rss("test-chunk", 4)
     assert "peak_rss=" in capsys.readouterr().err
+
+
+def test_pipeline_import_without_resource() -> None:
+    """Unavailable Unix memory metrics must not block a fresh CLI import."""
+
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.modules['resource'] = None; "
+            "from ca.pipeline import _peak_rss_mb; assert _peak_rss_mb() == 0.0",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_worker_recycling_keeps_all_units(monkeypatch, tmp_path) -> None:
