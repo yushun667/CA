@@ -33,11 +33,14 @@ REQUIRED_PATHS = (
 )
 
 
-def git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+def git(
+    root: Path, *args: str, input: bytes | None = None
+) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         ["git", "-C", str(root), *args],
         check=False,
         capture_output=True,
+        input=input,
     )
 
 
@@ -110,6 +113,28 @@ def maintained_directories(files: list[str]) -> set[PurePosixPath]:
     return directories
 
 
+def indexed_agents_aliases(root: Path) -> set[str]:
+    entries = nul_paths(
+        git(root, "ls-files", "--stage", "-z"), "Git index inventory"
+    )
+    target = nul_paths(
+        git(root, "hash-object", "--stdin", input=b"AGENTS.md"),
+        "AGENTS.md alias object hash",
+    )[0].strip()
+    aliases: set[str] = set()
+    for entry in entries:
+        metadata, relative = entry.split("\t", 1)
+        mode, object_id, stage = metadata.split()
+        if (
+            mode == "120000"
+            and object_id == target
+            and stage == "0"
+            and PurePosixPath(relative).name == "CLAUDE.md"
+        ):
+            aliases.add(relative)
+    return aliases
+
+
 def check_directory_navigation(root: Path, files: list[str], errors: list[str]) -> None:
     directories = maintained_directories(files)
     for directory in sorted(directories, key=str):
@@ -132,10 +157,21 @@ def check_directory_navigation(root: Path, files: list[str], errors: list[str]) 
                 f"parent index {parent_agents.relative_to(root)} does not link {expected_link}"
             )
 
+    aliases = indexed_agents_aliases(root)
     for relative in files:
         pure = PurePosixPath(relative)
-        if pure.name == 'CLAUDE.md' and (root / relative).is_symlink() and (root / relative).readlink() == Path('AGENTS.md'):
-            continue
+        path = root / relative
+        if pure.name == "CLAUDE.md":
+            if path.is_symlink():
+                if path.readlink() == Path("AGENTS.md"):
+                    continue
+            # Git checks out symlinks as their target text with core.symlinks=false.
+            elif (
+                relative in aliases
+                and path.is_file()
+                and path.read_bytes() == b"AGENTS.md"
+            ):
+                continue
         if not str(pure).startswith(".agents/") or pure.name == "AGENTS.md":
             continue
         local_agents = root / pure.parent.as_posix() / "AGENTS.md"
