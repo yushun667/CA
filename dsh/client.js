@@ -6903,9 +6903,15 @@ const GRAPH_CSS = `
 .ca-graph-swatch.virtual { border-top-color: #14b8a6; border-top-style: dashed; }
 .ca-graph-swatch.cycle { border-top-color: var(--dsw-alias-state-error-primary, #b42318); border-top-width: 2px; }
 .ca-graph-body { position: relative; flex: 1; min-height: 0; }
-.ca-graph-canvas { width: 100%; height: 100%; overflow: auto; padding: 8px; cursor: grab; }
+.ca-graph-canvas {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
 .ca-graph-canvas.dragging { cursor: grabbing; user-select: none; }
-.ca-graph-svg { display: block; }
+.ca-graph-svg { display: block; width: 100%; height: 100%; }
 .ca-graph-node { cursor: pointer; outline: none; }
 .ca-graph-node rect {
   fill: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, #ffffff));
@@ -6991,6 +6997,50 @@ function graphTruncate(value, limit) {
 
 function graphClamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
+}
+
+/**
+ * Remembered viewport (`{zoom, tx, ty}`) per graph identity, keyed by
+ * `symbol|direction|depth`.
+ *
+ * Why this exists: the page above this component remounts or re-renders on
+ * shell events (status polls, route re-publish, node selection). Component
+ * state alone therefore loses the user's zoom/pan and the auto-fit effect then
+ * snaps the graph back to its fitted size — the "zoom jumps back and the
+ * percentage resets" bug. Keeping the viewport outside React also lets
+ * auto-fit stay off once the user has touched the view.
+ */
+const GRAPH_VIEWPORT_CACHE = new Map()
+const GRAPH_VIEWPORT_CACHE_LIMIT = 50
+
+function graphViewportKey(symbol, direction, depth) {
+  return String(symbol || '') + '|' + String(direction || '') + '|' + String(depth || '')
+}
+
+/** Cached viewport for one graph, or null when the user never adjusted it. */
+function graphCachedViewport(key) {
+  const value = GRAPH_VIEWPORT_CACHE.get(key)
+  if (!value) return null
+  const zoom = Number(value.zoom)
+  const tx = Number(value.tx)
+  const ty = Number(value.ty)
+  if (!Number.isFinite(zoom) || !Number.isFinite(tx) || !Number.isFinite(ty)) return null
+  return { zoom: graphClamp(zoom, GRAPH_VIEW.MIN_ZOOM, GRAPH_VIEW.MAX_ZOOM), tx, ty }
+}
+
+/** Store (or, with null, forget) one graph's viewport; bounded to recent graphs. */
+function graphStoreViewport(key, viewport) {
+  if (!key) return
+  if (!viewport) {
+    GRAPH_VIEWPORT_CACHE.delete(key)
+    return
+  }
+  GRAPH_VIEWPORT_CACHE.set(key, viewport)
+  while (GRAPH_VIEWPORT_CACHE.size > GRAPH_VIEWPORT_CACHE_LIMIT) {
+    const oldest = GRAPH_VIEWPORT_CACHE.keys().next()
+    if (oldest.done) break
+    GRAPH_VIEWPORT_CACHE.delete(oldest.value)
+  }
 }
 
 function graphNormalizeDirection(value) {
@@ -7349,9 +7399,16 @@ function createCallGraph(React, bag) {
     const [reloadToken, setReloadToken] = React.useState(0)
     const [loadState, setLoadState] = React.useState({ loading: false, error: null, data: null })
     const [selectedKey, setSelectedKey] = React.useState('')
-    const [zoom, setZoom] = React.useState(1)
-    const [autoFit, setAutoFit] = React.useState(true)
+    const viewKey = graphViewportKey(symbol, direction, depth)
+    const [view, setView] = React.useState(() => graphCachedViewport(viewKey) || { zoom: 1, tx: 0, ty: 0 })
+    const [size, setSize] = React.useState({ width: 0, height: 0 })
     const [panning, setPanning] = React.useState(false)
+    const viewRef = React.useRef(view)
+    viewRef.current = view
+    const sizeRef = React.useRef(size)
+    sizeRef.current = size
+    const userViewRef = React.useRef(Boolean(graphCachedViewport(viewKey)))
+    const wheelHandlerRef = React.useRef(null)
     const uid = React.useId ? String(React.useId()) : 'g' + String(reloadToken)
     const safeUid = uid.replace(/[^A-Za-z0-9_-]/g, '')
     const wrapRef = React.useRef(null)
@@ -7377,7 +7434,6 @@ function createCallGraph(React, bag) {
 
     React.useEffect(() => {
       setSelectedKey('')
-      setAutoFit(true)
       if (!symbol) {
         setLoadState({ loading: false, error: null, data: null })
         if (dataCallbackRef.current) dataCallbackRef.current(null)
@@ -7422,39 +7478,116 @@ function createCallGraph(React, bag) {
     const layoutRef = React.useRef(null)
     layoutRef.current = layout
 
-    function measureFitZoom() {
-      const wrap = wrapRef.current
-      const current = layoutRef.current
-      if (!wrap || !current || current.width <= 0 || current.height <= 0) return 1
-      const availableWidth = Math.max(60, wrap.clientWidth - 20)
-      const availableHeight = Math.max(60, wrap.clientHeight - 20)
-      return graphClamp(
+    /** Fit `current` into `width`×`height` and center it; same zoom clamp as before. */
+    function computeFittedViewport(width, height, current) {
+      if (!current || current.width <= 0 || current.height <= 0 || width <= 0 || height <= 0) {
+        return { zoom: 1, tx: 0, ty: 0 }
+      }
+      const availableWidth = Math.max(60, width - 16)
+      const availableHeight = Math.max(60, height - 16)
+      const zoom = graphClamp(
         Math.min(availableWidth / current.width, availableHeight / current.height),
         GRAPH_VIEW.MIN_ZOOM,
         1.4,
       )
+      return { zoom, tx: (width - current.width * zoom) / 2, ty: (height - current.height * zoom) / 2 }
     }
 
+    /** Adopt a user-made viewport: ref + cache + state, so a remount restores it. */
+    function applyView(next) {
+      if (!next) return
+      userViewRef.current = true
+      viewRef.current = next
+      graphStoreViewport(viewKey, next)
+      setView(next)
+    }
+
+    /** Zoom by `factor` around a canvas point (default: canvas center). */
+    function zoomAround(factor, anchorX, anchorY) {
+      const current = viewRef.current
+      const zoom = graphClamp(current.zoom * factor, GRAPH_VIEW.MIN_ZOOM, GRAPH_VIEW.MAX_ZOOM)
+      if (Math.abs(zoom - current.zoom) < 1e-4) return
+      const box = sizeRef.current
+      const centerX = Number.isFinite(anchorX) ? anchorX : box.width / 2
+      const centerY = Number.isFinite(anchorY) ? anchorY : box.height / 2
+      const ratio = zoom / current.zoom
+      applyView({
+        zoom,
+        tx: centerX - (centerX - current.tx) * ratio,
+        ty: centerY - (centerY - current.ty) * ratio,
+      })
+    }
+
+    /** Back to the fitted viewport and forget the user-adjusted one. */
+    function resetZoom() {
+      userViewRef.current = false
+      graphStoreViewport(viewKey, null)
+      setView(computeFittedViewport(sizeRef.current.width, sizeRef.current.height, layoutRef.current))
+    }
+
+    /**
+     * Track the canvas box in CSS pixels. The SVG viewBox is this exact box, so
+     * one user unit is one pixel and zoom/pan are a plain `transform` — nothing
+     * depends on an overflow/scroll container that may never scroll.
+     */
     React.useEffect(() => {
-      if (!autoFit || !layout) return undefined
-      setZoom(measureFitZoom())
       const wrap = wrapRef.current
+      if (!wrap) return undefined
+      function measure() {
+        const width = Math.max(0, Math.round(wrap.clientWidth))
+        const height = Math.max(0, Math.round(wrap.clientHeight))
+        setSize((previous) =>
+          previous.width === width && previous.height === height ? previous : { width, height },
+        )
+      }
+      function onWheel(event) {
+        const handler = wheelHandlerRef.current
+        if (typeof handler === 'function') handler(event)
+      }
+      measure()
+      wrap.addEventListener('wheel', onWheel, { passive: false })
       let observer = null
-      if (wrap && typeof ResizeObserver === 'function') {
-        observer = new ResizeObserver(() => {
-          if (!autoFit) return
-          setZoom(measureFitZoom())
-        })
+      if (typeof ResizeObserver === 'function') {
+        observer = new ResizeObserver(measure)
         try {
           observer.observe(wrap)
         } catch (_error) {
           observer = null
         }
       }
-      return () => {
+      return function cleanup() {
+        wrap.removeEventListener('wheel', onWheel, { passive: false })
         if (observer) observer.disconnect()
       }
-    }, [autoFit, layout])
+    }, [layout])
+
+    /** A different graph identity drops the previous viewport memory. */
+    React.useEffect(() => {
+      const cached = graphCachedViewport(viewKey)
+      userViewRef.current = Boolean(cached)
+      if (cached) {
+        viewRef.current = cached
+        setView(cached)
+      }
+    }, [viewKey])
+
+    /** Auto-fit until the user adjusts the view; never override them afterwards. */
+    React.useEffect(() => {
+      if (userViewRef.current) return
+      if (!layout || size.width <= 0 || size.height <= 0) return
+      const fitted = computeFittedViewport(size.width, size.height, layout)
+      viewRef.current = fitted
+      setView(fitted)
+    }, [layout, size, viewKey])
+
+    wheelHandlerRef.current = function onWheelZoom(event) {
+      if (!event || (!event.ctrlKey && !event.metaKey)) return
+      if (typeof event.preventDefault === 'function') event.preventDefault()
+      const wrap = wrapRef.current
+      const rect = wrap && typeof wrap.getBoundingClientRect === 'function' ? wrap.getBoundingClientRect() : null
+      const factor = Number(event.deltaY) > 0 ? 1 / 1.1 : 1.1
+      zoomAround(factor, rect ? event.clientX - rect.left : undefined, rect ? event.clientY - rect.top : undefined)
+    }
 
     const nodes = data && Array.isArray(data.nodes) ? data.nodes : []
     const stats = {
@@ -7512,28 +7645,19 @@ function createCallGraph(React, bag) {
       emitSelect(node)
     }
 
-    function zoomBy(factor) {
-      setAutoFit(false)
-      setZoom((previous) => graphClamp(previous * factor, GRAPH_VIEW.MIN_ZOOM, GRAPH_VIEW.MAX_ZOOM))
-    }
-
-    function resetZoom() {
-      setAutoFit(true)
-      setZoom(measureFitZoom())
-    }
-
     function onCanvasPointerDown(event) {
       if (!event || event.button !== 0) return
       const target = event.target
       if (target && typeof target.closest === 'function' && target.closest('.ca-graph-node')) return
       const wrap = wrapRef.current
       if (!wrap) return
+      const current = viewRef.current
       dragRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
-        left: wrap.scrollLeft,
-        top: wrap.scrollTop,
+        tx: current.tx,
+        ty: current.ty,
         moved: false,
       }
       setPanning(true)
@@ -7546,13 +7670,16 @@ function createCallGraph(React, bag) {
 
     function onCanvasPointerMove(event) {
       const drag = dragRef.current
-      const wrap = wrapRef.current
-      if (!drag || !wrap) return
+      if (!drag) return
       const dx = event.clientX - drag.startX
       const dy = event.clientY - drag.startY
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true
-      wrap.scrollLeft = drag.left - dx
-      wrap.scrollTop = drag.top - dy
+      if (!drag.moved) return
+      const next = { zoom: viewRef.current.zoom, tx: drag.tx + dx, ty: drag.ty + dy }
+      viewRef.current = next
+      userViewRef.current = true
+      graphStoreViewport(viewKey, next)
+      setView(next)
     }
 
     function onCanvasPointerUp() {
@@ -7634,21 +7761,23 @@ function createCallGraph(React, bag) {
         {
           variant: 'ghost',
           size: 'sm',
-          onClick: () => zoomBy(1 / 1.2),
+          onClick: () => zoomAround(1 / 1.2),
           title: t('graph.zoomOut', null, 'Zoom out'),
           ariaLabel: t('graph.zoomOut', null, 'Zoom out'),
+          disabled: view.zoom <= GRAPH_VIEW.MIN_ZOOM + 1e-6,
         },
         '−',
       ),
-      h('span', { className: 'ca-graph-zoom-label' }, Math.round(zoom * 100) + '%'),
+      h('span', { className: 'ca-graph-zoom-label' }, Math.round(view.zoom * 100) + '%'),
       h(
         Button,
         {
           variant: 'ghost',
           size: 'sm',
-          onClick: () => zoomBy(1.2),
+          onClick: () => zoomAround(1.2),
           title: t('graph.zoomIn', null, 'Zoom in'),
           ariaLabel: t('graph.zoomIn', null, 'Zoom in'),
+          disabled: view.zoom >= GRAPH_VIEW.MAX_ZOOM - 1e-6,
         },
         '+',
       ),
@@ -7767,9 +7896,9 @@ function createCallGraph(React, bag) {
             {
               className: 'ca-graph-svg',
               xmlns: 'http://www.w3.org/2000/svg',
-              viewBox: '0 0 ' + layout.width + ' ' + layout.height,
-              width: Math.max(1, Math.round(layout.width * zoom)),
-              height: Math.max(1, Math.round(layout.height * zoom)),
+              viewBox: '0 0 ' + Math.max(1, Math.round(size.width)) + ' ' + Math.max(1, Math.round(size.height)),
+              width: '100%',
+              height: '100%',
               role: 'img',
               'aria-label': t(
                 'graph.aria',
@@ -7780,14 +7909,18 @@ function createCallGraph(React, bag) {
             defs,
             h(
               'g',
-              { key: 'edges' },
-              layout.edges.map((edge) => renderEdge(edge, safeUid)),
-            ),
-            h(
-              'g',
-              { key: 'nodes' },
-              layout.nodes.map((entry) =>
-                renderNode(entry, selectedKey, handleNodeClick, handleNodeDoubleClick, handleNodeKeyDown),
+              { key: 'viewport', className: 'ca-graph-viewport', transform: 'translate(' + view.tx + ' ' + view.ty + ') scale(' + view.zoom + ')' },
+              h(
+                'g',
+                { key: 'edges' },
+                layout.edges.map((edge) => renderEdge(edge, safeUid)),
+              ),
+              h(
+                'g',
+                { key: 'nodes' },
+                layout.nodes.map((entry) =>
+                  renderNode(entry, selectedKey, handleNodeClick, handleNodeDoubleClick, handleNodeKeyDown),
+                ),
               ),
             ),
           ),
